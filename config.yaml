@@ -1,0 +1,20 @@
+# API keys — set via environment variables, not hardcoded here
+anthropic_api_key: ""   # ANTHROPIC_API_KEY — used in production only
+gemini_api_key: ""      # GEMINI_API_KEY — used during development/testing
+
+# Which LLM to use: "anthropic" | "gemini"
+llm_provider: "gemini"
+
+output:
+  scenes_dir: manimgen/output/scenes
+  videos_dir: manimgen/output/videos
+  logs_dir: manimgen/output/logs
+
+rendering:
+  quality: hd
+  resolution: "1920x1080"
+  max_retries: 3
+
+tts:
+  engine: edge-tts  # edge-tts | elevenlabs | openai
+  voice: en-US-GuyNeural
