@@ -215,17 +215,71 @@ def validate_scene_code(code: str) -> list[str]:
     return errors
 
 
+def _check_next_to_stacking(lines: list[str], warnings: list[str]) -> None:
+    """Warn when two .next_to(<same_anchor>, ...) calls appear within 6 lines.
+
+    This is the primary cause of annotation labels stacking directly on top of
+    each other (e.g. two labels both placed next_to a dashed line or axes).
+    The fix is to group them in a VGroup and arrange/place once.
+    """
+    window = 6
+    anchor_pattern = re.compile(r"\.next_to\(\s*(\w+)\s*,")
+    for i, line in enumerate(lines):
+        m = anchor_pattern.search(line)
+        if not m:
+            continue
+        anchor = m.group(1)
+        # look ahead within the window for another next_to with the same anchor
+        for j in range(i + 1, min(i + window + 1, len(lines))):
+            m2 = anchor_pattern.search(lines[j])
+            if m2 and m2.group(1) == anchor:
+                warnings.append(
+                    f"Two .next_to({anchor}, ...) calls within {window} lines "
+                    f"(lines {i+1} and {j+1}); labels will overlap. "
+                    "Use VGroup(...).arrange(DOWN, buff=0.4) and place once."
+                )
+                break  # one warning per anchor is enough
+
+
 def _check_layout_smells(code: str) -> list[str]:
     """Heuristic warnings for overlap-prone layout patterns."""
     warnings: list[str] = []
     if re.search(r"\bAxes\s*\(", code) and not re.search(r"\.set_width\s*\(", code):
-        warnings.append("Axes created without .set_width() may overflow frame.")
+        warnings.append(
+            "Axes created without .set_width(); axes will render at default internal size, "
+            "producing dead space or overflow. Use .set_width(10).center() "
+            "(add .shift(DOWN * 0.5) if a title is present)."
+        )
+    # axes.move_to(ORIGIN) without set_width is a common dead-space cause
+    if re.search(r"axes\.move_to\s*\(\s*ORIGIN\s*\)", code) and not re.search(r"\.set_width\s*\(", code):
+        warnings.append(
+            "axes.move_to(ORIGIN) used without .set_width(); this does not resize axes. "
+            "Replace with axes.set_width(10).center() (or .center().shift(DOWN * 0.5) with a title)."
+        )
     if re.search(r"\.move_to\s*\(\s*axes\.(?:c2p|i2gp|get_center)", code):
         warnings.append("Label moved into axes area; this often overlaps curves/ticks.")
     lines = code.strip().splitlines()
     tail = "\n".join(lines[-12:]) if lines else ""
     if "FadeOut" not in tail and "self.remove" not in tail:
         warnings.append("Scene tail has no cleanup FadeOut/self.remove; visuals may linger.")
+    # Detect multiple .next_to() calls sharing the same anchor within 6 lines — likely overlap
+    _check_next_to_stacking(lines, warnings)
+    # Axes tick font size: missing decimal_number_config causes oversized tick labels (default is 36)
+    if re.search(r"\bAxes\s*\(", code):
+        has_decimal_cfg = re.search(r"decimal_number_config", code)
+        if not has_decimal_cfg:
+            warnings.append(
+                "Axes missing decimal_number_config in axis_config; tick labels will render at "
+                "default font_size=36 (too large). Add "
+                "decimal_number_config={\"font_size\": 24} inside axis_config."
+            )
+        # Also catch the common mistake of passing font_size directly (crashes at runtime)
+        if re.search(r"axis_config\s*=\s*\{[^}]*[\"']font_size[\"']", code):
+            warnings.append(
+                "font_size passed directly in axis_config will crash (TypeError). "
+                "Nest it inside decimal_number_config: "
+                "axis_config={\"decimal_number_config\": {\"font_size\": 24}}."
+            )
     return warnings
 
 

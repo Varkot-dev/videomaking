@@ -2,6 +2,7 @@ import json
 import logging
 import os
 from manimgen.llm import chat
+from manimgen.planner.cue_parser import parse_cues
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,29 @@ def _cap_sections(plan: dict, limit: int) -> dict:
     return plan
 
 
+def _extract_cues(plan: dict) -> dict:
+    """Parse [CUE] markers out of each section's narration.
+
+    Mutates the plan in place:
+      - section["narration"]        → clean text (no [CUE] tags), ready for TTS
+      - section["cue_word_indices"] → [0, 9, 23, ...] (0-based word indices)
+
+    Sections that have no [CUE] markers get cue_word_indices = [0], meaning
+    the entire narration maps to a single animation.
+    """
+    for section in plan.get("sections", []):
+        raw = section.get("narration", "")
+        clean, indices = parse_cues(raw)
+        section["narration"] = clean
+        section["cue_word_indices"] = indices
+        if len(indices) == 1:
+            logger.warning(
+                "[planner] Section '%s' has no [CUE] markers — single animation segment only",
+                section.get("id", "?"),
+            )
+    return plan
+
+
 def _strip_fencing(raw: str) -> str:
     """Remove markdown code fencing if the LLM wrapped the JSON in it."""
     raw = raw.strip()
@@ -58,7 +82,8 @@ def plan_lesson(topic: str) -> dict:
     """Call LLM to turn a topic description into a structured lesson plan."""
     system = _load_system_prompt()
     raw = chat(system=system, user=f"Create a lesson plan for: {topic}")
-    return _cap_sections(_safe_json_loads(_strip_fencing(raw)), _MAX_SECTIONS_TOPIC)
+    plan = _cap_sections(_safe_json_loads(_strip_fencing(raw)), _MAX_SECTIONS_TOPIC)
+    return _extract_cues(plan)
 
 
 def plan_lesson_from_pdf(pdf_path: str) -> dict:
@@ -133,4 +158,5 @@ def plan_lesson_from_pdf(pdf_path: str) -> dict:
     system = _load_pdf_system_prompt()
     print(f"[planner] Calling LLM for PDF lesson plan (images: {len(images)})...")
     raw = chat(system=system, user=user_message, images=images if images else None)
-    return _cap_sections(_safe_json_loads(_strip_fencing(raw)), _MAX_SECTIONS_PDF)
+    plan = _cap_sections(_safe_json_loads(_strip_fencing(raw)), _MAX_SECTIONS_PDF)
+    return _extract_cues(plan)

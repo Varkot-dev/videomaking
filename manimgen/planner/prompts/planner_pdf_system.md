@@ -51,6 +51,20 @@ Repeat the core cycle (intuition → formalism → worked example) for each majo
 - Also avoid "We will now…" and "As we can see…".
 - Example of good narration: "Think of a hash table as a coat check at a crowded restaurant. When you hand over your coat, the attendant gives you a ticket — that ticket is your key. Later, you hand back the ticket and instantly get your coat, no searching required. The magic is that the ticket encodes exactly where your coat lives, which is precisely what a hash function does for your data."
 
+**REQUIRED — animation cue markers:**
+Each narration MUST contain `[CUE]` markers that tell the renderer when to switch to the next animation within this section.
+
+Rules:
+- Place 2–4 `[CUE]` markers per section, between sentences — never mid-phrase.
+- Each segment between cues must be at least 5 words.
+- Do NOT start with `[CUE]`. The first animation always starts at word 0.
+- Place a `[CUE]` wherever the visual on screen naturally needs to change to match what you're saying.
+
+Example:
+```
+"Think of a hash table as a coat check at a crowded restaurant. [CUE] When you hand over your coat, the attendant gives you a ticket — that ticket is your key. [CUE] Later, you hand back the ticket and instantly get your coat, no searching required. The magic is that the ticket encodes exactly where your coat lives."
+```
+
 ### `visual_description`
 - Must be **specific and actionable for ManimGL**: describe exactly what objects appear, how they move, what gets highlighted and when.
 - Name the geometric primitives: array boxes, arrows, tree nodes, highlighted edges, text labels, axes, etc.

@@ -124,6 +124,38 @@ Providers:
 
 ---
 
+## ManimGL API gotchas (verified against this codebase's manimlib)
+
+### Axis tick label font size
+`font_size` is NOT a valid direct key in `axis_config` — it crashes with `TypeError: Mobject.__init__() got an unexpected keyword argument 'font_size'`.
+The correct key is `decimal_number_config`, which is passed to the `NumberLine` constructor:
+
+```python
+axes = Axes(
+    x_range=[-3, 3, 1],
+    y_range=[-1, 5, 1],
+    axis_config={
+        "include_numbers": True,
+        "decimal_number_config": {"font_size": 24},
+        "color": GREY_B,
+    },
+)
+```
+
+Default tick `font_size` is 36 — too large. Always override with `decimal_number_config`.
+
+### Visual quality rules (from codeguard + prompt work)
+
+- Axes MUST use `.set_width(10).center()` — never `axes.move_to(ORIGIN)` alone
+- With a title present: `.set_width(10).center().shift(DOWN * 0.5)`
+- Multiple annotations on the same anchor: always `VGroup + .arrange(DOWN, buff=0.4)`, never two independent `.next_to(same_anchor)` calls
+- Limit scenes MUST show a function curve — a dashed line alone is not a limit scene
+
+### Branch hygiene
+Changes were made across "branches" without committing between switches — git does not move uncommitted edits when switching branches. **Always commit before switching.** Use `git stash` if you need to context-switch without a clean commit.
+
+---
+
 ## PDF parsing philosophy — DO NOT compromise on extraction quality
 
 This project exists to turn learning material into educational videos. If we don't extract the full content of the source material, the whole pipeline is pointless.

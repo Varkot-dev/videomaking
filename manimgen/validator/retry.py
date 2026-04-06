@@ -203,15 +203,13 @@ def _run_and_capture(scene_path: str, class_name: str) -> dict:
 def _load_retry_system_prompt() -> str:
     here = os.path.dirname(__file__)
     root = os.path.dirname(here)
+    retry_system_path = os.path.join(here, "prompts", "retry_system.md")
     rules_core_path = os.path.join(root, "generator", "prompts", "rules_core.md")
+    with open(retry_system_path) as f:
+        system = f.read()
     with open(rules_core_path) as f:
         rules = f.read()
-    return (
-        "You are a ManimGL scene repair agent.\n"
-        "Goal: return corrected, runnable Python for ManimGL.\n"
-        "Rules: output pure Python only, no markdown.\n\n"
-        + rules
-    )
+    return system.strip() + "\n\n" + rules
 
 
 def _write_attempt_artifacts(logs_dir: str, class_name: str, attempt: int, code: str, stderr: str) -> None:

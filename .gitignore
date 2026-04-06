@@ -11,5 +11,7 @@ manimgen/output/videos/
 manimgen/output/logs/
 manimgen/output/audio/
 manimgen/output/muxed/
+manimgen/output/plan.json
 latex_cache/
 videos/
+*.pdf

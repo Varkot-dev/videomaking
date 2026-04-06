@@ -1,0 +1,66 @@
+# Segmenter — converts word timestamps + cue indices into timed animation segments.
+#
+# Given:
+#   timestamps      = [{word, start, end}, ...]  from tts.generate_narration()
+#   cue_word_indices = [0, 9, 23]                from lesson plan (parsed by cue_parser)
+#   audio_duration   = 14.2                      total audio length in seconds
+#
+# Produces a list of CueSegment objects, one per animation:
+#   segment 0: starts at 0.000s, duration 3.250s  (words 0–8)
+#   segment 1: starts at 3.250s, duration 4.850s  (words 9–22)
+#   segment 2: starts at 8.100s, duration 6.100s  (words 23–end)
+#
+# These durations are ground truth — derived from actual spoken audio,
+# not estimated. The scene generator uses them as hard constraints so
+# the animation fills exactly the time the narrator is speaking.
+
+from dataclasses import dataclass
+from manimgen.renderer.tts import WordTimestamp, cue_times
+
+
+@dataclass
+class CueSegment:
+    cue_index: int      # 0-based index of this segment within the section
+    total_cues: int     # total number of segments in this section
+    start_time: float   # seconds from start of section audio
+    duration: float     # seconds this segment should play
+
+
+def compute_segments(
+    timestamps: list[WordTimestamp],
+    cue_word_indices: list[int],
+    audio_duration: float,
+) -> list[CueSegment]:
+    """Return one CueSegment per cue interval, with exact durations from audio.
+
+    Args:
+        timestamps:       Word-level timestamps from TTS (tts.generate_narration).
+        cue_word_indices: 0-based word indices marking animation boundaries,
+                          always starting with 0. From lesson plan field
+                          cue_word_indices. E.g. [0, 9, 23].
+        audio_duration:   Total duration of the narration audio file in seconds.
+
+    Returns:
+        List of CueSegment in order. The durations sum to audio_duration.
+    """
+    if not cue_word_indices:
+        cue_word_indices = [0]
+
+    starts = cue_times(timestamps, cue_word_indices)
+    total = len(starts)
+    segments: list[CueSegment] = []
+
+    for i, start in enumerate(starts):
+        if i < total - 1:
+            duration = starts[i + 1] - start
+        else:
+            duration = audio_duration - start
+
+        segments.append(CueSegment(
+            cue_index=i,
+            total_cues=total,
+            start_time=start,
+            duration=max(duration, 0.1),  # guard against float rounding to negative
+        ))
+
+    return segments

@@ -38,3 +38,21 @@ Return ONLY a valid JSON object — no markdown fencing, no explanation, just JS
 - Order sections to build understanding: motivation → intuition → formalism → edge cases.
 - Aim for 3–6 sections per topic.
 - Return ONLY the JSON. No other text.
+
+## Animation cue markers — REQUIRED
+
+Each section's `narration` field MUST contain `[CUE]` markers. These tell the renderer exactly when to switch to the next animation within that section.
+
+**Rules for [CUE] placement:**
+- Place a `[CUE]` at the moment the narration naturally transitions from one visual idea to the next.
+- Each section should have 2–4 `[CUE]` markers (producing 3–5 animation segments).
+- A `[CUE]` should land between sentences, never mid-word or mid-phrase.
+- Each segment between cues should be at least 5 words — never place two `[CUE]` tags back to back.
+- The first animation always starts at word 0 — do NOT put a `[CUE]` at the very beginning.
+
+**Example (correct):**
+```
+"Imagine a sorted list of a million numbers. You want to find one specific value. [CUE] The naive approach scans every element one by one. That is painfully slow. [CUE] Binary search does something smarter. It looks at the middle element first, then throws away half the list."
+```
+
+The `[CUE]` tags will be stripped before the narration is sent to TTS. They exist only to mark animation transition points.

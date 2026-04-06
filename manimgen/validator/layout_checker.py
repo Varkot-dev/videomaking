@@ -15,23 +15,11 @@ from manimgen.llm import chat
 
 logger = logging.getLogger(__name__)
 
-_LAYOUT_SYSTEM = """\
-You are a visual layout reviewer for mathematical animation scenes.
-You will be shown a screenshot from an animated explainer video.
 
-Analyse the image and report ONLY real visual problems. Be concise and specific.
-Issues to look for:
-- Text or objects overlapping each other
-- Text or objects clipped/cut off at screen edges
-- Elements too crowded with no breathing room
-- Labels or annotations obscuring the thing they describe
-- Unreadable text (too small, bad contrast, on top of another element)
-
-If the layout looks clean and readable, respond with exactly: OK
-
-Otherwise respond with a short bullet list of specific problems found.
-Do not suggest style improvements. Only report actual layout defects.
-"""
+def _load_layout_system_prompt() -> str:
+    here = os.path.dirname(__file__)
+    with open(os.path.join(here, "prompts", "layout_checker_system.md")) as f:
+        return f.read()
 
 
 def _extract_frame(video_path: str, timestamp: float = 1.0) -> str | None:
@@ -95,7 +83,7 @@ def check_layout(video_path: str) -> dict:
 
     try:
         response = chat(
-            system=_LAYOUT_SYSTEM,
+            system=_load_layout_system_prompt(),
             user="Review this animation frame for layout issues.",
             images=[frame_b64],
         )

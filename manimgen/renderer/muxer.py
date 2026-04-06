@@ -1,6 +1,16 @@
-# Audio-video muxer — combines a silent video with a narration audio track.
-# Handles duration mismatches by either speeding up/looping the video (audio longer)
-# or trimming video (video longer).
+# Audio-video muxer — overlays a narration audio track onto a silent video clip.
+#
+# Design principle: NEVER warp playback speed to fix duration mismatches.
+# Speed-warping was the original cause of the A/V sync problems this pipeline
+# is designed to fix. With audio-first cuing, the video clip is generated to
+# match the audio duration exactly, so mismatches should be small (<200ms).
+#
+# When a small mismatch does occur (stream-copy frame alignment, render timing):
+#   - Audio longer than video: pad video with a freeze-frame on the last frame.
+#   - Video longer than audio: pad audio with silence.
+#
+# Both strategies keep the narration at natural speed. The viewer will not
+# notice a 100ms freeze or silence at the end of a clip.
 
 import json
 import logging
@@ -9,20 +19,112 @@ import subprocess
 
 logger = logging.getLogger(__name__)
 
-_MISMATCH_WARN_THRESHOLD = 0.30
-_MISMATCH_LOOP_THRESHOLD = 2.0  # if audio is >2× video, loop video instead of speed-change
+# Mismatches larger than this are logged as warnings — indicates a cue
+# placement or TTS/render timing problem worth investigating.
+_WARN_THRESHOLD_SECONDS = 0.5
 
 
-def _get_video_duration(video_path: str) -> float:
-    """Return video duration in seconds using ffprobe."""
+def mux_audio_video(video_path: str, audio_path: str, output_path: str) -> str:
+    """Overlay audio onto video, padding whichever is shorter.
+
+    Duration mismatches are handled by padding — never by speed-warping.
+
+    Args:
+        video_path:  Path to the silent rendered video (.mp4).
+        audio_path:  Path to the narration audio slice (.mp3).
+        output_path: Destination path for the muxed .mp4.
+
+    Returns:
+        output_path on success.
+
+    Raises:
+        RuntimeError if ffmpeg/ffprobe is not installed or the mux fails.
+    """
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    video_dur = _get_duration(video_path)
+    audio_dur = _get_duration(audio_path)
+
+    diff = abs(video_dur - audio_dur)
+    if diff > _WARN_THRESHOLD_SECONDS:
+        logger.warning(
+            "[muxer] Duration mismatch: video=%.3fs audio=%.3fs diff=%.3fs — "
+            "check cue placement or scene render timing.",
+            video_dur, audio_dur, diff,
+        )
+
+    if audio_dur > video_dur:
+        _mux_freeze_video(video_path, audio_path, output_path, audio_dur)
+    else:
+        _mux_pad_audio(video_path, audio_path, output_path, video_dur)
+
+    return output_path
+
+
+# ---------------------------------------------------------------------------
+# Strategy implementations
+# ---------------------------------------------------------------------------
+
+def _mux_pad_audio(
+    video_path: str,
+    audio_path: str,
+    output_path: str,
+    video_dur: float,
+) -> None:
+    """Mux video + audio, padding audio with silence to match video duration."""
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", video_path,
+        "-i", audio_path,
+        "-filter_complex",
+        f"[1:a]apad=whole_dur={video_dur:.6f}[a]",
+        "-map", "0:v",
+        "-map", "[a]",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-shortest",
+        output_path,
+    ]
+    _run(cmd, output_path)
+
+
+def _mux_freeze_video(
+    video_path: str,
+    audio_path: str,
+    output_path: str,
+    audio_dur: float,
+) -> None:
+    """Mux video + audio, freezing the last video frame to match audio duration."""
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", video_path,
+        "-i", audio_path,
+        "-filter_complex",
+        # tpad: pad video by repeating/freezing last frame until audio ends
+        f"[0:v]tpad=stop_mode=clone:stop_duration={audio_dur:.6f}[v]",
+        "-map", "[v]",
+        "-map", "1:a",
+        "-c:v", "libx264",
+        "-c:a", "aac",
+        "-shortest",
+        output_path,
+    ]
+    _run(cmd, output_path)
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+def _get_duration(path: str) -> float:
+    """Return media duration in seconds via ffprobe."""
     try:
         result = subprocess.run(
             [
-                "ffprobe",
-                "-v", "error",
+                "ffprobe", "-v", "error",
                 "-show_entries", "format=duration",
                 "-of", "json",
-                video_path,
+                path,
             ],
             capture_output=True,
             text=True,
@@ -30,84 +132,17 @@ def _get_video_duration(video_path: str) -> float:
         )
     except FileNotFoundError:
         raise RuntimeError(
-            "ffprobe not found. Install FFmpeg to enable muxing:\n"
+            "ffprobe not found. Install FFmpeg:\n"
             "  macOS:   brew install ffmpeg\n"
-            "  Ubuntu:  sudo apt install ffmpeg\n"
-            "  Windows: https://ffmpeg.org/download.html"
+            "  Ubuntu:  sudo apt install ffmpeg"
         )
     data = json.loads(result.stdout)
     return float(data["format"]["duration"])
 
 
-def mux_audio_video(video_path: str, audio_path: str, output_path: str) -> str:
-    """Mux audio and video into a single .mp4 with voiceover.
-
-    Synchronisation strategy:
-      - If audio is longer than video: speed up the video to match audio duration.
-      - If video is longer than audio: trim video to match audio duration.
-
-    Always re-encodes so timing adjustments are applied correctly.
-    Returns the path to the muxed output file.
-    """
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-    video_dur = _get_video_duration(video_path)
-
-    # Import here to avoid circular imports; tts module is only needed for duration.
-    from manimgen.renderer.tts import get_audio_duration
-    audio_dur = get_audio_duration(audio_path)
-
-    # Warn on large mismatches — something may be wrong with generation.
-    if video_dur > 0:
-        ratio = abs(video_dur - audio_dur) / video_dur
-        if ratio > _MISMATCH_WARN_THRESHOLD:
-            logger.warning(
-                "[muxer] Large duration mismatch: video=%.1fs, audio=%.1fs (%.0f%% diff). "
-                "Narration timing may be off.",
-                video_dur, audio_dur, ratio * 100,
-            )
-
-    if audio_dur > video_dur and video_dur > 0 and (audio_dur / video_dur) > _MISMATCH_LOOP_THRESHOLD:
-        # Extreme mismatch — loop the video instead of distorting playback speed.
-        logger.info(
-            "[muxer] Looping video (%.1fs) to match audio (%.1fs)",
-            video_dur, audio_dur,
+def _run(cmd: list[str], output_path: str) -> None:
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"[muxer] ffmpeg failed for {output_path}:\n{result.stderr}"
         )
-        cmd = [
-            "ffmpeg", "-y",
-            "-stream_loop", "-1",
-            "-i", video_path,
-            "-i", audio_path,
-            "-c:v", "libx264",
-            "-c:a", "aac",
-            "-shortest",
-            output_path,
-        ]
-    elif audio_dur > video_dur:
-        speed_factor = video_dur / audio_dur
-        video_filter = f"setpts={speed_factor}*PTS"
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", video_path,
-            "-i", audio_path,
-            "-filter:v", video_filter,
-            "-c:v", "libx264",
-            "-c:a", "aac",
-            "-shortest",
-            output_path,
-        ]
-    else:
-        # Video is longer (or equal) → trim video to audio to avoid dead silent tails.
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", video_path,
-            "-i", audio_path,
-            "-t", str(audio_dur),
-            "-c:v", "libx264",
-            "-c:a", "aac",
-            "-shortest",
-            output_path,
-        ]
-
-    subprocess.run(cmd, check=True, capture_output=True)
-    return output_path

@@ -35,6 +35,7 @@ Mandatory layout rules:
 6. Keep active on-screen object count moderate (target <= 12 visible mobjects).
 7. Clear the stage between major concept changes with `FadeOut`.
 8. End with a clean exit: fade out remaining objects, then short `self.wait(0.5)`.
+9. **NEVER place two or more annotation labels independently with the same `next_to` anchor** — they will overlap. Always group multiple annotations into a `VGroup`, call `.arrange(DOWN, buff=0.4)`, and place the group once.
 
 Anti-overlap patterns:
 ```python
@@ -48,13 +49,29 @@ arrow = Arrow(label.get_left(), axes.i2gp(2, graph), buff=0.1, color=GREY)
 label = Text("Area = 42", font_size=28).move_to(circle.get_center())
 bg = BackgroundRectangle(label, fill_opacity=0.85, buff=0.1)
 self.play(FadeIn(bg), Write(label))
+
+# Multiple annotations near the same object — ALWAYS group and arrange, never stack manually
+# WRONG — both labels end up at the same screen position
+eq_label = Tex(r"y = 2", font_size=32).next_to(dashed_line, RIGHT, buff=0.3)
+lim_label = Tex(r"\lim_{x \to 1} f(x) = 2", font_size=32).next_to(dashed_line, RIGHT, buff=0.3)
+
+# CORRECT — group them, arrange vertically with breathing room, place once
+annotation = VGroup(
+    Tex(r"y = 2", font_size=32),
+    Tex(r"\lim_{x \to 1} f(x) = 2", font_size=32),
+).arrange(DOWN, buff=0.4, aligned_edge=LEFT)
+annotation.next_to(axes, RIGHT, buff=0.5).shift(UP * 0.5)
 ```
 
 ## 3) AXES AND GRAPH RULES (mandatory)
 
-- Always size and place axes explicitly:
-  - `Axes(...).set_width(10).center()` or
-  - `Axes(...).set_width(10).center().shift(DOWN * 0.5)` when title exists.
+**Axes sizing is mandatory — wrong sizing is the #1 cause of dead space and overflow.**
+
+- ALWAYS call `.set_width(10).center()` immediately after constructing `Axes`.
+  - No title present: `axes = Axes(...).set_width(10).center()`
+  - Title present: `axes = Axes(...).set_width(10).center().shift(DOWN * 0.5)`
+- NEVER use `axes.move_to(ORIGIN)` alone — `ORIGIN` is the center but axes default to their own internal size, so without `.set_width()` they often render too small or misaligned, leaving large dead regions on screen.
+- NEVER skip `.set_width()`. Even if the axes look correct in isolation, `.set_width(10)` is required for consistent framing.
 - Use sane tick density (`include_numbers=True` with step >= 1.0 unless justified).
 - Keep coordinate spans reasonable (avoid huge ranges that squash details).
 - Graph labels should be outside axes region using `next_to(...)`, `to_corner(...)`, or side panel.
@@ -140,7 +157,7 @@ Brace(mob, direction=DOWN)
 BackgroundRectangle(mob, fill_opacity=0.8, buff=0.1)
 
 # coordinate systems
-Axes(x_range=[-4, 4, 1], y_range=[-3, 3, 1], axis_config={"include_numbers": True})
+Axes(x_range=[-4, 4, 1], y_range=[-3, 3, 1], axis_config={"include_numbers": True, "decimal_number_config": {"font_size": 24}, "color": GREY_B})
 NumberPlane(x_range=[-6, 6, 1], y_range=[-4, 4, 1])
 axes.get_graph(lambda x: x**2, color=YELLOW)
 axes.i2gp(2, graph)
@@ -159,7 +176,36 @@ self.play(mob.animate.shift(RIGHT))
 self.wait(1.0)
 ```
 
-## 9) COMMON QUALITY FAILURES TO AVOID
+## 9) LIMIT AND CALCULUS SCENES — MANDATORY STRUCTURE
+
+When the concept involves a **limit**, **continuity**, **derivative**, or **approaching a value**:
+
+**You MUST include a function curve.** A dashed horizontal line alone is NOT a limit scene — it is a visual failure. The curve is how limits are understood.
+
+Required elements for any limit scene:
+1. **Function curve** — plotted with `axes.get_graph(...)`.
+2. **Removable discontinuity** (open dot) at the limit point — an `Circle` with `fill_color="#1C1C1C"` placed at `axes.c2p(x_val, y_val)`.
+3. **Dashed guide lines** — `DashedLine` from the x-axis and y-axis up to the open dot.
+4. **Approaching animation** — a `ValueTracker` + `always_redraw` dot moving along the curve toward the limit point.
+5. **Grouped annotation** — both the function value label and the limit equation in a single `VGroup(...).arrange(DOWN, buff=0.45)` placed outside the axes.
+
+```python
+# Minimal correct structure for a limit scene
+curve_left  = axes.get_graph(lambda x: f(x), color=BLUE, x_range=[a, limit_x - 0.08])
+curve_right = axes.get_graph(lambda x: f(x), color=BLUE, x_range=[limit_x + 0.08, b])
+hole = Circle(radius=0.1, stroke_color=WHITE, fill_color="#1C1C1C", fill_opacity=1.0)
+hole.move_to(axes.c2p(limit_x, limit_y))
+h_dash = DashedLine(axes.c2p(0, limit_y), axes.c2p(limit_x, limit_y), color=BLUE_B)
+v_dash = DashedLine(axes.c2p(limit_x, 0), axes.c2p(limit_x, limit_y), color=BLUE_B)
+t = ValueTracker(a)
+dot = always_redraw(lambda: Dot(axes.input_to_graph_point(t.get_value(), curve_left), color=YELLOW))
+annotation = VGroup(
+    Tex(r"y = " + str(limit_y), font_size=36),
+    Tex(r"\lim_{x \to " + str(limit_x) + r"} f(x) = " + str(limit_y), font_size=32, color=YELLOW),
+).arrange(DOWN, buff=0.45, aligned_edge=LEFT).next_to(axes, RIGHT, buff=0.5)
+```
+
+## 10) COMMON QUALITY FAILURES TO AVOID
 
 - Overcrowding: too many simultaneous objects.
 - Title-content collision at top.

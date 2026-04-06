@@ -6,12 +6,26 @@
 #   "en-US-GuyNeural"    — male, neutral
 #   "en-US-JennyNeural"  — female, warm
 #   "en-US-EricNeural"   — male, authoritative
+#
+# Word timestamps
+# ---------------
+# generate_narration() returns a WordTimestamps object alongside the audio path.
+# Each entry is:
+#   {"word": str, "start": float, "end": float}   (seconds, from audio start)
+#
+# These timestamps are the ground truth for animation cuing:
+#   - "start" = when this word begins being spoken
+#   - "end"   = when this word finishes (start + duration)
+#
+# The caller marks certain word indices as cue points. The time at which
+# cue word[i] starts speaking is exactly when the next animation should begin.
 
 import asyncio
 import json
 import logging
 import os
 import subprocess
+from dataclasses import dataclass
 
 import edge_tts
 import yaml
@@ -23,7 +37,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _load_tts_config() -> dict:
-    """Load TTS settings from config.yaml, returning sensible defaults if missing."""
     config_path = os.path.join(os.path.dirname(__file__), "..", "..", "config.yaml")
     try:
         with open(config_path) as f:
@@ -40,23 +53,64 @@ _DEFAULT_SPEED = "+5%"
 
 
 # ---------------------------------------------------------------------------
+# Data types
+# ---------------------------------------------------------------------------
+
+@dataclass
+class WordTimestamp:
+    word: str
+    start: float   # seconds from audio start
+    end: float     # seconds from audio start
+
+
+# ---------------------------------------------------------------------------
 # Core TTS function
 # ---------------------------------------------------------------------------
 
-async def _generate_async(text: str, output_path: str, voice: str, rate: str) -> None:
-    communicate = edge_tts.Communicate(text, voice, rate=rate)
-    await communicate.save(output_path)
+async def _generate_async(
+    text: str,
+    output_path: str,
+    voice: str,
+    rate: str,
+) -> list[WordTimestamp]:
+    """Stream TTS, write audio to output_path, return word timestamps."""
+    communicate = edge_tts.Communicate(text, voice, rate=rate, boundary="WordBoundary")
+
+    audio_chunks: list[bytes] = []
+    word_timestamps: list[WordTimestamp] = []
+
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            audio_chunks.append(chunk["data"])
+        elif chunk["type"] == "WordBoundary":
+            # edge-tts reports offsets in 100-nanosecond units
+            start_sec = chunk["offset"] / 10_000_000
+            duration_sec = chunk["duration"] / 10_000_000
+            word_timestamps.append(WordTimestamp(
+                word=chunk["text"],
+                start=start_sec,
+                end=start_sec + duration_sec,
+            ))
+
+    with open(output_path, "wb") as f:
+        f.write(b"".join(audio_chunks))
+
+    return word_timestamps
 
 
 def generate_narration(
     text: str,
     output_path: str,
     voice: str = None,
-) -> str:
+) -> tuple[str, list[WordTimestamp]]:
     """Generate narration audio from text using edge-tts.
 
-    Returns the path to the generated .mp3 file.
-    Falls back to config.yaml settings for voice and speed.
+    Returns (audio_path, word_timestamps).
+
+    word_timestamps is a list of WordTimestamp(word, start, end) in order,
+    where start/end are seconds from the beginning of the audio file.
+    These are used to cue animations: when word[i] starts speaking,
+    the animation associated with that cue point begins.
     """
     if voice is None:
         voice = _TTS_CFG.get("voice", _DEFAULT_VOICE)
@@ -64,8 +118,44 @@ def generate_narration(
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    asyncio.run(_generate_async(text, output_path, voice, rate))
-    return output_path
+    timestamps = asyncio.run(_generate_async(text, output_path, voice, rate))
+    return output_path, timestamps
+
+
+def save_timestamps(timestamps: list[WordTimestamp], json_path: str) -> None:
+    """Persist word timestamps to a JSON file next to the audio."""
+    os.makedirs(os.path.dirname(json_path), exist_ok=True)
+    data = [{"word": t.word, "start": t.start, "end": t.end} for t in timestamps]
+    with open(json_path, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def load_timestamps(json_path: str) -> list[WordTimestamp]:
+    """Load previously saved word timestamps from JSON."""
+    with open(json_path) as f:
+        data = json.load(f)
+    return [WordTimestamp(word=d["word"], start=d["start"], end=d["end"]) for d in data]
+
+
+def cue_times(timestamps: list[WordTimestamp], cue_word_indices: list[int]) -> list[float]:
+    """Given a list of cue word indices (0-based), return the start time of each.
+
+    Example:
+        cue_word_indices = [0, 13, 27]
+        → [0.113, 4.200, 9.750]   (seconds)
+
+    The animation for interval i plays from cue_times[i] until cue_times[i+1]
+    (or until the end of audio for the last interval).
+    """
+    times = []
+    for idx in cue_word_indices:
+        if idx < 0 or idx >= len(timestamps):
+            raise IndexError(
+                f"Cue word index {idx} is out of range "
+                f"(narration has {len(timestamps)} words)"
+            )
+        times.append(timestamps[idx].start)
+    return times
 
 
 # ---------------------------------------------------------------------------
@@ -73,10 +163,7 @@ def generate_narration(
 # ---------------------------------------------------------------------------
 
 def get_audio_duration(audio_path: str) -> float:
-    """Return duration of an audio file in seconds using ffprobe.
-
-    Raises RuntimeError with install instructions if ffprobe is not found.
-    """
+    """Return duration of an audio file in seconds using ffprobe."""
     try:
         result = subprocess.run(
             [

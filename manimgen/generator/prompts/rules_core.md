@@ -82,8 +82,32 @@ Use `_A` (lightest) through `_E` (darkest) suffixes: `BLUE_A`, `BLUE_B`, `BLUE_C
 
 - Title goes at top: `to_edge(UP, buff=0.8)`.
 - Main content goes in center-lower area: `.center().shift(DOWN * 0.5)` when title is visible.
-- Axes should be explicitly sized and centered: `.set_width(10).center()`.
+- Axes MUST be sized: `.set_width(10).center()` — no title. `.set_width(10).center().shift(DOWN * 0.5)` — with title.
+- NEVER use `axes.move_to(ORIGIN)` alone — it does not resize axes. Always chain `.set_width(10).center()` on the constructor.
 - Prefer one focal visual per beat, then clear before introducing the next beat.
+- **Multiple annotations near the same object**: group into `VGroup`, `.arrange(DOWN, buff=0.4)`, place once. NEVER call `next_to(same_anchor)` on two separate labels — they will stack on top of each other.
+
+## AXIS TICK LABEL RULES — MANDATORY
+
+- ALWAYS pass `decimal_number_config` inside `axis_config` when creating `Axes`. The default tick font size is 36 — too large. Use `{"font_size": 24}`.
+- NEVER pass `font_size` directly in `axis_config` — it crashes. It must be nested inside `decimal_number_config`.
+- Correct pattern:
+  ```python
+  axes = Axes(
+      x_range=[-3, 3, 1],
+      y_range=[-1, 5, 1],
+      axis_config={"include_numbers": True, "decimal_number_config": {"font_size": 24}, "color": GREY_B},
+  )
+  ```
+- If you need separate config per axis, use `x_axis_config` / `y_axis_config`:
+  ```python
+  axes = Axes(
+      x_range=[0, 5, 1],
+      y_range=[0, 4, 1],
+      x_axis_config={"include_numbers": True, "decimal_number_config": {"font_size": 24}},
+      y_axis_config={"include_numbers": True, "decimal_number_config": {"font_size": 24}},
+  )
+  ```
 
 ## ARROW QUICK REFERENCE
 

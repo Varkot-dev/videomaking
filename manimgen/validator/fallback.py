@@ -97,18 +97,14 @@ def fallback_scene(section: dict) -> str | None:
     return None
 
 
+def _load_fallback_system_prompt() -> str:
+    here = os.path.dirname(__file__)
+    with open(os.path.join(here, "prompts", "fallback_system.md")) as f:
+        return f.read()
+
+
 def _generate_constrained_fallback(section: dict, class_name: str, hold_seconds: int = 10) -> str | None:
-    system = (
-        "You generate safe ManimGL fallback scenes.\n"
-        "Output only Python.\n"
-        "Use only: Text, VGroup, FadeIn, FadeOut, Write, ShowCreation, SurroundingRectangle.\n"
-        "No Arrow, no Axes, no NumberPlane, no always_redraw, no updaters.\n"
-        "Exactly one Scene class with the requested class name.\n"
-        "Import only from manimlib.\n"
-        "NEVER use Tex() for plain text — use Text() instead.\n"
-        "NEVER use DARK_GREY, DARK_BLUE etc — use GREY_D, BLUE_D.\n"
-        "NEVER use scale_factor, corner_radius, font= on Tex.\n"
-    )
+    system = _load_fallback_system_prompt()
     user = (
         f"Create a minimal scene lasting ~{hold_seconds} seconds for section '{section['title']}'.\n"
         f"Visual description: {section.get('visual_description', '')}\n"

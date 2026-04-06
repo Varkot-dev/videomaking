@@ -33,29 +33,60 @@ def _load_seed_examples(max_examples: int = 3, max_chars_per_example: int = 1200
 
 
 def _estimate_narration_duration(narration: str) -> int:
-    """Estimate how many seconds the narration will take when spoken via TTS."""
+    """Fallback duration estimate from word count (used when no TTS timestamps available)."""
     words = len(narration.split())
     return max(10, math.ceil(words / _WORDS_PER_MINUTE * 60))
 
 
-def _class_name_from_section(section: dict) -> str:
+def _class_name_from_section(section: dict, cue_index: int | None = None) -> str:
     title = section["id"].replace("_", " ").title().replace(" ", "")
+    if cue_index is not None:
+        return f"{title}Cue{cue_index:02d}Scene"
     return f"{title}Scene"
 
 
-def generate_scenes(section: dict) -> tuple[str, str, str]:
-    """
-    Generate a ManimGL scene file for a single lesson section.
-    Returns (code, class_name, scene_path).
+def generate_scenes(
+    section: dict,
+    cue_index: int | None = None,
+    total_cues: int | None = None,
+    duration_seconds: float | None = None,
+) -> tuple[str, str, str]:
+    """Generate a ManimGL scene file for one animation segment.
+
+    Args:
+        section:          The lesson plan section dict (title, visual_description, etc.)
+        cue_index:        Which cue segment this is (0-based). None = whole section.
+        total_cues:       Total number of cue segments in this section. None = 1.
+        duration_seconds: Exact duration from TTS timestamps. If None, falls back
+                          to word-count estimate (used when TTS is disabled).
+
+    Returns:
+        (code, class_name, scene_path)
     """
     system = _load_system_prompt()
-    class_name = _class_name_from_section(section)
+    class_name = _class_name_from_section(section, cue_index)
 
-    narration = section.get("narration", "")
-    if narration:
-        target_seconds = _estimate_narration_duration(narration)
+    # Duration: prefer exact value from TTS, fall back to estimate
+    if duration_seconds is not None:
+        target_seconds = duration_seconds
+        duration_source = "exact (from TTS word timestamps)"
     else:
-        target_seconds = section.get("duration_seconds", 30)
+        narration = section.get("narration", "")
+        target_seconds = _estimate_narration_duration(narration) if narration else section.get("duration_seconds", 30)
+        duration_source = "estimated (TTS not yet run)"
+
+    # Cue context for the prompt
+    if cue_index is not None and total_cues is not None and total_cues > 1:
+        cue_context = (
+            f"\nCUE SEGMENT: This is segment {cue_index + 1} of {total_cues} "
+            f"for this section.\n"
+            f"Animate the {'first' if cue_index == 0 else 'next'} visual idea from the "
+            f"description below. Each segment covers a distinct part of the explanation.\n"
+            f"Do NOT animate the entire visual_description — only the part relevant to "
+            f"segment {cue_index + 1}.\n"
+        )
+    else:
+        cue_context = ""
 
     user_message = f"""Generate a ManimGL scene for this lesson section.
 
@@ -63,11 +94,12 @@ Section title: {section['title']}
 Visual description: {section['visual_description']}
 Key objects: {', '.join(section.get('key_objects', []))}
 Class name: {class_name}
-
-CRITICAL — Duration target: {target_seconds} seconds.
-The narration for this section is {len(narration.split())} words long and will take ~{target_seconds}s when spoken.
-Your animation MUST last approximately {target_seconds} seconds total (sum of all self.play run_times + self.wait durations).
-Distribute self.wait() calls across the scene to fill the target duration. Do NOT make the scene shorter or longer.
+{cue_context}
+CRITICAL — Duration target: {target_seconds:.2f} seconds ({duration_source}).
+Your animation MUST last approximately {target_seconds:.2f} seconds total
+(sum of all self.play run_times + self.wait durations).
+Distribute self.wait() calls to fill the target duration exactly.
+Do NOT make the scene shorter or longer.
 
 LAYOUT RULES (MANDATORY — violations will be rejected):
 1) NEVER place text ON TOP of a graph/shape/diagram; labels go outside using next_to(..., buff>=0.3).
@@ -96,7 +128,12 @@ LAYOUT RULES (MANDATORY — violations will be rejected):
 
     scenes_dir = "manimgen/output/scenes"
     os.makedirs(scenes_dir, exist_ok=True)
-    scene_path = os.path.join(scenes_dir, f"{section['id']}.py")
+
+    if cue_index is not None:
+        scene_filename = f"{section['id']}_cue{cue_index:02d}.py"
+    else:
+        scene_filename = f"{section['id']}.py"
+    scene_path = os.path.join(scenes_dir, scene_filename)
 
     with open(scene_path, "w") as f:
         f.write(code)
