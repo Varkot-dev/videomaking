@@ -9,5 +9,7 @@ config.local.yaml
 manimgen/output/scenes/
 manimgen/output/videos/
 manimgen/output/logs/
+manimgen/output/audio/
+manimgen/output/muxed/
 latex_cache/
 videos/

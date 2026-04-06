@@ -345,12 +345,15 @@
   async function loadClips() {
     const res = await fetch('/api/clips');
     const raw = await res.json();
-    clips = raw.map(c => ({
-      ...c,
-      trim_start: 0,
-      trim_end: c.duration,
-      enabled: true,
-    }));
+    clips = raw.map(c => {
+      const isFallback = c.id.toLowerCase().includes('fallback');
+      return {
+        ...c,
+        trim_start: 0,
+        trim_end: c.duration,
+        enabled: !isFallback,
+      };
+    });
     render();
     document.getElementById('clip-count').textContent = `${clips.length} clip${clips.length !== 1 ? 's' : ''}`;
     updateExportBtn();

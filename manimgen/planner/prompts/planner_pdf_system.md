@@ -37,7 +37,7 @@ Return ONLY a valid JSON object — no markdown fencing, no explanation, just JS
 8. **Edge cases** — what happens at the boundaries; empty input, single element, etc.
 9. **Summary / takeaways** — crystallize the key ideas in one sentence each
 
-Repeat the core cycle (intuition → formalism → worked example) for each major sub-concept in the source material. A complete lesson plan should have **15 to 20 sections**.
+Repeat the core cycle (intuition → formalism → worked example) for each major sub-concept in the source material. A complete lesson plan should have **6 to 10 sections**. Merge related sub-concepts into single sections to stay within this limit. Quality and depth per section is more important than quantity.
 
 ## Rules for each field
 
@@ -45,7 +45,10 @@ Repeat the core cycle (intuition → formalism → worked example) for each majo
 - Must be a **full paragraph of 4–6 sentences** — not bullet points, not a single sentence.
 - Written like a great CS professor speaking out loud: conversational, precise, building intuition before formalism.
 - Explain the **WHY**, not just the WHAT. Use analogies where they add clarity.
+- Keep sentence rhythm tight: mostly short, direct sentences (roughly 8-15 words).
+- Use occasional rhetorical questions to maintain momentum.
 - Do NOT use filler phrases like "In this section we will…" or "Let's explore…".
+- Also avoid "We will now…" and "As we can see…".
 - Example of good narration: "Think of a hash table as a coat check at a crowded restaurant. When you hand over your coat, the attendant gives you a ticket — that ticket is your key. Later, you hand back the ticket and instantly get your coat, no searching required. The magic is that the ticket encodes exactly where your coat lives, which is precisely what a hash function does for your data."
 
 ### `visual_description`
@@ -76,7 +79,7 @@ Repeat the core cycle (intuition → formalism → worked example) for each majo
 
 ## General rules
 
-- Aim for exactly **15–20 sections**. Never fewer than 15.
+- Aim for **6–10 sections**. Never more than 10.
 - Total `estimated_duration_seconds` must equal the sum of all section `duration_seconds`.
 - Section IDs must be `"section_01"`, `"section_02"`, etc., zero-padded to two digits.
 - Return ONLY the JSON. No other text before or after.

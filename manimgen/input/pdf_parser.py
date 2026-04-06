@@ -1,3 +1,4 @@
+import base64
 import re
 import sys
 import warnings
@@ -94,19 +95,35 @@ def _chunk_by_paragraphs(text: str, min_chars: int = 200) -> list:
     return chunks
 
 
+def _render_page_to_b64(doc, page_index: int, dpi: int = 150) -> str:
+    """Render a single PDF page to a base64-encoded PNG using PyMuPDF."""
+    page = doc[page_index]
+    mat = page.get_pixmap(dpi=dpi)
+    return base64.b64encode(mat.tobytes("png")).decode("utf-8")
+
+
 def parse_pdf(pdf_path: str) -> dict:
     """
-    Extract and structure text from a PDF file.
+    Extract and structure text and page renders from a PDF file.
+
+    Uses PyMuPDF to render every page to a PNG (captures vector graphics,
+    diagrams, and embedded images alike). pypdf is used for text extraction.
 
     Returns:
         {
             "raw_text": str,        full cleaned text
             "chunks": [str],        logical text segments
-            "extracted_pages": int  number of pages successfully parsed
+            "extracted_pages": int  number of pages with text
+            "images": [str],        base64-encoded PNG renders, one per page
         }
-
-    Image-only pages are skipped with a warning printed to stderr.
     """
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        raise ImportError(
+            "PyMuPDF is required for PDF rendering. Install it with: pip install pymupdf"
+        )
+
     try:
         from pypdf import PdfReader
     except ImportError:
@@ -114,12 +131,18 @@ def parse_pdf(pdf_path: str) -> dict:
             "pypdf is required for PDF parsing. Install it with: pip install pypdf"
         )
 
+    doc = fitz.open(pdf_path)
     reader = PdfReader(pdf_path)
     total_pages = len(reader.pages)
+
     page_texts = []
+    all_images: list[str] = []
     skipped = 0
 
     for i, page in enumerate(reader.pages):
+        # Render every page regardless of text content
+        all_images.append(_render_page_to_b64(doc, i))
+
         try:
             text = page.extract_text() or ""
         except Exception as exc:
@@ -128,35 +151,38 @@ def parse_pdf(pdf_path: str) -> dict:
 
         if not text.strip():
             warnings.warn(
-                f"[pdf_parser] Page {i + 1} appears to be image-only or empty — skipping."
+                f"[pdf_parser] Page {i + 1} has no extractable text — visual render captured."
             )
             skipped += 1
             continue
 
         page_texts.append(text)
 
+    doc.close()
     extracted_pages = total_pages - skipped
 
-    if not page_texts:
-        warnings.warn("[pdf_parser] No text could be extracted from any page.")
-        return {"raw_text": "", "chunks": [], "extracted_pages": 0}
+    if not page_texts and not all_images:
+        warnings.warn("[pdf_parser] No content could be extracted from any page.")
+        return {"raw_text": "", "chunks": [], "extracted_pages": 0, "images": []}
 
-    # Join all pages with a separator so cross-page context is preserved
+    if not page_texts:
+        warnings.warn("[pdf_parser] No text extracted — returning page renders only.")
+        return {"raw_text": "", "chunks": [], "extracted_pages": 0, "images": all_images}
+
     joined = "\n\n".join(page_texts)
     raw_text = _clean_text(joined)
 
-    # Try heading-based chunking first; fall back to paragraph chunking
     chunks = _chunk_by_headings(raw_text)
     if len(chunks) < 3:
         chunks = _chunk_by_paragraphs(raw_text)
 
-    # Final guard: drop empty/trivial chunks
     chunks = [c for c in chunks if len(c.strip()) > 30]
 
     return {
         "raw_text": raw_text,
         "chunks": chunks,
         "extracted_pages": extracted_pages,
+        "images": all_images,
     }
 
 

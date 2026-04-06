@@ -5,3 +5,5 @@ python-dotenv
 pyyaml
 edge-tts
 pypdf
+pymupdf
+flask

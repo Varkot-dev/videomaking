@@ -4,7 +4,9 @@
 
 - `from manimlib import *` only. NEVER `from manim import *`.
 - `ShowCreation()` not `Create()`. `Tex()` not `MathTex()`. `self.frame` not `self.camera.frame`.
+- `FlashAround()` not `Circumscribe()`.
 - Output ONLY pure Python. No markdown fencing, no explanation.
+- Background is dark (`#1C1C1C`), so keep contrast high (WHITE/BLUE/YELLOW/GREEN/RED).
 
 ## BANNED KWARGS — THESE DO NOT EXIST IN ManimGL
 
@@ -16,7 +18,23 @@
 | `Arrow` | `stroke_width` for styling | Arrow is a filled polygon. Use `thickness` or `fill_color`. |
 | `SurroundingRectangle` | `corner_radius` | Does not exist. Use plain `SurroundingRectangle`. |
 | `FadeIn` / `FadeOut` | `shift=` as a scalar | `shift` must be a 3D vector like `UP * 0.5`, never a number. |
-| Any Mobject | `font` on Tex/Tex subclasses | Use `font` only on `Text()`, never on `Tex()`. |
+| `FadeIn` / `FadeOut` | `scale_factor` | Does not exist in ManimGL. Remove entirely. |
+| Any Mobject | `font` on Tex/TexText subclasses | Use `font` only on `Text()`, never on `Tex()` or `TexText()`. |
+| Any Mobject | `target_position` | Does not exist. Use `.move_to()` or `.next_to()`. |
+
+## COLOR NAMES — THESE WILL NameError
+
+| WRONG (crashes) | CORRECT (ManimGL) |
+|---|---|
+| `DARK_GREY` / `DARK_GRAY` | `GREY_D` |
+| `DARK_BLUE` | `BLUE_D` |
+| `DARK_GREEN` | `GREEN_D` |
+| `DARK_RED` | `RED_D` |
+| `LIGHT_GREY` / `LIGHT_GRAY` | `GREY_A` |
+| `LIGHT_BLUE` | `BLUE_A` |
+| `LIGHT_GREEN` | `GREEN_A` |
+
+Use `_A` (lightest) through `_E` (darkest) suffixes: `BLUE_A`, `BLUE_B`, `BLUE_C`, `BLUE_D`, `BLUE_E`.
 
 ## ANIMATION RULES — WILL CRASH IF VIOLATED
 
@@ -37,7 +55,7 @@
    Arrow(ORIGIN, DOWN * 0.5)
    ```
 
-3. NEVER pass a VGroup where a single Mobject is expected in FadeIn/FadeOut scale_factor.
+3. NEVER pass a VGroup where a single Mobject is expected in FadeIn/FadeOut.
 
 4. `DecimalNumber.set_value()` is animated via `.animate`:
    ```python
@@ -46,12 +64,33 @@
 
 5. `always_redraw` lambdas must create a NEW mobject each call. Never mutate.
 
+6. `color_gradient(colors, length)` — `length` MUST be int, never float. Use `int(n)`.
+
+7. For plain numbers / non-LaTeX labels, use `Text(str(n))` not `Tex(str(n))` — avoids LaTeX dependency.
+8. Never place labels directly on top of graphs/axes unless wrapped in `BackgroundRectangle`.
+
+## DURATION RULES — MATCH THE TARGET
+
+- The user prompt specifies a target duration in seconds.
+- Your scene MUST last approximately that many seconds.
+- Total duration = sum of all `self.play(... run_time=X)` durations + all `self.wait(Y)` durations.
+- Default `run_time` for `self.play()` is 1 second. Default `self.wait()` is 1 second.
+- Distribute `self.wait()` calls between animations to fill the target.
+- Keep waits short (0.5 to 2.0), and keep final wait brief (<= 0.5).
+
+## LAYOUT QUICK RULES
+
+- Title goes at top: `to_edge(UP, buff=0.8)`.
+- Main content goes in center-lower area: `.center().shift(DOWN * 0.5)` when title is visible.
+- Axes should be explicitly sized and centered: `.set_width(10).center()`.
+- Prefer one focal visual per beat, then clear before introducing the next beat.
+
 ## ARROW QUICK REFERENCE
 
 ```python
 Arrow(start, end, buff=MED_SMALL_BUFF, thickness=3.0, tip_width_ratio=5, color=WHITE)
 ```
-That's it. No `tip_length`, no `tip_width`, no `stroke_width`.
+That's it. No `tip_length`, no `tip_width`, no `stroke_width`, no `scale_factor`.
 
 ## KEY API SIGNATURES (condensed)
 
@@ -82,3 +121,4 @@ DecimalNumber(number=0, num_decimal_places=2, font_size=48)
 | `Create(circle)` | `ShowCreation(circle)` |
 | `Circumscribe(obj)` | `FlashAround(obj)` |
 | `self.camera.frame` | `self.frame` |
+| `Tex(r"\text{hello}")` | Works — or use `TexText("hello")` |

@@ -2,7 +2,8 @@
 # Generates spoken narration audio from text using edge-tts (Microsoft Neural TTS).
 #
 # Available voices (set via config.yaml tts.voice):
-#   "en-US-GuyNeural"    — male, neutral, good for technical content  (default)
+#   "en-US-AndrewMultilingualNeural" — male, smoother/prosodic technical narration (default)
+#   "en-US-GuyNeural"    — male, neutral
 #   "en-US-JennyNeural"  — female, warm
 #   "en-US-EricNeural"   — male, authoritative
 
@@ -34,8 +35,8 @@ def _load_tts_config() -> dict:
 
 _TTS_CFG = _load_tts_config()
 
-_DEFAULT_VOICE = "en-US-GuyNeural"
-_DEFAULT_SPEED = "+0%"
+_DEFAULT_VOICE = "en-US-AndrewMultilingualNeural"
+_DEFAULT_SPEED = "+5%"
 
 
 # ---------------------------------------------------------------------------

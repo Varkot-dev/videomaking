@@ -1,4 +1,5 @@
 import argparse
+import json
 import logging
 import os
 import sys
@@ -14,6 +15,8 @@ from manimgen.validator.fallback import fallback_scene
 from manimgen.renderer.assembler import assemble_video
 
 logger = logging.getLogger(__name__)
+
+_PLAN_CACHE = "manimgen/output/plan.json"
 
 
 def _load_config() -> dict:
@@ -73,24 +76,56 @@ def _add_narration(section: dict, video_path: str, idx: int) -> str:
         return video_path
 
 
+def _muxed_path_for(section: dict, idx: int) -> str:
+    section_id = section.get("id", f"section_{idx:02d}")
+    return os.path.join("manimgen/output/muxed", f"{section_id}.mp4")
+
+
+def _video_path_for(section: dict) -> str:
+    """Return the rendered (pre-mux) video path if it exists in the videos dir."""
+    section_id = section.get("id", "")
+    videos_dir = "videos"
+    # e.g. videos/Section01Scene.mp4
+    class_name = section_id.replace("_", " ").title().replace(" ", "") + "Scene"
+    candidate = os.path.join(videos_dir, f"{class_name}.mp4")
+    return candidate if os.path.exists(candidate) else ""
+
+
 def main():
     parser = argparse.ArgumentParser(description="ManimGen: topic to 3B1B-style video")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("topic", nargs="?", help="Topic to explain (e.g. 'binary search')")
     group.add_argument("--pdf", metavar="FILE", help="Path to a PDF of lecture notes")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=f"Resume from saved plan ({_PLAN_CACHE}), skipping already-muxed sections",
+    )
     args = parser.parse_args()
 
     cfg = _load_config()
     tts_on = _tts_enabled(cfg)
 
-    if args.pdf:
+    if args.resume and os.path.exists(_PLAN_CACHE):
+        print(f"[manimgen] Resuming from cached plan: {_PLAN_CACHE}")
+        with open(_PLAN_CACHE) as f:
+            lesson_plan = json.load(f)
+    elif args.pdf:
         print(f"[manimgen] PDF input: {args.pdf}")
         lesson_plan = plan_lesson_from_pdf(args.pdf)
+        os.makedirs(os.path.dirname(_PLAN_CACHE), exist_ok=True)
+        with open(_PLAN_CACHE, "w") as f:
+            json.dump(lesson_plan, f, indent=2)
+        print(f"[manimgen] Plan saved to {_PLAN_CACHE}")
     else:
         print(f"[manimgen] Input: {args.topic}")
         topic = parse_input(args.topic)
         print(f"[manimgen] Normalized: {topic}")
         lesson_plan = plan_lesson(topic)
+        os.makedirs(os.path.dirname(_PLAN_CACHE), exist_ok=True)
+        with open(_PLAN_CACHE, "w") as f:
+            json.dump(lesson_plan, f, indent=2)
+        print(f"[manimgen] Plan saved to {_PLAN_CACHE}")
 
     print(f"[manimgen] Planned {len(lesson_plan['sections'])} sections")
     if tts_on:
@@ -100,15 +135,29 @@ def main():
 
     rendered_videos = []
     for idx, section in enumerate(lesson_plan["sections"], start=1):
-        print(f"[manimgen] Generating: {section['title']}")
-        code, class_name, scene_path = generate_scenes(section)
+        muxed = _muxed_path_for(section, idx)
 
-        success, video_path = run_scene(scene_path, class_name)
-        if not success:
-            success, video_path = retry_scene(section, code, class_name, scene_path)
-        if not success:
-            print(f"[manimgen] All retries failed for '{section['title']}', using fallback")
-            video_path = fallback_scene(section)
+        # Skip sections that are fully done (muxed video exists)
+        if os.path.exists(muxed):
+            print(f"[manimgen] Skipping (already muxed): {section['title']} → {muxed}")
+            rendered_videos.append(muxed)
+            continue
+
+        # Check if the raw render exists so we skip codegen + manimgl
+        existing_video = _video_path_for(section)
+        if existing_video:
+            print(f"[manimgen] Render exists, skipping codegen: {section['title']}")
+            video_path = existing_video
+            success = True
+        else:
+            print(f"[manimgen] Generating: {section['title']}")
+            code, class_name, scene_path = generate_scenes(section)
+            success, video_path = run_scene(scene_path, class_name)
+            if not success:
+                success, video_path = retry_scene(section, code, class_name, scene_path)
+            if not success:
+                print(f"[manimgen] All retries failed for '{section['title']}', using fallback")
+                video_path = fallback_scene(section)
 
         if video_path:
             if tts_on:

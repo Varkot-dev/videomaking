@@ -8,16 +8,34 @@ from manimgen.validator.env import get_render_env
 FALLBACK_TEMPLATE = '''from manimlib import *
 
 class FallbackScene(Scene):
-    """Fallback scene: displays section title when code generation fails."""
     def construct(self):
-        title = Text({title!r}, font_size=48)
-        subtitle = Text("(animation unavailable)", font_size=24, color=GREY)
-        subtitle.next_to(title, DOWN, buff=0.4)
-        self.play(FadeIn(title))
-        self.play(FadeIn(subtitle))
-        self.wait(3)
-        self.play(FadeOut(title), FadeOut(subtitle))
+        title = Text({title!r}, font_size=52, color=BLUE_B).to_edge(UP, buff=0.8)
+        points = VGroup(
+            Text({point1!r}, font_size=30, color=WHITE),
+            Text({point2!r}, font_size=30, color=WHITE),
+            Text({point3!r}, font_size=30, color=WHITE),
+        ).arrange(DOWN, aligned_edge=LEFT, buff=0.35).center().shift(DOWN * 0.3)
+        bullets = VGroup(*[
+            Dot(p.get_left() + LEFT * 0.3, radius=0.06, fill_color=YELLOW)
+            for p in points
+        ])
+        content = VGroup(points, bullets)
+        self.play(Write(title), run_time=1.2)
+        self.play(LaggedStartMap(FadeIn, points, lag_ratio=0.25), run_time=1.8)
+        self.play(FadeIn(bullets), run_time=0.5)
+        self.wait({hold_seconds})
+        self.play(FadeOut(content), FadeOut(title), run_time=0.8)
 '''
+
+
+def _estimate_hold(section: dict) -> int:
+    """Match fallback hold duration to narration length so muxing doesn't distort."""
+    narration = section.get("narration", "")
+    if narration:
+        import math
+        words = len(narration.split())
+        return max(5, math.ceil(words / 130 * 60))
+    return section.get("duration_seconds", 10)
 
 
 def fallback_scene(section: dict) -> str | None:
@@ -25,9 +43,17 @@ def fallback_scene(section: dict) -> str | None:
     scenes_dir = "manimgen/output/scenes"
     os.makedirs(scenes_dir, exist_ok=True)
 
+    hold_seconds = _estimate_hold(section)
     scene_path = os.path.join(scenes_dir, f"{section['id']}_fallback.py")
     class_name = f"{section['id'].replace('_', ' ').title().replace(' ', '')}FallbackScene"
-    code = _generate_constrained_fallback(section, class_name) or FALLBACK_TEMPLATE.format(title=section["title"])
+    points = _fallback_points(section)
+    code = _generate_constrained_fallback(section, class_name, hold_seconds) or FALLBACK_TEMPLATE.format(
+        title=section["title"],
+        hold_seconds=hold_seconds,
+        point1=points[0],
+        point2=points[1],
+        point3=points[2],
+    )
     code = code.replace("class FallbackScene(Scene):", f"class {class_name}(Scene):")
 
     with open(scene_path, "w") as f:
@@ -35,7 +61,7 @@ def fallback_scene(section: dict) -> str | None:
 
     try:
         result = subprocess.run(
-            ["manimgl", scene_path, class_name, "-w", "--hd"],
+            ["manimgl", scene_path, class_name, "-w", "--hd", "-c", "#1C1C1C"],
             capture_output=True,
             text=True,
             timeout=60,
@@ -45,14 +71,18 @@ def fallback_scene(section: dict) -> str | None:
             from manimgen.validator.runner import _find_rendered_video
             return _find_rendered_video(class_name)
 
-        # Hard fallback to static title card with a unique class name if constrained code fails.
-        code = FALLBACK_TEMPLATE.format(title=section["title"]).replace(
-            "class FallbackScene(Scene):", f"class {class_name}(Scene):"
-        )
+        points = _fallback_points(section)
+        code = FALLBACK_TEMPLATE.format(
+            title=section["title"],
+            hold_seconds=hold_seconds,
+            point1=points[0],
+            point2=points[1],
+            point3=points[2],
+        ).replace("class FallbackScene(Scene):", f"class {class_name}(Scene):")
         with open(scene_path, "w") as f:
             f.write(code)
         result = subprocess.run(
-            ["manimgl", scene_path, class_name, "-w", "--hd"],
+            ["manimgl", scene_path, class_name, "-w", "--hd", "-c", "#1C1C1C"],
             capture_output=True,
             text=True,
             timeout=60,
@@ -67,7 +97,7 @@ def fallback_scene(section: dict) -> str | None:
     return None
 
 
-def _generate_constrained_fallback(section: dict, class_name: str) -> str | None:
+def _generate_constrained_fallback(section: dict, class_name: str, hold_seconds: int = 10) -> str | None:
     system = (
         "You generate safe ManimGL fallback scenes.\n"
         "Output only Python.\n"
@@ -75,11 +105,15 @@ def _generate_constrained_fallback(section: dict, class_name: str) -> str | None
         "No Arrow, no Axes, no NumberPlane, no always_redraw, no updaters.\n"
         "Exactly one Scene class with the requested class name.\n"
         "Import only from manimlib.\n"
+        "NEVER use Tex() for plain text — use Text() instead.\n"
+        "NEVER use DARK_GREY, DARK_BLUE etc — use GREY_D, BLUE_D.\n"
+        "NEVER use scale_factor, corner_radius, font= on Tex.\n"
     )
     user = (
-        f"Create a minimal 10-20 second scene for section '{section['title']}'.\n"
+        f"Create a minimal scene lasting ~{hold_seconds} seconds for section '{section['title']}'.\n"
         f"Visual description: {section.get('visual_description', '')}\n"
         f"Class name: {class_name}\n"
+        f"Use self.wait() calls totaling ~{hold_seconds - 5}s (leave ~5s for animations).\n"
     )
     try:
         code = chat(system=system, user=user)
@@ -91,3 +125,17 @@ def _generate_constrained_fallback(section: dict, class_name: str) -> str | None
         code = re.sub(r"^```\w*\n?", "", code)
         code = re.sub(r"\n?```$", "", code)
     return code
+
+
+def _fallback_points(section: dict) -> list[str]:
+    keys = [str(k).replace("_", " ") for k in section.get("key_objects", []) if str(k).strip()]
+    if not keys:
+        return [
+            "Core idea overview",
+            "Key visual relationship",
+            "Main takeaway",
+        ]
+    points = [f"Key object: {k}" for k in keys[:3]]
+    while len(points) < 3:
+        points.append("Additional supporting detail")
+    return points

@@ -125,10 +125,37 @@ def apply_error_aware_fixes(code: str, stderr: str) -> tuple[str, list[str]]:
         kw_match = re.search(r"got an unexpected keyword argument '(\w+)'", stderr)
         if kw_match:
             bad_kw = kw_match.group(1)
-            new_fixed, count = re.subn(rf",?\s*{bad_kw}\s*=\s*[^,\)\n]+", "", fixed)
-            if count:
-                applied.append(f"removed unexpected kwarg '{bad_kw}' ({count})")
-                fixed = new_fixed
+            if bad_kw == "font_size":
+                # font_size is valid on Text() but not Tex()/MathTex(). Convert to
+                # .scale() so sizing is preserved: Tex("x", font_size=48) -> Tex("x").scale(1.5)
+                # 32 = baseline, scale = font_size / 32
+                def _fs_to_scale(m: re.Match) -> str:
+                    fs_val = m.group(1).strip()
+                    try:
+                        scale = round(float(fs_val) / 32, 2)
+                    except ValueError:
+                        scale = 1.0
+                    return f").scale({scale})"
+                new_fixed = re.sub(
+                    r",?\s*font_size\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*(\))",
+                    lambda m: f").scale({round(float(m.group(1)) / 32, 2)})",
+                    fixed,
+                )
+                count = fixed != new_fixed
+                if count:
+                    applied.append(f"font_size= on Tex -> .scale() ({count})")
+                    fixed = new_fixed
+                else:
+                    # Fallback: just strip it
+                    new_fixed, count = re.subn(rf",?\s*{bad_kw}\s*=\s*[^,\)\n]+", "", fixed)
+                    if count:
+                        applied.append(f"removed unexpected kwarg '{bad_kw}' ({count})")
+                        fixed = new_fixed
+            else:
+                new_fixed, count = re.subn(rf",?\s*{bad_kw}\s*=\s*[^,\)\n]+", "", fixed)
+                if count:
+                    applied.append(f"removed unexpected kwarg '{bad_kw}' ({count})")
+                    fixed = new_fixed
 
     if "NameError: name '" in stderr:
         name_match = re.search(r"NameError: name '(\w+)' is not defined", stderr)
@@ -188,6 +215,20 @@ def validate_scene_code(code: str) -> list[str]:
     return errors
 
 
+def _check_layout_smells(code: str) -> list[str]:
+    """Heuristic warnings for overlap-prone layout patterns."""
+    warnings: list[str] = []
+    if re.search(r"\bAxes\s*\(", code) and not re.search(r"\.set_width\s*\(", code):
+        warnings.append("Axes created without .set_width() may overflow frame.")
+    if re.search(r"\.move_to\s*\(\s*axes\.(?:c2p|i2gp|get_center)", code):
+        warnings.append("Label moved into axes area; this often overlaps curves/ticks.")
+    lines = code.strip().splitlines()
+    tail = "\n".join(lines[-12:]) if lines else ""
+    if "FadeOut" not in tail and "self.remove" not in tail:
+        warnings.append("Scene tail has no cleanup FadeOut/self.remove; visuals may linger.")
+    return warnings
+
+
 def precheck_and_autofix(scene_path: str) -> dict[str, Any]:
     with open(scene_path) as f:
         code = f.read()
@@ -198,11 +239,18 @@ def precheck_and_autofix(scene_path: str) -> dict[str, Any]:
             f.write(fixed)
 
     errors = validate_scene_code(fixed)
+    layout_warnings = _check_layout_smells(fixed)
     if errors:
         return {
             "ok": False,
             "stderr": "Precheck failed:\n- " + "\n- ".join(errors),
             "applied_fixes": applied_fixes,
+            "layout_warnings": layout_warnings,
         }
 
-    return {"ok": True, "stderr": "", "applied_fixes": applied_fixes}
+    return {
+        "ok": True,
+        "stderr": "",
+        "applied_fixes": applied_fixes,
+        "layout_warnings": layout_warnings,
+    }

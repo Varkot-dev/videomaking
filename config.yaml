@@ -17,6 +17,6 @@ rendering:
 
 tts:
   engine: edge-tts  # edge-tts | elevenlabs | openai
-  voice: en-US-GuyNeural
+  voice: en-US-AndrewMultilingualNeural
   enabled: true
-  speed: "+0%"
+  speed: "+5%"

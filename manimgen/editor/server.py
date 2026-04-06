@@ -2,7 +2,7 @@
 ManimGen Editor — lightweight browser-based clip editor.
 
 Usage:
-    manimgen-edit                   # load latest output/videos session
+    manimgen-edit                   # load output/muxed if present, else output/videos
     manimgen-edit --videos path/    # load a specific folder of .mp4 files
 
 Opens at http://localhost:5001
@@ -23,6 +23,15 @@ app = Flask(__name__)
 # Resolved at startup
 VIDEOS_DIR: Path = Path("manimgen/output/videos")
 OUTPUT_DIR: Path = Path("manimgen/output/videos/exports")
+
+
+def _default_videos_dir() -> Path:
+    """Prefer manimgen/output/muxed when it exists; otherwise manimgen/output/videos."""
+    muxed = Path("manimgen/output/muxed")
+    videos = Path("manimgen/output/videos")
+    if muxed.exists():
+        return muxed.resolve()
+    return videos.resolve()
 
 
 def _get_clips() -> list[dict]:
@@ -193,11 +202,15 @@ def main():
     global VIDEOS_DIR, OUTPUT_DIR
 
     parser = argparse.ArgumentParser(description="ManimGen Editor")
-    parser.add_argument("--videos", default="manimgen/output/videos", help="Directory of .mp4 clips to edit")
+    parser.add_argument(
+        "--videos",
+        default=None,
+        help="Directory of .mp4 clips (default: output/muxed if it exists, else output/videos)",
+    )
     parser.add_argument("--port", type=int, default=5001)
     args = parser.parse_args()
 
-    VIDEOS_DIR = Path(args.videos).resolve()
+    VIDEOS_DIR = Path(args.videos).resolve() if args.videos else _default_videos_dir()
     OUTPUT_DIR = VIDEOS_DIR / "exports"
 
     if not VIDEOS_DIR.exists():

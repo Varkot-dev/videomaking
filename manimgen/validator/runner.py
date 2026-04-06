@@ -24,6 +24,11 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
                 for fix in precheck["applied_fixes"]:
                     f.write(f"- {fix}\n")
                 f.write("\n")
+            if precheck.get("layout_warnings"):
+                f.write("=== PRECHECK LAYOUT WARNINGS ===\n")
+                for warning in precheck["layout_warnings"]:
+                    f.write(f"- {warning}\n")
+                f.write("\n")
             f.write("=== PRECHECK ERROR ===\n")
             f.write(precheck["stderr"])
             f.write("\n")
@@ -31,7 +36,7 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
 
     try:
         result = subprocess.run(
-            ["manimgl", scene_path, class_name, "-w", "--hd"],
+            ["manimgl", scene_path, class_name, "-w", "--hd", "-c", "#1C1C1C"],
             capture_output=True,
             text=True,
             timeout=120,
@@ -43,6 +48,11 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
                 f.write("=== PRECHECK AUTO-FIXES ===\n")
                 for fix in precheck["applied_fixes"]:
                     f.write(f"- {fix}\n")
+                f.write("\n")
+            if precheck.get("layout_warnings"):
+                f.write("=== PRECHECK LAYOUT WARNINGS ===\n")
+                for warning in precheck["layout_warnings"]:
+                    f.write(f"- {warning}\n")
                 f.write("\n")
             f.write(f"=== STDOUT ===\n{result.stdout}\n")
             f.write(f"=== STDERR ===\n{result.stderr}\n")
