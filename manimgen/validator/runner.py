@@ -6,6 +6,11 @@ from manimgen.validator.env import get_render_env
 from manimgen import paths
 
 
+def _is_3d_scene(scene_path: str) -> bool:
+    with open(scene_path) as f:
+        return "ThreeDScene" in f.read()
+
+
 def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
     """
     Run a ManimGL scene file and return (success, video_path).
@@ -35,12 +40,14 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
             f.write("\n")
         return False, None
 
+    timeout = 300 if _is_3d_scene(scene_path) else 120
+
     try:
         result = subprocess.run(
             ["manimgl", scene_path, class_name, "-w", "--hd", "-c", "#1C1C1C"],
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=timeout,
             env=get_render_env(),
         )
 
@@ -67,7 +74,7 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
 
     except subprocess.TimeoutExpired:
         with open(log_path, "w") as f:
-            f.write("=== TIMEOUT ===\nScene rendering exceeded 120 seconds.\n")
+            f.write(f"=== TIMEOUT ===\nScene rendering exceeded {timeout} seconds.\n")
         return False, None
 
 

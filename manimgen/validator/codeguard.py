@@ -283,6 +283,68 @@ def _check_layout_smells(code: str) -> list[str]:
     return warnings
 
 
+_3D_TEMPLATES = {"surface_3d", "solid_3d", "vector_field_3d", "parametric_3d"}
+_DANGEROUS_PATTERNS = ["exec", "eval", "__import__", "open", "os."]
+
+
+def validate_spec_safety(spec: dict) -> list[str]:
+    """
+    Catch dangerous or unreasonable values in a spec before code generation.
+    Returns list of error strings (empty = safe).
+
+    Checks:
+    - expr_str / func_str fields don't contain: exec, eval, __import__, open, os.
+    - node positions are within reasonable bounds (x in [-5,5], y in [-4,4])
+    - graph_theory node count <= 50 (more = unrenderable)
+    - duration_seconds is between 2 and 120
+    - 3D templates have mode == "3d"
+    """
+    errors: list[str] = []
+
+    duration = spec.get("duration_seconds")
+    if duration is not None:
+        if not (2 <= duration <= 120):
+            errors.append(f"duration_seconds {duration} is out of range [2, 120]")
+
+    template = spec.get("template", "")
+    mode = spec.get("mode", "")
+    if template in _3D_TEMPLATES and mode != "3d":
+        errors.append(f"Template '{template}' requires mode '3d', got '{mode}'")
+
+    def _check_expr(val: str, field: str) -> None:
+        for pat in _DANGEROUS_PATTERNS:
+            if pat in val:
+                errors.append(f"Dangerous pattern '{pat}' found in field '{field}'")
+
+    def _walk(obj: Any, path: str = "") -> None:
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                child_path = f"{path}.{k}" if path else k
+                if k in ("expr_str", "func_str") and isinstance(v, str):
+                    _check_expr(v, child_path)
+                _walk(v, child_path)
+        elif isinstance(obj, list):
+            for i, item in enumerate(obj):
+                _walk(item, f"{path}[{i}]")
+
+    _walk(spec)
+
+    for beat in spec.get("beats", []):
+        if beat.get("type") == "graph_appear":
+            nodes = beat.get("nodes", [])
+            if len(nodes) > 50:
+                errors.append(f"graph_theory node count {len(nodes)} exceeds limit of 50")
+            for i, node in enumerate(nodes):
+                if isinstance(node, (list, tuple)) and len(node) >= 2:
+                    x, y = node[0], node[1]
+                    if not (-5 <= x <= 5):
+                        errors.append(f"Node {i} x={x} is out of bounds [-5, 5]")
+                    if not (-4 <= y <= 4):
+                        errors.append(f"Node {i} y={y} is out of bounds [-4, 4]")
+
+    return errors
+
+
 def precheck_and_autofix(scene_path: str) -> dict[str, Any]:
     with open(scene_path) as f:
         code = f.read()
