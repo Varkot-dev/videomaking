@@ -31,7 +31,7 @@ class LimitTemplate(TemplateScene):
     def _axes_appear(self, beat: dict) -> list[str]:
         x_range = beat.get("x_range", [0, 4, 1])
         y_range = beat.get("y_range", [0, 4, 1])
-        shift = ".shift(DOWN * 1.2 + LEFT * 0.5)" if self.title else ".center()"
+        shift = "axes.shift(DOWN * 1.2 + LEFT * 0.5)" if self.title else "axes.center()"
         return [
             "axes = Axes(",
             f"    x_range={x_range},",
@@ -39,7 +39,12 @@ class LimitTemplate(TemplateScene):
             '    axis_config={"color": GREY_B, "include_tip": True},',
             '    x_axis_config={"include_numbers": True, "decimal_number_config": {"font_size": 24}},',
             '    y_axis_config={"include_numbers": False},',
-            f").set_width(6).center(){shift}",
+            ")",
+            # Scale to fit: cap width at 6, then cap height at 4.5 so tall y-ranges never hit the title
+            "axes.set_width(6)",
+            "if axes.get_height() > 4.5:",
+            "    axes.set_height(4.5)",
+            shift,
             "y_labels = VGroup()",
             f"for n in range(int({y_range[0]})+1, int({y_range[1]})):",
             "    lbl = Text(str(n), font_size=22, color=GREY_A)",

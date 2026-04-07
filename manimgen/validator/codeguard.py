@@ -244,7 +244,7 @@ def _check_next_to_stacking(lines: list[str], warnings: list[str]) -> None:
 def _check_layout_smells(code: str) -> list[str]:
     """Heuristic warnings for overlap-prone layout patterns."""
     warnings: list[str] = []
-    if re.search(r"\bAxes\s*\(", code) and not re.search(r"\.set_width\s*\(", code):
+    if re.search(r"\bAxes\s*\(", code) and not re.search(r"\.set_width\s*\(|x_length\s*=", code):
         warnings.append(
             "Axes created without .set_width(); axes will render at default internal size, "
             "producing dead space or overflow. Use .set_width(10).center() "
@@ -345,11 +345,26 @@ def validate_spec_safety(spec: dict) -> list[str]:
     return errors
 
 
-def precheck_and_autofix(scene_path: str) -> dict[str, Any]:
+def precheck_and_autofix(code: str) -> str:
+    """Apply all known auto-fixes to a code string and return the fixed code.
+
+    Called by scene_generator before saving the file. Also called by retry.py
+    on the file path (see precheck_and_autofix_file for that variant).
+    """
+    fixed, applied_fixes = apply_known_fixes(code)
+    fixed = _fix_axes_height_overflow(fixed)
+    if applied_fixes:
+        import logging
+        logging.getLogger(__name__).debug("[codeguard] applied: %s", applied_fixes)
+    return fixed
+
+
+def precheck_and_autofix_file(scene_path: str) -> dict[str, Any]:
+    """Read a scene file, apply auto-fixes, write back, return result dict."""
     with open(scene_path) as f:
         code = f.read()
 
-    fixed, applied_fixes = apply_known_fixes(code)
+    fixed = precheck_and_autofix(code)
     if fixed != code:
         with open(scene_path, "w") as f:
             f.write(fixed)
@@ -360,13 +375,39 @@ def precheck_and_autofix(scene_path: str) -> dict[str, Any]:
         return {
             "ok": False,
             "stderr": "Precheck failed:\n- " + "\n- ".join(errors),
-            "applied_fixes": applied_fixes,
             "layout_warnings": layout_warnings,
         }
 
     return {
         "ok": True,
         "stderr": "",
-        "applied_fixes": applied_fixes,
         "layout_warnings": layout_warnings,
     }
+
+
+def _fix_axes_height_overflow(code: str) -> str:
+    """Inject x_length/y_length constraints into Axes() calls that use set_width().
+
+    The old pattern `.set_width(N).center().shift(...)` preserves aspect ratio,
+    so tall y-ranges make axes overflow into the title zone.
+
+    The new pattern uses x_length= and y_length= at construction time to hard-cap
+    the physical screen size. We only rewrite calls that don't already use x_length=.
+    """
+    if "x_length=" in code:
+        return code  # already using the safe pattern
+
+    # Replace .set_width(N).center() chains with the x_length/y_length approach.
+    # We can't easily parse ranges here, so we inject a post-construction clamp instead.
+    # This is safe for all axes sizes.
+    def _inject_clamp(m: re.Match) -> str:
+        original = m.group(0)
+        # After the full Axes(...).set_width(...).center() chain, inject height clamp
+        return original + "\nif axes.get_height() > 5.0:\n    axes.set_height(5.0)"
+
+    # Match: axes = Axes(...).set_width(...).center()...  (possibly with .shift(...))
+    pattern = r"(axes\s*=\s*Axes\([^)]+\)(?:\.[a-z_]+\([^)]*\))*)"
+    new_code, count = re.subn(pattern, _inject_clamp, code, flags=re.DOTALL)
+    if count and new_code != code:
+        return new_code
+    return code

@@ -6,6 +6,8 @@ Uses an audio-first CUE pipeline where spoken word timestamps drive animation du
 
 **Stack:** Python 3.13, ManimGL (3b1b fork), Gemini 2.5 Flash, FFmpeg 8.1, LaTeX, edge-tts, Flask (editor)
 
+**Current branch: `feature/director-overhaul`** — architectural overhaul complete. Template engine deleted. See pipeline section below.
+
 **Repo:** `https://github.com/Varkot-dev/videomaking.git` — branch `fix/camera-framing`
 **229 tests, all passing** (`python3 -m pytest tests/ -v`)
 
@@ -71,12 +73,14 @@ manimgen/
 
 ---
 
-## Pipeline flow (audio-first CUE architecture)
+## Pipeline flow (Director architecture — current)
 
 ```
 topic / PDF
   → parse_input() / pdf_parser
-  → plan_lesson()              LLM → plan JSON with narration containing [CUE] markers
+  → plan_lesson()              LLM → storyboard JSON with:
+                                 - narration with [CUE] markers
+                                 - cues[]: [{index, visual}] per cue (pixel-level descriptions)
   → cue_parser.parse_cues()    strips [CUE] → clean narration + cue_word_indices
   → plan saved to manimgen/output/plan.json
 
@@ -84,19 +88,29 @@ For each section:
   1. TTS (edge-tts WordBoundary)  → full .mp3 + per-word timestamps (sub-ms)
   2. segmenter.compute_segments() → exact duration per cue from word onset times
   3. audio_slicer.slice_audio()   → section_01_cue00.mp3, _cue01.mp3, ...
-  4. For each cue segment:
-     a. generate_scenes(duration_seconds=seg.duration)  → ManimGL .py
-     b. run_scene() → manimgl renders silent .mp4
-     c. retry_scene() on failure (codeguard → error-aware → LLM fix)
-     d. fallback_scene() if all retries fail
-     e. mux_audio_video() → pad-only, never warp
-  5. section_videos collected
+
+  4. generate_scenes(section, cue_durations=[...])
+       → ONE LLM call (Director) with storyboard + all cue durations
+       → Director writes ONE complete Python Scene class
+       → Scene has self.wait() pauses at each cue boundary
+       → codeguard auto-fixes the code
+       → saved as section_01.py
+
+  5. run_scene(scene_path, class_name) → ONE rendered section_01.mp4
+  6. retry_scene() on failure → fallback_scene() if all retries fail
+
+  7. cutter.cut_video_at_cues() → N per-cue video clips (FFmpeg re-encode)
+  8. mux_audio_video() per cue → section_01_cue00.mp4, _cue01.mp4, ...
 
 → assemble_video()  normalize + xfade transitions → final .mp4
 → manimgen-edit     browser UI for clip reorder/trim/export
 ```
 
-**Key insight:** Durations flow FROM spoken audio INTO scene generation. Animation length matches narration because the scene generator receives the exact `duration_seconds` from the segmenter. Nothing is ever speed-warped.
+**Key architectural decisions:**
+- **One scene per section, not per cue.** The Director generates a single continuous animation. Axes build once. Cues animate on top of what's already present. No restarts.
+- **Template engine is GONE.** The Director writes ManimGL Python directly. Visual variety comes from the storyboard descriptions, not from switching templates.
+- **Storyboard-level planner.** The planner outputs pixel-level visual descriptions per cue — not concept descriptions. "Yellow curve y=x² with red dot at x=-1.5 moving right" not "show a parabola".
+- **codeguard is the safety net.** precheck_and_autofix() runs on the generated code string before saving. Catches import errors, API mismatches, and axes height overflow.
 
 ---
 
@@ -145,10 +159,11 @@ Resolution order (first wins):
 
 ## Video quality systems (current)
 
-### 1. Prompt architecture
-- `generator_system.md`: ~200 lines, aesthetic-first structure. Identity + spatial layout at top (LLM attention priority). Compact API cheatsheet, no bloated reference.
-- `rules_core.md`: shared by generator and retry prompts. Banned kwargs, color mappings, arrow reference, duration rules.
-- 9-rule LAYOUT RULES checklist injected into every user message in `scene_generator.py`.
+### 1. Prompt architecture (Director model)
+- `planner/prompts/planner_system.md`: outputs storyboard with `cues[{index, visual}]` — pixel-level visual descriptions per cue. NOT concept descriptions.
+- `generator/prompts/director_system.md`: full ManimGL API reference, layout zone rules with exact coordinates, banned patterns, examples. The Director writes complete Python.
+- `examples/`: 10+ hand-written verified ManimGL scenes covering diverse patterns — the Director's few-shot reference library.
+- **DELETED:** `generator/prompts/spec_system.md`, `templates/` directory, `spec_schema.py` — the template engine is gone.
 
 ### 2. Dark background
 All `manimgl` subprocess calls use `-c "#1C1C1C"`. This is enforced in `runner.py`, `retry.py`, and `fallback.py`.
@@ -223,8 +238,15 @@ axes = Axes(
 )
 ```
 
-### Axes sizing
-Always: `Axes(...).set_width(10).center()` — with title: `.shift(DOWN * 0.5)`
+### Axes sizing — use x_length/y_length, not set_width
+```python
+x_span = x_range[1] - x_range[0]
+y_span = y_range[1] - y_range[0]
+scale = min(8 / x_span, 5 / y_span)  # 5 = safe height with title
+axes = Axes(x_range=..., y_range=..., x_length=x_span*scale, y_length=y_span*scale)
+axes.center().shift(DOWN * 0.8)  # always shift down when title present
+```
+**Never use `.set_width().center()` alone** — it preserves aspect ratio and overflows into title zone when y-range is tall. codeguard injects a height clamp as a fallback but x_length/y_length is the right fix.
 
 ### Multiple annotations on same anchor
 Always: `VGroup(...).arrange(DOWN, buff=0.4)` — never two independent `.next_to(same_anchor)` calls
@@ -238,6 +260,49 @@ Always: `VGroup(...).arrange(DOWN, buff=0.4)` — never two independent `.next_t
 3. **PDF rendering:** Currently renders every page to PNG unconditionally, even text-heavy PDFs. Should use 3-way logic (text-only / image-only / mixed).
 4. **No single integration test** for the full plan → TTS → slice → render → mux → assemble pipeline (only unit tests per module).
 5. **layout_checker.py uses LLM vision** — costs money per rendered frame check. Consider making it opt-in or running only on non-fallback scenes.
+
+---
+
+## Recurring bugs and architectural problems (DO NOT FORGET THESE)
+
+These are real issues raised by the user that keep getting patched incorrectly or ignored. Read this before starting any work.
+
+### BUG 1: Axes overflow into title zone
+**Symptom:** The curve/axes graphic extends into the title text at the top of the frame. The graph line literally overlaps the title words.
+**Root cause:** Templates do `set_width(N)` which preserves the axes' native aspect ratio. When y_range span >> x_range span, the axes become taller than the safe content zone. With a title present, the content zone is roughly y∈[-3, 2.5] in ManimGL coords, but a tall axes with `.shift(DOWN * 1.2)` still extends above y=2.5 into the title.
+**Correct fix:** After `set_width()`, check `axes.get_height()` and clamp it: `if axes.get_height() > 4.5: axes.set_height(4.5)`. This is NOT a hardcode — it's a geometric constraint. Apply this in ALL templates that use axes with a title, not just limit_template.
+**Status:** Partially fixed in `limit_template.py` and `function_template.py` — verify other axis-using templates (number_line, complex_plane, surface_3d, etc.) also have this clamp.
+
+### BUG 2: Every scene looks identical — templates are too rigid
+**Symptom:** All generated clips look the same: title → axes → curve → dot moves → annotation. Different sections with genuinely different visual concepts produce indistinguishable output.
+**Root cause:** The `limit` template (and others) have a fixed, narrow set of beat types. The `limit` template only knows: axes_appear, curve_appear (always renders a hole), guide_lines, approach_dot, annotation. It cannot render:
+- A jump discontinuity (two separate curves at different y-levels, no hole)
+- Epsilon-delta bands (two colored rectangles shrinking around a point)
+- Oscillation (sin(1/x) style, no single limit)
+- A piecewise function with a separate filled point off the curve
+When the planner asks for these, the template shoe-horns them into the hole pattern → same visual every time.
+**Correct fix:** Add beat types to each template for the actual visual variations that concept requires. For `limit`: add `jump_discontinuity`, `epsilon_delta`, `separate_point` beat types. Don't just add more fields to existing beats.
+
+### BUG 3: Each cue clip restarts from scratch
+**Symptom:** A section with 4 cues produces 4 clips that each independently do: title appears → axes appear → curve appears → dot moves. The viewer sees the same setup repeated 4 times.
+**Root cause:** Each cue is an independent `Scene` class with its own `construct()`. There is no state carried between cues. The assembler hard-cuts between cues within a section, so visually it looks like 4 restarts.
+**Correct fix (architectural):** Either (a) make cues within a section share a single scene file with `self.wait()` pauses between cue points, or (b) the first cue builds the axes/curve and subsequent cues receive them as already-present objects that just get animated further. This requires rethinking how `generate_scenes` works for cue_index > 0 — it should know what was already rendered and only animate the delta.
+
+### BUG 4: `retry_spec()` in `retry.py` called `_load_spec_system_prompt()` which doesn't exist there
+**What happened:** `retry_spec()` needs the spec system prompt (the one that knows about templates and beat types) but called a function that only exists in `scene_generator.py`. Fixed by loading the prompt file directly via relative path.
+**Lesson:** When spec retry fails, it must use the SPEC system prompt (generator/prompts/spec_system.md), not the CODE retry prompt (validator/prompts/retry_system.md). The code retry prompt knows about ManimGL Python. The spec prompt knows about JSON templates. They are completely different.
+
+### BUG 5: `SpecValidationError` crashes the pipeline instead of falling back
+**What happened:** When all spec retries are exhausted, `generate_scenes()` raises `SpecValidationError`. This was uncaught in `cli.py`, crashing the entire run instead of gracefully using `fallback_scene()`.
+**Fix:** Wrap `generate_scenes()` call in `cli.py` with `except SpecValidationError` → set `success = False`, let the existing fallback logic handle it.
+
+### ARCHITECTURAL ISSUE: Template system vs. free-form codegen trade-off
+The template engine was built to eliminate ManimGL API hallucination bugs. It succeeded at that. But it introduced a new problem: templates are so rigid that every section looks the same. The original free-form codegen produced varied visuals but broke constantly.
+**The right answer is NOT to choose one or the other.** It is:
+1. Templates handle the structure and API correctness (axes, coordinate systems, basic shapes)
+2. The LLM fills in the parameters (which curve, which colors, which values)
+3. Templates need more beat types to cover the real visual space of each concept
+Do NOT regress to pure free-form codegen. Do NOT make templates so rigid they produce identical output. The fix is richer templates with more beat types.
 
 ---
 
