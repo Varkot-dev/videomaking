@@ -4,6 +4,9 @@ import os
 import re
 from manimgen.llm import chat
 from manimgen import paths
+from manimgen.templates.spec_schema import SpecValidationError
+from manimgen.templates.dispatch import render_spec
+from manimgen.validator.retry import retry_spec, MAX_SPEC_RETRIES
 
 _WORDS_PER_MINUTE = 130
 
@@ -65,7 +68,7 @@ Pick the most appropriate template. Output only valid JSON.
 
 
 def _validate_spec(spec: dict) -> None:
-    from manimgen.templates.spec_schema import validate, SpecValidationError
+    from manimgen.templates.spec_schema import validate
     from manimgen.validator.codeguard import validate_spec_safety
     errors = validate(spec)
     errors += validate_spec_safety(spec)
@@ -100,9 +103,6 @@ def generate_scenes(
         narration = section.get("narration", "")
         target_seconds = _estimate_narration_duration(narration) if narration else section.get("duration_seconds", 30)
 
-    from manimgen.templates.spec_schema import SpecValidationError
-    from manimgen.validator.retry import retry_spec, MAX_SPEC_RETRIES
-
     # Step 1: LLM produces a visual spec JSON; retry on validation failure
     spec = _generate_spec(section, cue_index, total_cues, target_seconds)
     for attempt in range(MAX_SPEC_RETRIES + 1):
@@ -130,7 +130,6 @@ def generate_scenes(
         json.dump(spec, f, indent=2)
 
     # Step 3: Template engine renders the .py file
-    from manimgen.templates.dispatch import render_spec
 
     scenes_dir = paths.scenes_dir()
     os.makedirs(scenes_dir, exist_ok=True)
