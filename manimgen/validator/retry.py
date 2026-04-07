@@ -3,7 +3,7 @@ import subprocess
 import os
 from manimgen.llm import chat
 from manimgen.validator.runner import _find_rendered_video, _is_3d_scene
-from manimgen.validator.codeguard import precheck_and_autofix, apply_error_aware_fixes
+from manimgen.validator.codeguard import precheck_and_autofix_file as precheck_and_autofix, apply_error_aware_fixes
 from manimgen.validator.env import get_render_env
 from manimgen.validator.layout_checker import check_layout
 from manimgen import paths
@@ -66,7 +66,10 @@ def retry_spec(
     """Re-ask LLM for a valid spec when validation fails. Budget: MAX_SPEC_RETRIES."""
     import json, re
 
-    system = _load_spec_system_prompt()
+    here = os.path.dirname(__file__)
+    spec_prompt_path = os.path.join(here, "..", "generator", "prompts", "spec_system.md")
+    with open(os.path.normpath(spec_prompt_path)) as f:
+        system = f.read()
     error_block = "\n".join(errors)
     user_message = f"""Section title: {section['title']}
 Visual description: {section['visual_description']}

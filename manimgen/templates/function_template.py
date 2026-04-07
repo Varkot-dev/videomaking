@@ -31,13 +31,17 @@ class FunctionTemplate(TemplateScene):
         y_range = beat.get("y_range", [-1, 5, 1])
         x_label = beat.get("x_label", "x")
         y_label = beat.get("y_label", "f(x)")
-        shift = ".shift(DOWN * 0.5)" if self.title else ""
+        shift = "axes.shift(DOWN * 0.5)" if self.title else ""
         return [
             "axes = Axes(",
             f"    x_range={x_range},",
             f"    y_range={y_range},",
             '    axis_config={"include_numbers": True, "decimal_number_config": {"font_size": 24}, "color": GREY_B},',
-            f").set_width(10).center(){shift}",
+            ")",
+            "axes.set_width(10).center()",
+            "if axes.get_height() > 5.0:",
+            "    axes.set_height(5.0)",
+            *(([shift]) if shift else []),
             f'x_label = Text("{x_label}", font_size=28).next_to(axes.x_axis, RIGHT, buff=0.2)',
             f'y_label = Text("{y_label}", font_size=28).next_to(axes.y_axis, UP, buff=0.2)',
             "self.play(ShowCreation(axes), Write(x_label), Write(y_label))",

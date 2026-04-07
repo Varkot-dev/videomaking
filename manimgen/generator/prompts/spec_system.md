@@ -96,6 +96,24 @@ Every beat must have `"type"` and `"duration"` (float, seconds).
 }
 ```
 
+**limit:**
+```json
+{
+  "mode": "2d",
+  "template": "limit",
+  "title": "What is a Limit?",
+  "duration_seconds": 10.0,
+  "beats": [
+    { "type": "axes_appear", "x_range": [-1, 4, 1], "y_range": [-1, 4, 1], "x_label": "x", "y_label": "f(x)", "duration": 1.5 },
+    { "type": "curve_appear", "expr_str": "(x**2 - 1) / (x - 1)", "color": "#58C4DD", "hole_x": 1.0, "hole_y": 2.0, "duration": 2.0 },
+    { "type": "guide_lines", "limit_x": 1.0, "limit_y": 2.0, "duration": 1.5 },
+    { "type": "approach_dot", "from_side": "left",  "start_x": -0.5, "end_x": 0.98, "color": "#FF6B6B", "duration": 2.0 },
+    { "type": "approach_dot", "from_side": "right", "start_x": 2.5,  "end_x": 1.02, "color": "#FFD700", "duration": 2.0 },
+    { "type": "annotation", "value_label": "f(x) → 2", "limit_label": "lim x→1 f(x) = 2" }
+  ]
+}
+```
+
 **graph_theory:**
 ```json
 {

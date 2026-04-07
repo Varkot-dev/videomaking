@@ -34,7 +34,7 @@ def _tts_enabled(cfg: dict) -> bool:
 
 
 def _run_tts_for_section(section: dict, idx: int) -> tuple[str, list, float] | None:
-    """Run TTS for a section. Returns (audio_path, timestamps, audio_duration) or None on failure."""
+    """Run TTS for a section. Returns (audio_path, timestamps, audio_duration) or None."""
     from manimgen.renderer.tts import generate_narration, save_timestamps, get_audio_duration
 
     narration = section.get("narration", "").strip()
@@ -59,41 +59,35 @@ def _run_tts_for_section(section: dict, idx: int) -> tuple[str, list, float] | N
         return None
 
 
-def _muxed_path_for(section: dict, idx: int, cue_index: int | None = None) -> str:
+def _muxed_path_for(section: dict, idx: int, cue_index: int) -> str:
     section_id = section.get("id", f"section_{idx:02d}")
-    if cue_index is not None:
-        return os.path.join(paths.muxed_dir(), f"{section_id}_cue{cue_index:02d}.mp4")
-    return os.path.join(paths.muxed_dir(), f"{section_id}.mp4")
+    return os.path.join(paths.muxed_dir(), f"{section_id}_cue{cue_index:02d}.mp4")
 
 
-def _video_path_for(section: dict, cue_index: int | None = None) -> str:
-    """Return the rendered (pre-mux) video path if it exists in the videos dir."""
+def _all_cues_muxed(section: dict, idx: int, n_cues: int) -> bool:
+    return all(os.path.exists(_muxed_path_for(section, idx, i)) for i in range(n_cues))
+
+
+def _rendered_section_path(section: dict) -> str:
+    """Path to the full (pre-cut) rendered section video from ManimGL."""
     section_id = section.get("id", "")
-    base = section_id.replace("_", " ").title().replace(" ", "")
-    if cue_index is not None:
-        class_name = f"{base}Cue{cue_index:02d}Scene"
-    else:
-        class_name = f"{base}Scene"
-    videos_dir = "videos"
-    candidate = os.path.join(videos_dir, f"{class_name}.mp4")
-    return candidate if os.path.exists(candidate) else ""
+    class_name = section_id.replace("_", " ").title().replace(" ", "") + "Scene"
+    return os.path.join("videos", f"{class_name}.mp4")
 
 
 def main():
     parser = argparse.ArgumentParser(description="ManimGen: topic to 3B1B-style video")
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("topic", nargs="?", help="Topic to explain (e.g. 'binary search')")
+    group.add_argument("topic", nargs="?", help="Topic string")
     group.add_argument("--pdf", metavar="FILE", help="Path to a PDF of lecture notes")
-    parser.add_argument(
-        "--resume",
-        action="store_true",
-        help=f"Resume from saved plan ({_PLAN_CACHE}), skipping already-muxed sections",
-    )
+    parser.add_argument("--resume", action="store_true",
+                        help=f"Resume from cached plan ({_PLAN_CACHE})")
     args = parser.parse_args()
 
     cfg = _load_config()
     tts_on = _tts_enabled(cfg)
 
+    # --- Plan ---
     if args.resume and os.path.exists(_PLAN_CACHE):
         print(f"[manimgen] Resuming from cached plan: {_PLAN_CACHE}")
         with open(_PLAN_CACHE) as f:
@@ -108,7 +102,6 @@ def main():
     else:
         print(f"[manimgen] Input: {args.topic}")
         topic = parse_input(args.topic)
-        print(f"[manimgen] Normalized: {topic}")
         lesson_plan = plan_lesson(topic)
         os.makedirs(os.path.dirname(_PLAN_CACHE), exist_ok=True)
         with open(_PLAN_CACHE, "w") as f:
@@ -116,28 +109,30 @@ def main():
         print(f"[manimgen] Plan saved to {_PLAN_CACHE}")
 
     print(f"[manimgen] Planned {len(lesson_plan['sections'])} sections")
-    if tts_on:
-        print("[manimgen] TTS narration: enabled")
-    else:
-        print("[manimgen] TTS narration: disabled (set tts.enabled: true in config.yaml to enable)")
+    print(f"[manimgen] TTS: {'enabled' if tts_on else 'disabled'}")
 
-    rendered_videos = []
+    rendered_videos: list[str] = []
+
     for idx, section in enumerate(lesson_plan["sections"], start=1):
         print(f"\n[manimgen] Section {idx}: {section['title']}")
 
-        # Step 1: TTS first (when enabled) to get exact per-cue durations
+        # --- TTS + segmentation ---
         tts_result = None
         segments = None
-        audio_slices = []
+        audio_slices: list[str] = []
+
         if tts_on:
             tts_result = _run_tts_for_section(section, idx)
             if tts_result:
                 from manimgen.planner.segmenter import compute_segments
                 from manimgen.renderer.audio_slicer import slice_audio
+
                 audio_path, timestamps, audio_duration = tts_result
                 cue_word_indices = section.get("cue_word_indices", [0])
                 segments = compute_segments(timestamps, cue_word_indices, audio_duration)
-                print(f"[manimgen] {len(segments)} animation segment(s) for this section")
+                n_cues = len(segments)
+                print(f"[manimgen] {n_cues} cue segment(s) for this section")
+
                 section_id = section.get("id", f"section_{idx:02d}")
                 audio_slices = slice_audio(
                     audio_path, segments,
@@ -146,75 +141,80 @@ def main():
                 )
                 print(f"[manimgen] Audio slices: {[os.path.basename(p) for p in audio_slices]}")
 
-        # Step 2: Generate + render one sub-scene per cue segment
-        # If TTS is off or failed, fall back to single scene with estimated duration
-        if segments:
-            section_videos = []
-            for seg in segments:
-                muxed = _muxed_path_for(section, idx, seg.cue_index)
-                if os.path.exists(muxed):
-                    print(f"[manimgen] Skipping cue {seg.cue_index} (already muxed)")
-                    section_videos.append(muxed)
-                    continue
+        # --- Check if all cues already muxed ---
+        if segments and _all_cues_muxed(section, idx, len(segments)):
+            print(f"[manimgen] All cues already muxed, skipping section")
+            for i in range(len(segments)):
+                rendered_videos.append(_muxed_path_for(section, idx, i))
+            continue
 
-                existing = _video_path_for(section, seg.cue_index)
-                if existing:
-                    video_path = existing
-                    success = True
-                else:
-                    code, class_name, scene_path = generate_scenes(
-                        section,
-                        cue_index=seg.cue_index,
-                        total_cues=seg.total_cues,
-                        duration_seconds=seg.duration,
-                    )
-                    success, video_path = run_scene(scene_path, class_name)
-                    if not success:
-                        success, video_path = retry_scene(section, code, class_name, scene_path)
-                    if not success:
-                        print(f"[manimgen] Fallback for cue {seg.cue_index}")
-                        video_path = fallback_scene(section)
+        # --- Generate ONE scene for the whole section ---
+        cue_durations = [seg.duration for seg in segments] if segments else None
 
-                if video_path:
-                    # Mux video with its matching audio slice
-                    audio_slice = audio_slices[seg.cue_index] if audio_slices else None
-                    if audio_slice and os.path.exists(audio_slice):
-                        from manimgen.renderer.muxer import mux_audio_video
-                        try:
-                            video_path = mux_audio_video(video_path, audio_slice, muxed)
-                            print(f"[manimgen] Muxed cue {seg.cue_index}: {os.path.basename(muxed)}")
-                        except Exception as e:
-                            logger.warning("[manimgen] Mux failed cue %d: %s — using silent", seg.cue_index, e)
-                    section_videos.append(video_path)
-
-            rendered_videos.extend(section_videos)
-
+        existing_video = _rendered_section_path(section)
+        if os.path.exists(existing_video):
+            print(f"[manimgen] Render exists, skipping codegen: {existing_video}")
+            video_path = existing_video
+            success = True
         else:
-            # TTS disabled or failed — single scene per section, duration estimated
-            muxed = _muxed_path_for(section, idx)
-            if os.path.exists(muxed):
-                print(f"[manimgen] Skipping (already muxed): {section['title']}")
-                rendered_videos.append(muxed)
-                continue
+            code, class_name, scene_path = generate_scenes(
+                section,
+                cue_durations=cue_durations,
+            )
+            success, video_path = run_scene(scene_path, class_name)
+            if not success:
+                success, video_path = retry_scene(section, code, class_name, scene_path)
+            if not success:
+                print(f"[manimgen] All retries failed, using fallback")
+                video_path = fallback_scene(section)
+                success = bool(video_path)
 
-            existing_video = _video_path_for(section)
-            if existing_video:
-                print(f"[manimgen] Render exists, skipping codegen: {section['title']}")
-                video_path = existing_video
-            else:
-                code, class_name, scene_path = generate_scenes(section)
-                success, video_path = run_scene(scene_path, class_name)
-                if not success:
-                    success, video_path = retry_scene(section, code, class_name, scene_path)
-                if not success:
-                    print(f"[manimgen] All retries failed for '{section['title']}', using fallback")
-                    video_path = fallback_scene(section)
+        if not video_path:
+            print(f"[manimgen] No video for section {idx}, skipping")
+            continue
 
-            if video_path:
-                rendered_videos.append(video_path)
+        # --- Cut + mux per cue ---
+        if segments and audio_slices and success:
+            from manimgen.renderer.cutter import cut_video_at_cues, cue_start_times_from_durations
+            from manimgen.renderer.muxer import mux_audio_video
+
+            cue_durations_list = [seg.duration for seg in segments]
+            cue_starts = cue_start_times_from_durations(cue_durations_list)
+
+            try:
+                cue_video_clips = cut_video_at_cues(
+                    video_path,
+                    cue_starts,
+                    cue_durations_list,
+                    output_dir=paths.muxed_dir(),
+                    section_id=section.get("id", f"section_{idx:02d}"),
+                )
+            except Exception as e:
+                logger.warning("[manimgen] Cue cutting failed: %s — using full video per cue", e)
+                cue_video_clips = [video_path] * len(segments)
+
+            for i, (cue_clip, audio_slice) in enumerate(zip(cue_video_clips, audio_slices)):
+                muxed = _muxed_path_for(section, idx, i)
+                if os.path.exists(muxed):
+                    print(f"[manimgen] Skipping cue {i} (already muxed)")
+                    rendered_videos.append(muxed)
+                    continue
+                if os.path.exists(audio_slice):
+                    try:
+                        mux_audio_video(cue_clip, audio_slice, muxed)
+                        print(f"[manimgen] Muxed cue {i}: {os.path.basename(muxed)}")
+                        rendered_videos.append(muxed)
+                    except Exception as e:
+                        logger.warning("[manimgen] Mux failed cue %d: %s", i, e)
+                        rendered_videos.append(cue_clip)
+                else:
+                    rendered_videos.append(cue_clip)
+        else:
+            # TTS off — use the full section video directly
+            rendered_videos.append(video_path)
 
     output = assemble_video(rendered_videos, lesson_plan["title"])
-    print(f"[manimgen] Done: {output}")
+    print(f"\n[manimgen] Done: {output}")
 
 
 if __name__ == "__main__":
