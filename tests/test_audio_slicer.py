@@ -96,38 +96,40 @@ class TestFfmpegSlice:
         assert "-ss" in cmd
         assert "3.250000" in cmd
 
-    def test_includes_to_when_end_is_set(self, tmp_path):
+    def test_includes_t_when_end_is_set(self, tmp_path):
         with patch("manimgen.renderer.audio_slicer.subprocess.run",
                    return_value=_mock_ffmpeg_ok()) as mock_run:
-            _ffmpeg_slice("input.mp3", str(tmp_path / "out.mp3"), start=3.25, end=8.10)
+            _ffmpeg_slice("input.mp3", str(tmp_path / "out.m4a"), start=3.25, end=8.10)
         cmd = " ".join(mock_run.call_args[0][0])
-        assert "-to" in cmd
+        assert "-t" in cmd
 
-    def test_to_is_relative_to_ss(self, tmp_path):
-        """ffmpeg -ss + -to: -to must be duration from -ss, not absolute time."""
+    def test_t_is_relative_duration_not_absolute_time(self, tmp_path):
+        """-t must be duration (end - start), not absolute end time."""
         with patch("manimgen.renderer.audio_slicer.subprocess.run",
                    return_value=_mock_ffmpeg_ok()) as mock_run:
-            _ffmpeg_slice("input.mp3", str(tmp_path / "out.mp3"), start=3.25, end=8.10)
+            _ffmpeg_slice("input.mp3", str(tmp_path / "out.m4a"), start=3.25, end=8.10)
         cmd = mock_run.call_args[0][0]
-        to_idx = cmd.index("-to")
-        to_value = float(cmd[to_idx + 1])
+        t_idx = cmd.index("-t")
+        t_value = float(cmd[t_idx + 1])
         # Should be 8.10 - 3.25 = 4.85, not 8.10
-        assert abs(to_value - 4.85) < 0.001
+        assert abs(t_value - 4.85) < 0.001
 
-    def test_no_to_flag_when_end_is_none(self, tmp_path):
+    def test_no_t_flag_when_end_is_none(self, tmp_path):
         with patch("manimgen.renderer.audio_slicer.subprocess.run",
                    return_value=_mock_ffmpeg_ok()) as mock_run:
-            _ffmpeg_slice("input.mp3", str(tmp_path / "out.mp3"), start=8.10, end=None)
+            _ffmpeg_slice("input.mp3", str(tmp_path / "out.m4a"), start=8.10, end=None)
         cmd = " ".join(mock_run.call_args[0][0])
-        assert "-to" not in cmd
+        assert "-t" not in cmd
 
-    def test_uses_stream_copy(self, tmp_path):
+    def test_uses_aac_not_stream_copy(self, tmp_path):
+        """Must re-encode to AAC — stream copy causes 26ms frame boundary drift."""
         with patch("manimgen.renderer.audio_slicer.subprocess.run",
                    return_value=_mock_ffmpeg_ok()) as mock_run:
-            _ffmpeg_slice("input.mp3", str(tmp_path / "out.mp3"), start=0.0, end=3.25)
+            _ffmpeg_slice("input.mp3", str(tmp_path / "out.m4a"), start=0.0, end=3.25)
         cmd = mock_run.call_args[0][0]
-        assert "-c" in cmd
-        assert "copy" in cmd
+        assert "-c:a" in cmd
+        assert "aac" in cmd
+        assert "copy" not in cmd
 
     def test_raises_on_nonzero_returncode(self, tmp_path):
         with patch("manimgen.renderer.audio_slicer.subprocess.run",
@@ -176,7 +178,7 @@ class TestSliceAudioGuards:
 
 class TestSliceAudioSingleSegment:
 
-    def test_single_segment_uses_copy_not_slice(self, tmp_path):
+    def test_single_segment_re_encodes_to_aac(self, tmp_path):
         audio = tmp_path / "narration.mp3"
         audio.write_bytes(b"fake")
         single = [_seg(0, 1, 0.1, 10.0)]
@@ -186,11 +188,11 @@ class TestSliceAudioSingleSegment:
                    return_value=_mock_ffmpeg_ok()) as mock_run:
             paths = slice_audio(str(audio), single, output_dir=str(tmp_path), section_id="s01")
 
-        # stream copy: no -ss flag in the copy command
         cmd = " ".join(mock_run.call_args[0][0])
-        assert "-ss" not in cmd
+        assert "aac" in cmd
+        assert "copy" not in cmd
         assert len(paths) == 1
-        assert paths[0].endswith("s01_cue00.mp3")
+        assert paths[0].endswith("s01_cue00.m4a")
 
     def test_single_segment_returns_one_path(self, tmp_path):
         audio = tmp_path / "narration.mp3"
@@ -230,9 +232,9 @@ class TestSliceAudioMultiSegment:
         paths, _ = self._run(tmp_path)
         basenames = [os.path.basename(p) for p in paths]
         assert basenames == [
-            "section_01_cue00.mp3",
-            "section_01_cue01.mp3",
-            "section_01_cue02.mp3",
+            "section_01_cue00.m4a",
+            "section_01_cue01.m4a",
+            "section_01_cue02.m4a",
         ]
 
     def test_segment_zero_starts_at_zero_not_word_onset(self, tmp_path):
@@ -259,27 +261,27 @@ class TestSliceAudioMultiSegment:
         last_call_cmd = " ".join(mock_run.call_args_list[-1][0][0])
         assert "-to" not in last_call_cmd
 
-    def test_middle_segments_have_to_flag(self, tmp_path):
+    def test_middle_segments_have_t_flag(self, tmp_path):
         _, mock_run = self._run(tmp_path)
-        # Segment 1 (middle) should have -to
         middle_cmd = " ".join(mock_run.call_args_list[1][0][0])
-        assert "-to" in middle_cmd
+        assert "-t" in middle_cmd
 
-    def test_to_value_is_duration_not_absolute_time(self, tmp_path):
-        """Verify -to is expressed as duration relative to -ss."""
+    def test_t_value_is_duration_not_absolute_time(self, tmp_path):
+        """Verify -t is expressed as duration relative to -ss."""
         _, mock_run = self._run(tmp_path)
         # Segment 0: starts at 0.0, ends at segment 1's start_time = 3.250
         cmd0 = mock_run.call_args_list[0][0][0]
-        to_idx = cmd0.index("-to")
-        to_val = float(cmd0[to_idx + 1])
+        t_idx = cmd0.index("-t")
+        t_val = float(cmd0[t_idx + 1])
         # Expected: 3.250 - 0.0 = 3.250
-        assert abs(to_val - 3.250) < 0.001
+        assert abs(t_val - 3.250) < 0.001
 
-    def test_all_segments_use_stream_copy(self, tmp_path):
+    def test_all_segments_use_aac_not_stream_copy(self, tmp_path):
         _, mock_run = self._run(tmp_path)
         for c in mock_run.call_args_list:
             cmd = " ".join(c[0][0])
-            assert "-c copy" in cmd or ("-c" in c[0][0] and "copy" in c[0][0])
+            assert "aac" in cmd
+            assert "-c copy" not in cmd
 
     def test_ffmpeg_called_once_per_segment(self, tmp_path):
         _, mock_run = self._run(tmp_path)
@@ -303,7 +305,7 @@ class TestSliceAudioSkipBehavior:
         audio.write_bytes(b"fake")
         # Pre-create all three output files
         for i in range(3):
-            (tmp_path / f"section_01_cue{i:02d}.mp3").write_bytes(b"existing")
+            (tmp_path / f"section_01_cue{i:02d}.m4a").write_bytes(b"existing")
 
         with patch("manimgen.renderer.audio_slicer._check_ffmpeg"), \
              patch("manimgen.renderer.audio_slicer.subprocess.run",
@@ -322,7 +324,7 @@ class TestSliceAudioSkipBehavior:
         audio = tmp_path / "narration.mp3"
         audio.write_bytes(b"fake")
         for i in range(3):
-            (tmp_path / f"section_01_cue{i:02d}.mp3").write_bytes(b"existing")
+            (tmp_path / f"section_01_cue{i:02d}.m4a").write_bytes(b"existing")
 
         with patch("manimgen.renderer.audio_slicer._check_ffmpeg"), \
              patch("manimgen.renderer.audio_slicer.subprocess.run",
@@ -340,7 +342,7 @@ class TestSliceAudioSkipBehavior:
         """Only cue00 exists — cue01 and cue02 should be sliced."""
         audio = tmp_path / "narration.mp3"
         audio.write_bytes(b"fake")
-        (tmp_path / "section_01_cue00.mp3").write_bytes(b"existing")
+        (tmp_path / "section_01_cue00.m4a").write_bytes(b"existing")
 
         with patch("manimgen.renderer.audio_slicer._check_ffmpeg"), \
              patch("manimgen.renderer.audio_slicer.subprocess.run",

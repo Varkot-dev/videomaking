@@ -59,9 +59,9 @@ def slice_audio(
     if not segments:
         raise ValueError("segments list is empty — nothing to slice")
 
-    # Single segment: copy the whole file (no actual slicing needed)
+    # Single segment: re-encode the whole file to AAC at 48kHz (no slicing needed)
     if len(segments) == 1:
-        out_path = os.path.join(output_dir, f"{section_id}_cue00.mp3")
+        out_path = os.path.join(output_dir, f"{section_id}_cue00.m4a")
         if not overwrite and os.path.exists(out_path):
             logger.info("[slicer] Skipping existing: %s", out_path)
             return [out_path]
@@ -71,7 +71,7 @@ def slice_audio(
     output_paths: list[str] = []
 
     for seg in segments:
-        out_path = os.path.join(output_dir, f"{section_id}_cue{seg.cue_index:02d}.mp3")
+        out_path = os.path.join(output_dir, f"{section_id}_cue{seg.cue_index:02d}.m4a")
 
         if not overwrite and os.path.exists(out_path):
             logger.info("[slicer] Skipping existing: %s", out_path)
@@ -132,9 +132,11 @@ def _ffmpeg_slice(
 ) -> None:
     """Run ffmpeg to extract [start, end) from input into output.
 
-    Uses stream copy (no re-encode) for speed. MP3 stream copy may have
-    a small seek imprecision (~26ms per frame) which is acceptable for
-    narration cuing — the visual animation cue is also approximate.
+    Re-encodes to AAC at 48000 Hz. MP3 stream copy snaps to ~26ms frame
+    boundaries, causing drift that compounds across cue slices. AAC can cut
+    at the sample level (< 0.1ms precision), giving zero perceptible drift.
+    Output is .m4a-compatible AAC wrapped in mp4 container — the muxer and
+    assembler both expect AAC input so this is fully compatible.
     """
     cmd = [
         "ffmpeg", "-y",
@@ -142,10 +144,12 @@ def _ffmpeg_slice(
         "-i", input_path,
     ]
     if end is not None:
-        cmd += ["-to", f"{end - start:.6f}"]   # relative to -ss when using input seek
+        cmd += ["-t", f"{end - start:.6f}"]   # -t is duration, not end time
 
     cmd += [
-        "-c", "copy",        # stream copy — no re-encode
+        "-c:a", "aac",
+        "-ar", "48000",
+        "-ac", "1",
         "-avoid_negative_ts", "make_zero",
         output_path,
     ]
@@ -158,15 +162,17 @@ def _ffmpeg_slice(
 
 
 def _ffmpeg_copy(input_path: str, output_path: str) -> None:
-    """Copy an audio file unchanged (single-segment fast path)."""
+    """Re-encode a full audio file to AAC 48kHz (single-segment fast path)."""
     cmd = [
         "ffmpeg", "-y",
         "-i", input_path,
-        "-c", "copy",
+        "-c:a", "aac",
+        "-ar", "48000",
+        "-ac", "1",
         output_path,
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(
-            f"ffmpeg copy failed for {output_path}:\n{result.stderr}"
+            f"ffmpeg encode failed for {output_path}:\n{result.stderr}"
         )
