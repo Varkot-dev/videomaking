@@ -82,7 +82,7 @@ def _mux_pad_audio(
         "-map", "[a]",
         "-c:v", "copy",
         "-c:a", "aac",
-        "-shortest",
+        "-t", f"{video_dur:.6f}",
         output_path,
     ]
     _run(cmd, output_path)
@@ -95,18 +95,19 @@ def _mux_freeze_video(
     audio_dur: float,
 ) -> None:
     """Mux video + audio, freezing the last video frame to match audio duration."""
+    video_dur = _get_duration(video_path)
+    pad_secs = max(0.0, audio_dur - video_dur)
     cmd = [
         "ffmpeg", "-y",
         "-i", video_path,
         "-i", audio_path,
         "-filter_complex",
-        # tpad: pad video by repeating/freezing last frame until audio ends
-        f"[0:v]tpad=stop_mode=clone:stop_duration={audio_dur:.6f}[v]",
+        # tpad stop_duration = gap only, not total audio duration
+        f"[0:v]tpad=stop_mode=clone:stop_duration={pad_secs:.6f}[v]",
         "-map", "[v]",
         "-map", "1:a",
         "-c:v", "libx264",
         "-c:a", "aac",
-        "-shortest",
         output_path,
     ]
     _run(cmd, output_path)

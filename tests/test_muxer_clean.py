@@ -30,7 +30,13 @@ from manimgen.renderer.muxer import (
 # ---------------------------------------------------------------------------
 
 def _mock_subprocess(video_dur: float, audio_dur: float):
-    """Context manager: patches _get_duration and subprocess.run."""
+    """Context manager: patches _get_duration and subprocess.run.
+
+    _get_duration is called:
+      1. video_dur  (top-level, before branching)
+      2. audio_dur  (top-level, before branching)
+      3. video_dur  (inside _mux_freeze_video, to compute the pad gap)
+    """
     calls_made = []
 
     def fake_run(cmd, **kwargs):
@@ -42,7 +48,7 @@ def _mock_subprocess(video_dur: float, audio_dur: float):
 
     return (
         patch("manimgen.renderer.muxer._get_duration",
-              side_effect=[video_dur, audio_dur]),
+              side_effect=[video_dur, audio_dur, video_dur]),
         patch("manimgen.renderer.muxer.subprocess.run", side_effect=fake_run),
         calls_made,
     )
@@ -125,10 +131,11 @@ class TestStrategySelection:
         cmd = _run_mux(video_dur=10.0, audio_dur=7.0, tmp_path=tmp_path)
         assert "whole_dur=10.000000" in cmd
 
-    def test_tpad_stop_duration_set_to_audio_duration(self, tmp_path):
-        """tpad stop_duration must equal the audio duration (total length of freeze target)."""
+    def test_tpad_stop_duration_set_to_gap(self, tmp_path):
+        """tpad stop_duration must equal the gap (audio - video), not the total audio duration.
+        Padding by the gap brings video up to audio length exactly."""
         cmd = _run_mux(video_dur=5.0, audio_dur=8.0, tmp_path=tmp_path)
-        assert "stop_duration=8.000000" in cmd
+        assert "stop_duration=3.000000" in cmd
 
     def test_audio_longer_by_small_amount_still_uses_tpad(self, tmp_path):
         """Even a 50ms mismatch should use tpad, not apad."""
