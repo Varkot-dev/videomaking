@@ -100,8 +100,23 @@ def generate_scenes(
         narration = section.get("narration", "")
         target_seconds = _estimate_narration_duration(narration) if narration else section.get("duration_seconds", 30)
 
-    # Step 1: LLM produces a visual spec JSON
+    from manimgen.templates.spec_schema import SpecValidationError
+    from manimgen.validator.retry import retry_spec, MAX_SPEC_RETRIES
+
+    # Step 1: LLM produces a visual spec JSON; retry on validation failure
     spec = _generate_spec(section, cue_index, total_cues, target_seconds)
+    for attempt in range(MAX_SPEC_RETRIES + 1):
+        try:
+            _validate_spec(spec)
+            break
+        except SpecValidationError as exc:
+            if attempt == MAX_SPEC_RETRIES:
+                raise
+            print(f"[scene] Spec validation failed (attempt {attempt + 1}/{MAX_SPEC_RETRIES + 1}), retrying: {exc}")
+            spec = retry_spec(
+                section, cue_index, total_cues, target_seconds,
+                errors=str(exc).splitlines(),
+            )
 
     # Save spec for debugging
     specs_dir = os.path.join(os.path.dirname(paths.scenes_dir()), "specs")
@@ -113,9 +128,6 @@ def generate_scenes(
     spec_path = os.path.join(specs_dir, spec_filename)
     with open(spec_path, "w") as f:
         json.dump(spec, f, indent=2)
-
-    # Step 2: Validate the spec
-    _validate_spec(spec)
 
     # Step 3: Template engine renders the .py file
     from manimgen.templates.dispatch import render_spec
