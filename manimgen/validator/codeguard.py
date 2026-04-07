@@ -293,7 +293,6 @@ def precheck_and_autofix(code: str) -> str:
     on the file path (see precheck_and_autofix_file for that variant).
     """
     fixed, applied_fixes = apply_known_fixes(code)
-    fixed = _fix_axes_height_overflow(fixed)
     if applied_fixes:
         import logging
         logging.getLogger(__name__).debug("[codeguard] applied: %s", applied_fixes)
