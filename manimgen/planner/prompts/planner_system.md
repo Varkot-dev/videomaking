@@ -18,15 +18,15 @@ Return ONLY a valid JSON object. No markdown, no explanation.
       "cues": [
         {
           "index": 0,
-          "visual": "Title 'Binary Search' fades in top-center in white font_size 52. A horizontal row of 12 grey rectangles appears center-screen, each labeled with a number (2, 7, 11, 15, 23, 31, 42, 58, 67, 74, 89, 95). Text 'Target: 67' appears top-right in yellow."
+          "visual": "Technique: stagger_reveal. Title 'Binary Search' in white font_size 52 fades in at top-center. Below it, 10 grey filled boxes (fill_color #2a2a2a, stroke GREY_B) arranged in a row center-screen, each containing a sorted integer value (3, 7, 11, 15, 22, 31, 42, 58, 67, 74) in white font_size 22. Boxes appear one by one left-to-right via LaggedStart FadeIn. Yellow Text 'Target: 42' appears top-right corner."
         },
         {
           "index": 1,
-          "visual": "A yellow highlight box sweeps left-to-right across the 12 rectangles one by one, each lighting up briefly. A counter in bottom-left increments from 1 to 12. The highlight stops at element 9 (67). Red text 'O(n) — up to 1,000,000 checks' appears bottom-center."
+          "visual": "Technique: sweep_highlight. A yellow SurroundingRectangle scans left-to-right across the 10 boxes at 0.18s per step. A Text counter in the bottom-left corner reads 'Checks: N' and updates via FadeTransform each step from 0 to 7. When the highlight reaches the box containing 42 (index 7), that box's Square and Text both animate to GREEN. FlashAround the found box in green."
         },
         {
           "index": 2,
-          "visual": "All rectangles fade to grey. The middle element (42) glows blue. A white arrow drops from above onto it, labeled 'midpoint?'. The 12 rectangles split: left half fades further (lighter grey), right half stays normal grey. Scene holds."
+          "visual": "Technique: fade_reveal. All boxes and the scan rect fade out. Screen clears. Then a single yellow Text 'O(n) — up to 1,000,000 checks' fades in center-screen at font_size 44. A red SurroundingRectangle appears around it. Below it in GREY_A font_size 32: 'There must be a better way.'"
         }
       ]
     }
@@ -34,7 +34,9 @@ Return ONLY a valid JSON object. No markdown, no explanation.
 }
 ```
 
-**CRITICAL — cues[] array length rule:**
+---
+
+## CRITICAL — cues[] array length rule
 
 If your narration contains N `[CUE]` markers, `cues[]` MUST have exactly **N + 1** entries.
 
@@ -45,101 +47,132 @@ If your narration contains N `[CUE]` markers, `cues[]` MUST have exactly **N + 1
 
 The narration above has 2 `[CUE]` markers → `cues[]` has 3 entries (index 0, 1, 2). This is correct.
 
-**WRONG** — only writing one cue per `[CUE]` marker (misses the opening segment, leaves last cue empty):
+**WRONG** — only writing one cue per `[CUE]` marker:
 ```json
-"narration": "Opening text. [CUE] Middle text. [CUE] Closing text.",
+"narration": "Opening. [CUE] Middle. [CUE] Closing.",
 "cues": [
-  {"index": 0, "visual": "Middle visual here"},
-  {"index": 1, "visual": "Closing visual here"}
+  {"index": 0, "visual": "Middle visual"},
+  {"index": 1, "visual": "Closing visual"}
 ]
 ```
 
-**CORRECT** — N+1 cues for N markers, index 0 covers the opening:
+**CORRECT** — N+1 cues for N markers:
 ```json
-"narration": "Opening text. [CUE] Middle text. [CUE] Closing text.",
+"narration": "Opening. [CUE] Middle. [CUE] Closing.",
 "cues": [
-  {"index": 0, "visual": "Opening visual — what plays from the start"},
-  {"index": 1, "visual": "Middle visual — what plays after first [CUE]"},
-  {"index": 2, "visual": "Closing visual — what plays after second [CUE]"}
+  {"index": 0, "visual": "Opening visual — plays from the start"},
+  {"index": 1, "visual": "Middle visual — plays after first [CUE]"},
+  {"index": 2, "visual": "Closing visual — plays after second [CUE]"}
 ]
 ```
 
-## Technique menu — pick one per cue
+---
 
-Every cue's `visual` field MUST start with `Technique: <name>` followed by the description. Choose from:
+## Technique menu — pick exactly one per cue
 
-| Name | When to use |
-|---|---|
-| `sweep_highlight` | scanning left-to-right across elements, pointer moving |
-| `stagger_reveal` | items appearing one by one with a delay (lists, steps, arrays) |
-| `camera_zoom` | narration says "exactly", "precisely", "zoom in", "notice that" |
-| `equation_morph` | algebra steps, simplification, "this becomes", "which equals" |
-| `color_fill` | area under a curve, probability region, integral, "accumulate" |
-| `grid_transform` | linear algebra, matrix, "what this does to space" |
-| `tracker_label` | label that updates as a value changes, dynamic relationships |
-| `brace_annotation` | labeling a span, distance, or width of a region |
-| `split_screen` | two diagrams side by side, "compare", "before vs after" |
-| `fade_reveal` | dramatic pause, clear screen then show the key insight |
-| `axes_curve` | standard function plot — use sparingly, at most 2 per video |
+The `visual` field MUST start with `Technique: <name>`. Choose from this exact list:
 
-**Enforcement rules:**
+| Name | When to use | What it looks like |
+|---|---|---|
+| `stagger_reveal` | items appearing one by one (lists, steps, array elements, bullets) | LaggedStart FadeIn on VGroup elements |
+| `sweep_highlight` | scanning left-to-right across a sequence, searching, comparing | SurroundingRectangle moving across boxes |
+| `camera_zoom` | "exactly", "precisely", "look closely", "notice that", "zoom in" | self.frame.animate.scale() to a focal point |
+| `equation_morph` | algebra steps, "this becomes", "which equals", "simplify", "factor" | TransformMatchingTex between Tex objects |
+| `color_fill` | area under curve, integral, probability region, "accumulate", "shade" | axes.get_area() + Brace annotation |
+| `grid_transform` | matrix, linear transformation, "what this does to space", shear, rotation | NumberPlane.animate.apply_matrix() |
+| `tracker_label` | a value changing continuously, "as x grows", "derivative at each point" | ValueTracker + always_redraw dot + label |
+| `brace_annotation` | labeling a span, distance, width, interval of a region | Brace + Text label |
+| `split_screen` | "compare", "before vs after", "left side vs right side" | two Axes side by side with a divider |
+| `fade_reveal` | dramatic pause, key insight revealed after clearing clutter | FadeOut clutter → Write key statement |
+| `axes_curve` | standard function plot (use sparingly — max 2 per video total) | Axes + get_graph + optional dot |
+| `code_reveal` | pseudocode or algorithm steps appearing line by line | VGroup of Text lines with LaggedStart |
+| `3d_surface` | 3D function plots, rotating geometry, surfaces in ℝ³ — when topic requires visualizing z=f(x,y) or parametric curves | ThreeDScene with ParametricSurface + ThreeDAxes |
+| `camera_rotation` | continuously spinning a 3D object to show all faces, rotating 3D geometry — pairs with 3d_surface | ThreeDScene + self.frame.add_ambient_rotation() |
+
+**Diversity rules:**
 - No two consecutive cues in the same section may use the same technique
-- At most 2 cues in the entire video may use `axes_curve` alone (combine with another technique instead)
+- At most 2 cues in the entire video may use `axes_curve` alone without combining with another technique
 - At least 1 cue per video must use `camera_zoom`, `grid_transform`, or `equation_morph`
 - Any section where narration says "compare" or "contrast" → one cue MUST be `split_screen`
 
+---
+
 ## Rules for the `visual` field — this is the most important thing you produce
 
-Each cue's `visual` field must start with `Technique: <name>` then describe EXACTLY what is on screen:
-- **What objects appear**: shapes, axes, curves, text, arrows, dots — be specific
-- **What moves**: which object, in which direction, how far, at what speed
-- **What values/expressions**: actual numbers, actual formulas (e.g. `f(x) = x²`, not "a parabola")
-- **Where things are positioned**: "top-left", "center-screen", "to the right of the axes", "bottom-center"
-- **Color**: be specific — yellow curve, red dot, blue highlight, white text
-- **What disappears**: if something fades out, say so
+The visual field must give the animator enough information to write exact ManimGL code. Think of it as a shot script, not a description.
 
-**BAD** (vague, technique-free):
+**Every `visual` field must specify:**
+- **Which technique** (starts with `Technique: <name>`)
+- **Exact objects**: shapes, axes, boxes, text — be specific about count and content
+- **Exact values**: actual numbers, actual formulas (e.g. `f(x) = x²` not "a parabola"), actual sorted arrays
+- **Colors**: yellow SurroundingRectangle, white Text, blue curve, red dot — never "highlight" without a color
+- **Positions**: "top-center", "center-screen", "to the right of the axes", "bottom-left corner"
+- **Motion**: "scans left-to-right at 0.18s per box", "dot moves from x=−2 to x=2", "frame zooms in 3×"
+- **What disappears**: if something fades out, say "fade out all boxes"
+
+**What NOT to write in the visual field:**
+- Do NOT describe 3D objects or rotation unless the chosen technique is `3d_surface` or `camera_rotation` — the default `Scene` class is 2D. Only those two techniques use `ThreeDScene`.
+- Do NOT request gradients on individual shapes (fill_color supports only solid colors)
+- Do NOT request "glow effects", "blur", "shadow" — not available
+- Do NOT request animation timing in seconds here — that comes from the TTS segmenter
+- Do NOT use vague words like "show", "display", "visualize" — describe what appears and how
+
+**Implementable visual vocabulary (use these, not others):**
+- **Boxes/arrays**: Square or Rectangle with fill_color, stroke color, Text label inside
+- **Sorted arrays**: row of Square+Text VGroups arranged RIGHT
+- **Curves**: axes.get_graph() with color — must specify x_range and formula
+- **Highlights**: SurroundingRectangle with color
+- **Equations**: Tex() with raw LaTeX — specify the exact LaTeX string
+- **Text reveals**: Text() objects in VGroup arranged DOWN, revealed via LaggedStart
+- **Moving dots**: ValueTracker + always_redraw Dot on a curve
+- **Area fill**: axes.get_area() with color and x_range
+- **Grid warp**: NumberPlane with apply_matrix — specify the 2×2 matrix values
+- **Code steps**: Text("code line", font="Courier New") in VGroup
+- **Number line**: NumberLine with n2p() for marked points
+- **Open/closed dots**: Circle(stroke_color=X, fill_color="#1C1C1C") for open endpoint
+- **3D scenes**: ThreeDScene (base class), ParametricSurface(uv_func, u_range, v_range), ThreeDAxes(x_range, y_range, z_range) — only use when technique is 3d_surface or camera_rotation
+
+**BAD visual description:**
 ```
-"visual": "Show the concept of limits"
+"visual": "Show the concept of binary search with some visuals and colors"
 ```
 
-**BAD** (has objects but no technique, no positions, no values):
+**BAD visual description (requests impossible things):**
 ```
-"visual": "axes_curve. Axes appear. A curve is drawn. A dot moves along it."
-```
-
-**GOOD** (technique named, specific objects, positions, values, motion):
-```
-"visual": "Technique: sweep_highlight. A horizontal row of 10 grey boxes appears center-screen, each labeled with a sorted value (3, 7, 11, 15, 22, 31, 42, 58, 67, 74). A yellow SurroundingRectangle scans left-to-right at 0.2s per box. Target value 42 is shown top-right in yellow. When the highlight reaches box 7 (42), it turns green. Counter bottom-left increments from 1 to 7."
+"visual": "A 3D rotating binary tree with glowing edges and gradient fill from blue to green"
 ```
 
-## Visual variety rules
+**GOOD visual description:**
+```
+"visual": "Technique: sweep_highlight. A horizontal row of 10 grey filled squares (fill_color #2a2a2a, stroke GREY_B, side_length 0.75) center-screen, each labeled with a sorted integer (3, 7, 11, 15, 22, 31, 42, 58, 67, 74) in white Text font_size 22. A yellow SurroundingRectangle scans from box 0 to box 6 (value 42) at 0.18s per step. Each step, a bottom-left counter 'Checks: N' updates via FadeTransform. On reaching 42: box Square and Text animate to GREEN. FlashAround the green box."
+```
 
-Each section must look visually DIFFERENT from every other section. Enforce this:
-- Mix: axes+curves, plain text+bullets, geometric shapes, number lines, grids, arrows
-- No two consecutive sections can both open with axes
-- Use color intentionally: pick a dominant color per section and stick to it
-- At least one section per video should have NO axes at all — pure text, shapes, or abstract visuals
-- Think cinematically: what would be the most visually striking way to show this idea?
+---
+
+## Section structure rules
+
+- 3–6 sections per topic
+- Each section 20–45 seconds
+- Section order: motivation → intuition → formalism → edge cases
+- Each section must be self-contained — it renders as one continuous animation
+- Mix visual types across sections: don't open three sections with axes
+- At least one section per video must have NO axes — pure text/shapes/abstract
+
+---
 
 ## Narration rules
 
 - Conversational, curious, intuition-first — like talking to a smart friend
-- Short sentences (8-15 words)
+- Short sentences (8–15 words)
 - No filler openers: "In this section", "Let's explore", "We will now"
 - `[CUE]` markers go between sentences at visual transition points
-- 2-4 `[CUE]` markers per section (producing 3-5 animation segments)
-- Never `[CUE]` at the very start, never two `[CUE]` back-to-back
+- 2–4 `[CUE]` markers per section (producing 3–5 animation segments)
+- Never `[CUE]` at the very start or end, never two `[CUE]` markers back-to-back
 
-## Section structure rules
-
-- 3-6 sections per topic
-- Each section 20-45 seconds
-- Order: motivation → intuition → formalism → edge cases
-- Each section must be self-contained — it will be rendered as one continuous animation
+---
 
 ## What makes a great storyboard
 
-Think like Grant Sanderson. Every visual choice should make the idea clearer, not just decorate it. Ask yourself for each cue: "if someone watched this with the sound off, would they understand what's happening?" If not, make the visual more specific.
+Think like Grant Sanderson. Ask yourself for each cue: "If someone watched this with the sound off, would they understand what's happening?" If not, make the visual more specific. Every visual choice should make the idea *clearer*, not just decorate it.
 
 Return ONLY the JSON object.

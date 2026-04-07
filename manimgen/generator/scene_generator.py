@@ -7,41 +7,88 @@ and asks the LLM to write one complete ManimGL Scene class per section.
 The generated scene contains self.wait() pauses at each cue boundary so the full section
 renders as a single continuous mp4. The assembler/muxer then cuts it at cue timestamps.
 """
-import functools
 import math
 import os
+import re
 from manimgen.llm import chat
 from manimgen import paths
 from manimgen.utils import strip_fencing, section_class_name
 from manimgen.validator.codeguard import precheck_and_autofix
 
 _WORDS_PER_MINUTE = 130
-_MAX_EXAMPLE_CHARS = 1000  # chars per example shown to the Director
+_MAX_EXAMPLES = 6
 
 
-@functools.lru_cache(maxsize=1)
 def _load_director_prompt() -> str:
     here = os.path.dirname(__file__)
     with open(os.path.join(here, "prompts", "director_system.md")) as f:
         return f.read()
 
 
-@functools.lru_cache(maxsize=1)
-def _load_examples(max_examples: int = 5) -> str:
-    """Load verified example scenes as few-shot references for the Director."""
+def _index_examples() -> dict[str, list[str]]:
+    """
+    Build technique → [filepath, ...] index by reading the `techniques:` tag
+    from each example's docstring. No hardcoded mappings.
+
+    The tag format is:
+        techniques: technique_a, technique_b
+    as the first line inside the class docstring.
+    """
     here = os.path.dirname(__file__)
     examples_dir = os.path.normpath(os.path.join(here, "..", "..", "examples"))
+    index: dict[str, list[str]] = {}
     if not os.path.isdir(examples_dir):
+        return index
+
+    tag_re = re.compile(r'techniques:\s*(.+)', re.IGNORECASE)
+    for fname in sorted(os.listdir(examples_dir)):
+        if not fname.endswith(".py"):
+            continue
+        path = os.path.join(examples_dir, fname)
+        with open(path) as f:
+            head = f.read(512)  # tag always near the top
+        m = tag_re.search(head)
+        if not m:
+            continue
+        for technique in [t.strip() for t in m.group(1).split(",")]:
+            index.setdefault(technique, []).append(path)
+
+    return index
+
+
+def _select_examples(section: dict, index: dict[str, list[str]]) -> list[str]:
+    """Return up to _MAX_EXAMPLES full example file paths relevant to this section."""
+    # Always include these two as baseline context
+    here = os.path.dirname(__file__)
+    examples_dir = os.path.normpath(os.path.join(here, "..", "..", "examples"))
+    baseline = [
+        os.path.join(examples_dir, "graph_scene.py"),
+        os.path.join(examples_dir, "stagger_build_scene.py"),
+    ]
+    selected: list[str] = [p for p in baseline if os.path.isfile(p)]
+
+    # Add technique-specific examples from cue visual fields
+    for cue in section.get("cues", []):
+        visual = cue.get("visual", "").lower()
+        for technique, paths_list in index.items():
+            if technique in visual:
+                for p in paths_list:
+                    if p not in selected:
+                        selected.append(p)
+
+    return selected[:_MAX_EXAMPLES]
+
+
+def _load_examples_text(section: dict) -> str:
+    index = _index_examples()
+    selected = _select_examples(section, index)
+    if not selected:
         return ""
-    names = sorted(f for f in os.listdir(examples_dir) if f.endswith(".py"))[:max_examples]
     blocks = []
-    for name in names:
-        with open(os.path.join(examples_dir, name)) as f:
+    for path in selected:
+        with open(path) as f:
             content = f.read().strip()
-        snippet = content[:_MAX_EXAMPLE_CHARS]
-        if len(content) > _MAX_EXAMPLE_CHARS:
-            snippet += "\n# ... (truncated)"
-        blocks.append(f"### {name}\n```python\n{snippet}\n```")
+        blocks.append(f"### {os.path.basename(path)}\n```python\n{content}\n```")
     return "\n\n".join(blocks)
 
 
@@ -54,29 +101,38 @@ def _build_user_message(section: dict, cue_durations: list[float]) -> str:
     """Build the Director's user prompt from the storyboard + exact cue durations."""
     cues = section.get("cues", [])
     total = sum(cue_durations)
+    class_name = section_class_name(section)
 
     lines = [
+        "## Scene to generate",
+        f"Class name (use exactly): `{class_name}`",
         f"Section title: {section['title']}",
         f"Total duration: {total:.2f}s",
         f"Number of cues: {len(cue_durations)}",
         "",
         "## Cue breakdown",
+        "(Animate each cue, then self.wait() to fill its exact duration.)",
+        "",
     ]
     for i, dur in enumerate(cue_durations):
-        visual = ""
-        if i < len(cues):
-            visual = cues[i].get("visual", "")
-        lines.append(f"CUE {i} ({dur:.2f}s): {visual}")
+        visual = cues[i].get("visual", "") if i < len(cues) else ""
+        lines.append(f"### CUE {i} — {dur:.2f}s")
+        lines.append(visual)
+        lines.append("")
 
     lines += [
+        "## Hard constraints",
+        "1. `from manimlib import *` — first line.",
+        "2. One class only. No helper functions outside construct().",
+        "3. Timing: per cue, sum(run_time values) + self.wait() = cue duration exactly.",
+        "4. Title zone (y > 2.6): section title Text only.",
+        "5. Axes: `width=` and `height=` only — never `x_length=` or `y_length=`.",
+        "6. `Tex()` has no `font_size=` — use `.scale()`. `Text()` accepts `font_size=`.",
+        "7. Use `ShowCreation()`, `Tex()`, `self.frame` — never ManimCommunity equivalents.",
+        "8. End with `self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)`.",
+        "9. Use at least 2 different techniques from the Cinematic Technique Reference.",
         "",
-        f"## Class name",
-        f"Use exactly: `{section_class_name(section)}`",
-        "",
-        "## Task",
-        "Write one complete ManimGL Scene class that animates all cues in sequence.",
-        "Use self.wait() between cues to hit each cue's exact duration.",
-        "Output ONLY the Python code. No explanation.",
+        "Output ONLY Python. No explanation, no markdown fencing.",
     ]
     return "\n".join(lines)
 
@@ -99,7 +155,6 @@ def generate_scenes(
     """
     class_name = section_class_name(section)
 
-    # Resolve cue durations
     if cue_durations:
         durations = cue_durations
     elif duration_seconds is not None:
@@ -111,26 +166,31 @@ def generate_scenes(
         durations = [total / n_cues] * n_cues
 
     system = _load_director_prompt()
-    examples = _load_examples()
+    examples = _load_examples_text(section)
     user_message = _build_user_message(section, durations)
 
     if examples:
         user_message += (
-            "\n\n## Verified ManimGL examples (style + API reference)\n\n"
-            f"{examples}"
+            "\n\n## Verified ManimGL reference scenes — copy patterns exactly, do not invent new APIs\n\n"
+            + examples
         )
 
     raw = chat(system=system, user=user_message)
     code = strip_fencing(raw)
 
-    # Ensure it starts with the correct import
     if not code.startswith("from manimlib"):
         code = "from manimlib import *\n\n\n" + code
 
-    # Run codeguard auto-fixes before saving
+    # If any cue visual requests a 3D technique, promote Scene → ThreeDScene
+    _3d_techniques = {"3d_surface", "camera_rotation"}
+    cue_visuals = " ".join(
+        c.get("visual", "").lower() for c in section.get("cues", [])
+    )
+    if any(t in cue_visuals for t in _3d_techniques):
+        code = re.sub(r'\bclass\s+(\w+)\(Scene\):', r'class \1(ThreeDScene):', code)
+
     code = precheck_and_autofix(code)
 
-    # Save scene file
     scenes_dir = paths.scenes_dir()
     os.makedirs(scenes_dir, exist_ok=True)
     scene_path = os.path.join(scenes_dir, f"{section['id']}.py")
