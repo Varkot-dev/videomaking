@@ -51,10 +51,14 @@ def compute_segments(
     segments: list[CueSegment] = []
 
     for i, start in enumerate(starts):
+        # Cue 0 audio is sliced from 0.0 (preserving pre-speech silence),
+        # so its duration must be measured from 0.0 not from its word onset.
+        audio_start = 0.0 if i == 0 else start
+
         if i < total - 1:
-            duration = starts[i + 1] - start
+            duration = starts[i + 1] - audio_start
         else:
-            duration = audio_duration - start
+            duration = audio_duration - audio_start
 
         segments.append(CueSegment(
             cue_index=i,

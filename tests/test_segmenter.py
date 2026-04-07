@@ -38,26 +38,26 @@ class TestComputeSegments:
     def test_single_segment_duration_spans_first_word_to_end(self):
         # Duration = audio_duration - first_word_start (pre-speech silence is excluded)
         segs = compute_segments(TIMESTAMPS, [0], AUDIO_DURATION)
-        expected = AUDIO_DURATION - TIMESTAMPS[0].start
+        # Cue 0 audio starts at 0.0 (including pre-speech silence), so duration = full audio
+        expected = AUDIO_DURATION - 0.0
         assert abs(segs[0].duration - expected) < 1e-6
 
     def test_two_cues_returns_two_segments(self):
         segs = compute_segments(TIMESTAMPS, [0, 5], AUDIO_DURATION)
         assert len(segs) == 2
 
-    def test_two_cues_durations_sum_to_spoken_duration(self):
-        # Segments cover from first word to end of audio (pre-speech silence excluded)
+    def test_two_cues_durations_sum_to_full_audio(self):
+        # Cue 0 starts from 0.0 (pre-speech silence included), so sum = full audio duration
         segs = compute_segments(TIMESTAMPS, [0, 5], AUDIO_DURATION)
         total = sum(s.duration for s in segs)
-        expected = AUDIO_DURATION - TIMESTAMPS[0].start
-        assert abs(total - expected) < 1e-6
+        assert abs(total - AUDIO_DURATION) < 1e-6
 
     def test_three_cues_correct_durations(self):
         # cue at word 0 (0.10s), word 5 (1.92s), word 9 (3.40s)
         segs = compute_segments(TIMESTAMPS, [0, 5, 9], AUDIO_DURATION)
         assert len(segs) == 3
-        # seg 0: 0.10 → 1.92 = 1.82s
-        assert abs(segs[0].duration - (1.92 - 0.10)) < 1e-6
+        # seg 0: audio starts at 0.0 (pre-speech silence), ends at next cue onset 1.92 → 1.92s
+        assert abs(segs[0].duration - (1.92 - 0.0)) < 1e-6
         # seg 1: 1.92 → 3.40 = 1.48s
         assert abs(segs[1].duration - (3.40 - 1.92)) < 1e-6
         # seg 2: 3.40 → 4.20 = 0.80s
