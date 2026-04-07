@@ -161,3 +161,103 @@ Custom hex: `color="#58C4DD"` — always quoted, 6 digits.
    ```
 5. **Timing** — `run_time` on animations + `self.wait()` must sum to exactly the cue duration
 6. **Visual variety** — if the previous cue had axes, the next one should add something new (a dot, a band, a label) rather than rebuilding axes from scratch
+7. **Mandatory technique diversity** — every scene MUST use at least 2 different techniques from the Technique Reference below. A scene that only does `Write(title) → ShowCreation(axes) → ShowCreation(curve) → FadeOut` is a failure.
+
+## Cinematic Technique Reference
+
+Use these patterns. Pick at least 2 per scene. Name is in the storyboard cue `visual` field.
+
+### camera_zoom
+Zoom in to highlight a precise region, then zoom back out. Always reset frame before final FadeOut.
+```python
+self.play(FlashAround(focal_obj, color=YELLOW), run_time=0.8)
+self.play(self.frame.animate.scale(0.4).move_to(focal_obj.get_center()), run_time=1.5)
+self.wait(1.5)
+# ... close-up annotations here ...
+self.play(self.frame.animate.scale(1 / 0.4).move_to(ORIGIN), run_time=1.2)
+```
+
+### equation_morph
+Algebra steps that visually transform into each other. Matching subexpressions flow smoothly.
+```python
+eq1 = Tex(r"x^2 - 4", color=WHITE).scale(1.4).center()
+eq2 = Tex(r"(x-2)(x+2)", color=GREEN).scale(1.4).center()
+self.play(Write(eq1), run_time=1.0)
+self.play(TransformMatchingTex(eq1, eq2), run_time=1.5)
+box = SurroundingRectangle(eq2, color=YELLOW, buff=0.2)
+self.play(ShowCreation(box), run_time=0.5)
+```
+
+### stagger_reveal
+Items appear one-by-one with a rhythmic delay — for lists, steps, array elements.
+```python
+items = VGroup(Text("Step 1"), Text("Step 2"), Text("Step 3")).arrange(DOWN, buff=0.5)
+self.play(LaggedStart(*[FadeIn(item) for item in items], lag_ratio=0.3), run_time=2.0)
+```
+
+### sweep_highlight
+A highlight rectangle scans across a sequence of elements.
+```python
+rect = SurroundingRectangle(elements[0], color=YELLOW, buff=0.05)
+self.play(ShowCreation(rect), run_time=0.3)
+for el in elements[1:]:
+    self.play(rect.animate.move_to(el), run_time=0.2, rate_func=linear)
+```
+
+### color_fill
+Fill the area under/between curves. Use for integrals, probability, or "accumulation" concepts.
+```python
+area = axes.get_area(curve, x_range=[a, b], color=BLUE, opacity=0.35)
+self.play(FadeIn(area), run_time=1.0)
+brace = Brace(Line(axes.c2p(a, 0), axes.c2p(b, 0)), DOWN, buff=0.1, color=BLUE)
+self.play(GrowFromCenter(brace), run_time=0.6)
+```
+
+### grid_transform
+A NumberPlane warps under a matrix or function — shows linear algebra geometrically.
+```python
+grid = NumberPlane(x_range=[-6,6,1], y_range=[-4,4,1],
+                   background_line_style={"stroke_color": BLUE_E, "stroke_width": 1.5})
+grid.add_coordinate_labels(font_size=20)
+self.play(ShowCreation(grid), run_time=1.5)
+self.play(grid.animate.apply_matrix([[1,1],[0,1]]), run_time=3.0)
+```
+
+### tracker_label
+A label updates in real-time as a ValueTracker changes — shows dynamic relationships.
+```python
+t = ValueTracker(0.0)
+dot = always_redraw(lambda: Dot(axes.input_to_graph_point(t.get_value(), curve), color=RED))
+label = always_redraw(lambda: Tex(
+    rf"f({t.get_value():.1f}) = {t.get_value()**2:.1f}", color=RED
+).scale(0.8).next_to(dot, UR, buff=0.15))
+self.add(dot, label)
+self.play(t.animate.set_value(3.0), run_time=3.0, rate_func=linear)
+```
+
+### brace_annotation
+A brace labels a span or distance — cleaner than arrows for "this whole region is X".
+```python
+brace = Brace(target_obj, direction=DOWN, buff=0.15, color=YELLOW)
+label = Text("width = 2δ", font_size=28, color=YELLOW).next_to(brace, DOWN, buff=0.1)
+self.play(GrowFromCenter(brace), Write(label), run_time=0.8)
+```
+
+### split_screen
+Two diagrams side by side for comparison. Keep each half to width ≤ 6.
+```python
+left_axes = Axes(..., width=5.5, height=4.0).to_edge(LEFT, buff=0.6).shift(DOWN * 0.5)
+right_axes = Axes(..., width=5.5, height=4.0).to_edge(RIGHT, buff=0.6).shift(DOWN * 0.5)
+divider = DashedLine(UP * 3.5, DOWN * 3.5, color=GREY_D, stroke_width=1)
+self.play(ShowCreation(left_axes), ShowCreation(right_axes), ShowCreation(divider))
+```
+
+### fade_reveal
+Key insight appears after clearing distractions — dramatic pause then reveal.
+```python
+self.play(*[FadeOut(m) for m in clutter], run_time=0.6)
+self.wait(0.5)
+insight = Text("Therefore: limit = L", font_size=52, color=YELLOW).center()
+self.play(Write(insight), run_time=1.2)
+self.play(FlashAround(insight, color=WHITE), run_time=0.8)
+```
