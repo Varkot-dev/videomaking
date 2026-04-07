@@ -66,12 +66,7 @@ def _extract_cues(plan: dict) -> dict:
     return plan
 
 
-def _strip_fencing(raw: str) -> str:
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1]
-        raw = raw.rsplit("```", 1)[0]
-    return raw.strip()
+from manimgen.utils import strip_fencing as _strip_fencing
 
 
 def _safe_json_loads(raw: str) -> dict:

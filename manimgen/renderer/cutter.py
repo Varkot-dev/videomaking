@@ -2,15 +2,37 @@
 Video cutter — slices a single rendered section video into per-cue clips
 at exact timestamps derived from the TTS segmenter.
 
-Used by the new single-scene-per-section architecture: the Director generates
+Used by the single-scene-per-section architecture: the Director generates
 one .py file per section, ManimGL renders one .mp4, and this module cuts it
 into N cue clips that the muxer then overlays with audio slices.
 """
 import logging
 import os
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = logging.getLogger(__name__)
+
+_MAX_PARALLEL_CUTS = min(4, (os.cpu_count() or 1))
+
+
+def _cut_one(video_path: str, start: float, dur: float, out_path: str, i: int) -> str:
+    cmd = [
+        "ffmpeg", "-y",
+        "-ss", f"{start:.6f}",
+        "-i", video_path,
+        "-t", f"{dur:.6f}",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+        "-pix_fmt", "yuv420p",
+        "-an",
+        out_path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.error("[cutter] FFmpeg failed for cue %d: %s", i, result.stderr[-500:])
+        raise RuntimeError(f"cutter failed for cue {i}: {result.stderr[-200:]}")
+    logger.info("[cutter] Cut cue %d: %.2f–%.2f → %s", i, start, start + dur, os.path.basename(out_path))
+    return out_path
 
 
 def cut_video_at_cues(
@@ -20,7 +42,7 @@ def cut_video_at_cues(
     output_dir: str,
     section_id: str,
 ) -> list[str]:
-    """Cut a section video into per-cue clips using FFmpeg stream copy.
+    """Cut a section video into per-cue clips using parallel FFmpeg re-encodes.
 
     Args:
         video_path:       Path to the full rendered section .mp4 (silent).
@@ -33,29 +55,22 @@ def cut_video_at_cues(
         List of output clip paths in cue order.
     """
     os.makedirs(output_dir, exist_ok=True)
-    out_paths = []
+    jobs = [
+        (i, start, dur, os.path.join(output_dir, f"{section_id}_cue{i:02d}_video.mp4"))
+        for i, (start, dur) in enumerate(zip(cue_start_times, cue_durations))
+    ]
 
-    for i, (start, dur) in enumerate(zip(cue_start_times, cue_durations)):
-        out_path = os.path.join(output_dir, f"{section_id}_cue{i:02d}_video.mp4")
-        cmd = [
-            "ffmpeg", "-y",
-            "-ss", f"{start:.6f}",
-            "-i", video_path,
-            "-t", f"{dur:.6f}",
-            # Re-encode to avoid keyframe alignment issues with stream copy
-            "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-            "-pix_fmt", "yuv420p",
-            "-an",  # no audio
-            out_path,
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            logger.error("[cutter] FFmpeg failed for cue %d: %s", i, result.stderr[-500:])
-            raise RuntimeError(f"cutter failed for cue {i}: {result.stderr[-200:]}")
-        out_paths.append(out_path)
-        logger.info("[cutter] Cut cue %d: %.2f–%.2f → %s", i, start, start + dur, os.path.basename(out_path))
+    results: dict[int, str] = {}
+    with ThreadPoolExecutor(max_workers=_MAX_PARALLEL_CUTS) as pool:
+        futures = {
+            pool.submit(_cut_one, video_path, start, dur, out_path, i): i
+            for i, start, dur, out_path in jobs
+        }
+        for future in as_completed(futures):
+            i = futures[future]
+            results[i] = future.result()  # raises on error, propagating to caller
 
-    return out_paths
+    return [results[i] for i in range(len(jobs))]
 
 
 def cue_start_times_from_durations(durations: list[float]) -> list[float]:

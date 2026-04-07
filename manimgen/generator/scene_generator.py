@@ -7,23 +7,26 @@ and asks the LLM to write one complete ManimGL Scene class per section.
 The generated scene contains self.wait() pauses at each cue boundary so the full section
 renders as a single continuous mp4. The assembler/muxer then cuts it at cue timestamps.
 """
+import functools
 import math
 import os
-import re
 from manimgen.llm import chat
 from manimgen import paths
+from manimgen.utils import strip_fencing, section_class_name
 from manimgen.validator.codeguard import precheck_and_autofix
 
 _WORDS_PER_MINUTE = 130
 _MAX_EXAMPLE_CHARS = 1000  # chars per example shown to the Director
 
 
+@functools.lru_cache(maxsize=1)
 def _load_director_prompt() -> str:
     here = os.path.dirname(__file__)
     with open(os.path.join(here, "prompts", "director_system.md")) as f:
         return f.read()
 
 
+@functools.lru_cache(maxsize=1)
 def _load_examples(max_examples: int = 5) -> str:
     """Load verified example scenes as few-shot references for the Director."""
     here = os.path.dirname(__file__)
@@ -47,18 +50,6 @@ def _estimate_duration(narration: str) -> float:
     return max(10.0, math.ceil(words / _WORDS_PER_MINUTE * 60))
 
 
-def _class_name(section: dict) -> str:
-    return section["id"].replace("_", " ").title().replace(" ", "") + "Scene"
-
-
-def _strip_fencing(raw: str) -> str:
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1]
-        raw = raw.rsplit("```", 1)[0]
-    return raw.strip()
-
-
 def _build_user_message(section: dict, cue_durations: list[float]) -> str:
     """Build the Director's user prompt from the storyboard + exact cue durations."""
     cues = section.get("cues", [])
@@ -80,7 +71,7 @@ def _build_user_message(section: dict, cue_durations: list[float]) -> str:
     lines += [
         "",
         f"## Class name",
-        f"Use exactly: `{_class_name(section)}`",
+        f"Use exactly: `{section_class_name(section)}`",
         "",
         "## Task",
         "Write one complete ManimGL Scene class that animates all cues in sequence.",
@@ -94,9 +85,6 @@ def generate_scenes(
     section: dict,
     cue_durations: list[float] | None = None,
     duration_seconds: float | None = None,
-    # Legacy params kept for backward compat — ignored in new architecture
-    cue_index: int | None = None,
-    total_cues: int | None = None,
 ) -> tuple[str, str, str]:
     """Generate one ManimGL scene file for a full section.
 
@@ -109,13 +97,12 @@ def generate_scenes(
     Returns:
         (code, class_name, scene_path)
     """
-    class_name = _class_name(section)
+    class_name = section_class_name(section)
 
     # Resolve cue durations
     if cue_durations:
         durations = cue_durations
     elif duration_seconds is not None:
-        # Single cue covering the whole section
         durations = [float(duration_seconds)]
     else:
         narration = section.get("narration", "")
@@ -134,7 +121,7 @@ def generate_scenes(
         )
 
     raw = chat(system=system, user=user_message)
-    code = _strip_fencing(raw)
+    code = strip_fencing(raw)
 
     # Ensure it starts with the correct import
     if not code.startswith("from manimlib"):

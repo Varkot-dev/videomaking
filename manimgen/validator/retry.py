@@ -87,13 +87,6 @@ Pick the most appropriate template. Output only valid JSON.
 
     raw = chat(system=system, user=user_message)
 
-    def _strip_fencing(s):
-        s = s.strip()
-        if s.startswith("```"):
-            s = s.split("\n", 1)[1]
-            s = s.rsplit("```", 1)[0]
-        return s.strip()
-
     def _safe_json_loads(s):
         try:
             return json.loads(s)
@@ -101,7 +94,8 @@ Pick the most appropriate template. Output only valid JSON.
             sanitized = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', s)
             return json.loads(sanitized)
 
-    return _safe_json_loads(_strip_fencing(raw))
+    from manimgen.utils import strip_fencing
+    return _safe_json_loads(strip_fencing(raw))
 
 
 def retry_scene(section: dict, original_code: str, class_name: str, scene_path: str) -> tuple[bool, str | None]:

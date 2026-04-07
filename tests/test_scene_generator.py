@@ -6,15 +6,11 @@ LLM calls are mocked — zero API cost.
 """
 
 import pytest
-from manimgen.generator.scene_generator import (
-    _estimate_duration,
-    _class_name,
-    _WORDS_PER_MINUTE,
-)
+from manimgen.generator.scene_generator import _estimate_duration, _WORDS_PER_MINUTE
+from manimgen.utils import section_class_name
 
-# Aliases for test readability
 _estimate_narration_duration = _estimate_duration
-_class_name_from_section = _class_name
+_class_name_from_section = section_class_name
 
 
 # ── _estimate_duration ──────────────────────────────────────────────────────

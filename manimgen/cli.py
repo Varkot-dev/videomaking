@@ -70,9 +70,8 @@ def _all_cues_muxed(section: dict, idx: int, n_cues: int) -> bool:
 
 def _rendered_section_path(section: dict) -> str:
     """Path to the full (pre-cut) rendered section video from ManimGL."""
-    section_id = section.get("id", "")
-    class_name = section_id.replace("_", " ").title().replace(" ", "") + "Scene"
-    return os.path.join("videos", f"{class_name}.mp4")
+    from manimgen.utils import section_class_name
+    return os.path.join("videos", f"{section_class_name(section)}.mp4")
 
 
 def main():
@@ -117,7 +116,6 @@ def main():
         print(f"\n[manimgen] Section {idx}: {section['title']}")
 
         # --- TTS + segmentation ---
-        tts_result = None
         segments = None
         audio_slices: list[str] = []
 
@@ -130,8 +128,14 @@ def main():
                 audio_path, timestamps, audio_duration = tts_result
                 cue_word_indices = section.get("cue_word_indices", [0])
                 segments = compute_segments(timestamps, cue_word_indices, audio_duration)
-                n_cues = len(segments)
-                print(f"[manimgen] {n_cues} cue segment(s) for this section")
+                print(f"[manimgen] {len(segments)} cue segment(s) for this section")
+
+                # Skip entire section if all cues already muxed
+                if _all_cues_muxed(section, idx, len(segments)):
+                    print(f"[manimgen] All cues already muxed, skipping section")
+                    for i in range(len(segments)):
+                        rendered_videos.append(_muxed_path_for(section, idx, i))
+                    continue
 
                 section_id = section.get("id", f"section_{idx:02d}")
                 audio_slices = slice_audio(
@@ -140,13 +144,6 @@ def main():
                     section_id=section_id,
                 )
                 print(f"[manimgen] Audio slices: {[os.path.basename(p) for p in audio_slices]}")
-
-        # --- Check if all cues already muxed ---
-        if segments and _all_cues_muxed(section, idx, len(segments)):
-            print(f"[manimgen] All cues already muxed, skipping section")
-            for i in range(len(segments)):
-                rendered_videos.append(_muxed_path_for(section, idx, i))
-            continue
 
         # --- Generate ONE scene for the whole section ---
         cue_durations = [seg.duration for seg in segments] if segments else None
@@ -178,14 +175,13 @@ def main():
             from manimgen.renderer.cutter import cut_video_at_cues, cue_start_times_from_durations
             from manimgen.renderer.muxer import mux_audio_video
 
-            cue_durations_list = [seg.duration for seg in segments]
-            cue_starts = cue_start_times_from_durations(cue_durations_list)
+            cue_starts = cue_start_times_from_durations(cue_durations)
 
             try:
                 cue_video_clips = cut_video_at_cues(
                     video_path,
                     cue_starts,
-                    cue_durations_list,
+                    cue_durations,
                     output_dir=paths.muxed_dir(),
                     section_id=section.get("id", f"section_{idx:02d}"),
                 )
