@@ -182,7 +182,7 @@ def _hard_concat(paths: list[str], output_path: str) -> None:
             *inputs,
             "-filter_complex", filter_str,
             "-map", "[v]", "-map", "[a]",
-            "-c:v", "libx264", "-c:a", "aac",
+            "-c:v", "libx264", "-c:a", "aac", "-ar", "48000",
             output_path,
         ],
         check=True,
@@ -217,7 +217,7 @@ def _xfade_pair(a: str, b: str, out: str) -> None:
                 f"[0:a][1:a]acrossfade=d={_XFADE_DURATION}[a]"
             ),
             "-map", "[v]", "-map", "[a]",
-            "-c:v", "libx264", "-c:a", "aac",
+            "-c:v", "libx264", "-c:a", "aac", "-ar", "48000",
             out,
         ],
         check=True,
