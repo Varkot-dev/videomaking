@@ -2,7 +2,7 @@ import re
 import subprocess
 import os
 from manimgen.llm import chat
-from manimgen.validator.runner import _find_rendered_video
+from manimgen.validator.runner import _find_rendered_video, _is_3d_scene
 from manimgen.validator.codeguard import precheck_and_autofix, apply_error_aware_fixes
 from manimgen.validator.env import get_render_env
 from manimgen.validator.layout_checker import check_layout
@@ -10,6 +10,7 @@ from manimgen import paths
 
 MAX_RETRIES = 3
 MAX_LLM_FIX_CALLS = int(os.environ.get("MANIMGEN_MAX_RETRY_LLM_CALLS", "1"))
+MAX_SPEC_RETRIES = 2
 RETRY_ERROR_SIGNATURE_CHARS = 500
 RETRY_PROMPT_STDERR_CHARS = 3000
 RETRY_PROMPT_CODE_CHARS = 7000
@@ -53,6 +54,51 @@ def _truncate_for_prompt(text: str, max_chars: int) -> str:
         + "\n\n...[truncated for token efficiency]...\n\n"
         + text[-tail_chars:]
     )
+
+
+def retry_spec(
+    section: dict,
+    cue_index: int | None,
+    total_cues: int | None,
+    duration_seconds: float,
+    errors: list[str],
+) -> dict:
+    """Re-ask LLM for a valid spec when validation fails. Budget: MAX_SPEC_RETRIES."""
+    import json, re
+
+    system = _load_spec_system_prompt()
+    error_block = "\n".join(errors)
+    user_message = f"""Section title: {section['title']}
+Visual description: {section['visual_description']}
+Key objects: {', '.join(section.get('key_objects', []))}
+Duration: {duration_seconds:.2f} seconds
+
+Your previous spec was invalid. Fix the following errors and output only valid JSON:
+
+{error_block}
+
+Pick the most appropriate template. Output only valid JSON.
+"""
+    if cue_index is not None and total_cues and total_cues > 1:
+        user_message += f"\nCUE: This is segment {cue_index + 1} of {total_cues}. Animate only the relevant part."
+
+    raw = chat(system=system, user=user_message)
+
+    def _strip_fencing(s):
+        s = s.strip()
+        if s.startswith("```"):
+            s = s.split("\n", 1)[1]
+            s = s.rsplit("```", 1)[0]
+        return s.strip()
+
+    def _safe_json_loads(s):
+        try:
+            return json.loads(s)
+        except json.JSONDecodeError:
+            sanitized = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', s)
+            return json.loads(sanitized)
+
+    return _safe_json_loads(_strip_fencing(raw))
 
 
 def retry_scene(section: dict, original_code: str, class_name: str, scene_path: str) -> tuple[bool, str | None]:
@@ -186,12 +232,13 @@ def _run_and_capture(scene_path: str, class_name: str) -> dict:
             stderr += "\nLayout warnings:\n- " + "\n- ".join(precheck["layout_warnings"])
         return {"success": False, "video_path": None, "stderr": stderr}
 
+    timeout = 300 if _is_3d_scene(scene_path) else 120
     try:
         result = subprocess.run(
             ["manimgl", scene_path, class_name, "-w", "--hd", "-c", "#1C1C1C"],
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=timeout,
             env=get_render_env(),
         )
         if result.returncode == 0:
