@@ -7,7 +7,7 @@ Uses an audio-first CUE pipeline where spoken word timestamps drive animation du
 **Stack:** Python 3.13, ManimGL (3b1b fork), Gemini 2.5 Flash, FFmpeg 8.1, LaTeX, edge-tts, Flask (editor)
 
 **Repo:** `https://github.com/Varkot-dev/videomaking.git` — branch `main`
-**280 tests, all passing** (`python3 -m pytest tests/ --ignore=tests/test_scene_generator.py --ignore=tests/test_planner.py -v`)
+**297 tests, all passing** (`python3 -m pytest tests/ --ignore=tests/test_scene_generator.py --ignore=tests/test_planner.py -v`)
 
 ---
 
@@ -179,7 +179,7 @@ Resolution order (first wins):
 ### 1. Prompt architecture (Director model)
 - `planner/prompts/planner_system.md`: outputs storyboard with `cues[{index, visual}]`. Each `visual` starts with `Technique: <name>` and gives exact ManimGL-implementable descriptions (specific objects, colors, positions, motion). NOT vague concept descriptions.
 - `generator/prompts/director_system.md`: ManimGL API reference, layout zone rules, banned patterns, technique table. Kept tight — no inline scaffolds.
-- `examples/`: 17 hand-written verified ManimGL scenes. Each has a `techniques:` tag in its docstring — `scene_generator.py` reads this tag to select relevant examples per section automatically. No hardcoded mappings in code.
+- `examples/`: 20 hand-written verified ManimGL scenes (includes 3D scenes). Each has a `techniques:` tag in its docstring — `scene_generator.py` reads this tag to select relevant examples per section automatically. No hardcoded mappings in code.
 - **DELETED:** `generator/prompts/spec_system.md`, `templates/` directory, `spec_schema.py` — the template engine is gone.
 
 **Example technique tag format** (first line inside class docstring):
@@ -283,14 +283,22 @@ Always: `VGroup(...).arrange(DOWN, buff=0.4)` — never two independent `.next_t
 
 **RULE: Before writing any 3D API call, read the source. Never assume from docs or task descriptions.**
 
+#### Camera
 ```python
-# Camera orientation — reorient takes DEGREES directly, no multiplication needed
-self.frame.reorient(-30, 70)          # theta_deg, phi_deg
+self.frame.reorient(-30, 70)          # theta_deg, phi_deg — takes degrees directly, no * DEGREES
 self.frame.add_ambient_rotation(angular_speed=0.2)  # param is angular_speed, NOT speed
 self.frame.clear_updaters()           # call before FadeOut to stop rotation
 
+# Preferred orbit pattern — camera moves, objects stay fixed in world space
+# This means ALL objects appear to rotate together correctly
+self.frame.add_updater(lambda m, dt: m.increment_theta(-0.15 * dt))
+```
+
+#### Surfaces
+```python
 # ThreeDAxes — confirmed in coordinate_systems.py:535
 axes = ThreeDAxes(x_range=[-3,3,1], y_range=[-3,3,1], z_range=[-2,2,1])
+axes.add_axis_labels()  # adds x/y/z labels, built-in method
 
 # ParametricSurface — uv_func returns a raw 3D np.array, NOT axes.c2p()
 # Confirmed in surface.py:268 — uv_func(u, v) → Iterable[float]
@@ -305,17 +313,70 @@ surface = ParametricSurface(
 # Confirmed in mobject.py:2002 — glsl_snippet: str
 surface.set_color_by_xyz_func("z", min_value=-1.0, max_value=1.0, colormap="viridis")
 
-# SurfaceMesh — confirmed in three_dimensions.py:31
-mesh = SurfaceMesh(surface, resolution=(12, 12))
+# set_shading params — confirmed in mobject.py:1442
+# set_shading(reflectiveness, gloss, shadow) — NOT (diffuse, specular, ambient)
+surface.set_shading(0.8, 0.5, 0.5)
 
-# 2D text/labels must be pinned to frame in ThreeDScene, or they render in 3D space
-self.add_fixed_in_frame_mobjects(label)
+# SurfaceMesh — confirmed in three_dimensions.py:31
+# Add mesh as child so it moves with the surface
+mesh = SurfaceMesh(surface, resolution=(12, 12))
+mesh.set_stroke(WHITE, 0.8, opacity=0.4)
+surface.add(mesh)
+```
+
+#### Transparency (glass / interior reveal)
+```python
+# Correct approach for see-through surfaces:
+# 1. deactivate_depth_test() so the surface doesn't occlude objects behind it
+# 2. set_opacity() to a low uniform value (0.08–0.15 for glass effect)
+# Do NOT use per-point opacity arrays — creates hard walls, not transparency
+sphere.deactivate_depth_test()
+self.play(sphere.animate.set_opacity(0.08), run_time=1.5)
+
+# To show objects INSIDE a closed surface:
+# - self.add(inner_object) BEFORE adding the outer shell
+# - Camera orbit (frame updater) makes both appear to rotate together
+# - deactivate_depth_test() on the shell before going transparent
+```
+
+#### Text and labels in ThreeDScene
+```python
+# Pin 2D text to the screen — otherwise it renders in 3D world space and looks wrong
+label.fix_in_frame()   # correct method — confirmed in mobject.py:1924
+# add_fixed_in_frame_mobjects() does NOT exist in this version of manimlib
+```
+
+#### Confirmed 3D shapes (three_dimensions.py)
+```python
+Sphere(radius=1.0)
+Torus(r1=2.0, r2=0.5)          # r1=major radius, r2=tube radius
+Cylinder(height=2.5, radius=0.8)
+Cone(...)                        # subclass of Cylinder
+SurfaceMesh(surface, resolution=(rows, cols))
 ```
 
 **What does NOT exist / is WRONG:**
-- `self.frame.set_euler_angles(theta * DEGREES, ...)` — wrong, use `reorient(theta_deg, phi_deg)` which handles unit conversion internally
-- `set_color_by_xyz_func(lambda x, y, z: z)` — crashes, it takes a GLSL string not a Python callable
-- `axes.c2p(u, v, z)` inside ParametricSurface uv_func — uv_func returns raw world coords, c2p is for 2D Axes only
+- `self.frame.set_euler_angles(theta * DEGREES, ...)` — use `reorient(theta_deg, phi_deg)`
+- `set_color_by_xyz_func(lambda x, y, z: z)` — crashes, takes a GLSL string not a callable
+- `axes.c2p(u, v, z)` inside ParametricSurface uv_func — uv_func returns raw world coords
+- `add_ambient_rotation(speed=...)` — kwarg is `angular_speed=`, not `speed=`
+- `add_fixed_in_frame_mobjects(label)` — use `label.fix_in_frame()` instead
+- `TexturedSurface` with remote URLs — SSL cert errors on this machine; use local files only
+
+#### 3b1b's own SurfaceExample pattern (example_scenes.py — authoritative reference)
+```python
+# Mesh stroke on surfaces
+mob.mesh = SurfaceMesh(mob)
+mob.mesh.set_stroke(BLUE, 1, opacity=0.5)
+mob.add(mob.mesh)
+
+# Camera orbit
+self.frame.add_updater(lambda m, dt: m.increment_theta(-0.1 * dt))
+
+# Light source manipulation
+light = self.camera.light_source
+self.play(light.animate.move_to(3 * IN), run_time=5)
+```
 
 ---
 
@@ -348,7 +409,7 @@ self.add_fixed_in_frame_mobjects(label)
 ## Testing (zero cost)
 
 ```bash
-python3 -m pytest tests/ -v                    # all 318 tests
+python3 -m pytest tests/ -v                    # all 297 tests (excl. LLM-calling tests)
 python3 -m pytest tests/test_codeguard.py -v   # just static fixes
 python3 -m pytest tests/test_pipeline_contracts.py -v   # A/V sync contracts
 python3 -m pytest tests/test_cue_parser.py tests/test_segmenter.py tests/test_audio_slicer.py -v  # CUE pipeline
