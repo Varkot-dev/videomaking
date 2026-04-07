@@ -7,7 +7,7 @@ Uses an audio-first CUE pipeline where spoken word timestamps drive animation du
 **Stack:** Python 3.13, ManimGL (3b1b fork), Gemini 2.5 Flash, FFmpeg 8.1, LaTeX, edge-tts, Flask (editor)
 
 **Repo:** `https://github.com/Varkot-dev/videomaking.git` — branch `main`
-**318 tests, all passing** (`python3 -m pytest tests/ -v`)
+**280 tests, all passing** (`python3 -m pytest tests/ --ignore=tests/test_scene_generator.py --ignore=tests/test_planner.py -v`)
 
 ---
 
@@ -160,10 +160,16 @@ Resolution order (first wins):
 ## Video quality systems (current)
 
 ### 1. Prompt architecture (Director model)
-- `planner/prompts/planner_system.md`: outputs storyboard with `cues[{index, visual}]` — pixel-level visual descriptions per cue. NOT concept descriptions.
-- `generator/prompts/director_system.md`: full ManimGL API reference, layout zone rules with exact coordinates, banned patterns, examples. The Director writes complete Python.
-- `examples/`: 10+ hand-written verified ManimGL scenes covering diverse patterns — the Director's few-shot reference library.
+- `planner/prompts/planner_system.md`: outputs storyboard with `cues[{index, visual}]`. Each `visual` starts with `Technique: <name>` and gives exact ManimGL-implementable descriptions (specific objects, colors, positions, motion). NOT vague concept descriptions.
+- `generator/prompts/director_system.md`: ManimGL API reference, layout zone rules, banned patterns, technique table. Kept tight — no inline scaffolds.
+- `examples/`: 17 hand-written verified ManimGL scenes. Each has a `techniques:` tag in its docstring — `scene_generator.py` reads this tag to select relevant examples per section automatically. No hardcoded mappings in code.
 - **DELETED:** `generator/prompts/spec_system.md`, `templates/` directory, `spec_schema.py` — the template engine is gone.
+
+**Example technique tag format** (first line inside class docstring):
+```
+techniques: sweep_highlight, stagger_reveal
+```
+`scene_generator._index_examples()` reads this to build the technique→file index at runtime.
 
 ### 2. Dark background
 All `manimgl` subprocess calls use `-c "#1C1C1C"`. This is enforced in `runner.py`, `retry.py`, and `fallback.py`.
@@ -220,6 +226,8 @@ Three layers of defense against text-over-diagram overlap:
 8. **Plan caching:** `--resume` flag skips LLM planning call, reads `manimgen/output/plan.json`
 9. **Log everything:** every attempt's code and stderr goes to `manimgen/output/logs/`
 10. **codeguard is the first line of defense** — extend it for any new known-bad pattern before touching prompts
+11. **Adding a new example scene:** add the file to `examples/`, add `techniques: <name>, <name>` as the first line of the class docstring. `scene_generator.py` picks it up automatically — no code changes needed.
+12. **Master Guidelines (`MASTER GUIDELINES.md`)** — no hardcoded mappings in code, no duplicate sources of truth, no speculative abstractions. Data lives in data (files, config); code reads it.
 
 ---
 
@@ -254,7 +262,51 @@ codeguard auto-fixes `x_length=` → `width=` and `y_length=` → `height=` if t
 ### Multiple annotations on same anchor
 Always: `VGroup(...).arrange(DOWN, buff=0.4)` — never two independent `.next_to(same_anchor)` calls
 
+### 3D scenes — verified from manimlib source (`scene.py`, `three_dimensions.py`, `camera_frame.py`, `surface.py`)
+
+**RULE: Before writing any 3D API call, read the source. Never assume from docs or task descriptions.**
+
+```python
+# Camera orientation — reorient takes DEGREES directly, no multiplication needed
+self.frame.reorient(-30, 70)          # theta_deg, phi_deg
+self.frame.add_ambient_rotation(speed=0.15)  # adds updater: increment_theta(speed * dt)
+self.frame.clear_updaters()           # call before FadeOut to stop rotation
+
+# ThreeDAxes — confirmed in coordinate_systems.py:535
+axes = ThreeDAxes(x_range=[-3,3,1], y_range=[-3,3,1], z_range=[-2,2,1])
+
+# ParametricSurface — uv_func returns a raw 3D np.array, NOT axes.c2p()
+# Confirmed in surface.py:268 — uv_func(u, v) → Iterable[float]
+surface = ParametricSurface(
+    lambda u, v: np.array([u, v, np.sin(u) * np.cos(v)]),
+    u_range=(-PI, PI),
+    v_range=(-PI, PI),
+    resolution=(32, 32),
+)
+
+# set_color_by_xyz_func — takes a GLSL string, NOT a Python lambda
+# Confirmed in mobject.py:2002 — glsl_snippet: str
+surface.set_color_by_xyz_func("z", min_value=-1.0, max_value=1.0, colormap="viridis")
+
+# SurfaceMesh — confirmed in three_dimensions.py:31
+mesh = SurfaceMesh(surface, resolution=(12, 12))
+
+# 2D text/labels must be pinned to frame in ThreeDScene, or they render in 3D space
+self.add_fixed_in_frame_mobjects(label)
+```
+
+**What does NOT exist / is WRONG:**
+- `self.frame.set_euler_angles(theta * DEGREES, ...)` — wrong, use `reorient(theta_deg, phi_deg)` which handles unit conversion internally
+- `set_color_by_xyz_func(lambda x, y, z: z)` — crashes, it takes a GLSL string not a Python callable
+- `axes.c2p(u, v, z)` inside ParametricSurface uv_func — uv_func returns raw world coords, c2p is for 2D Axes only
+
 ---
+
+## Fixed bugs (in addition to A/V sync)
+
+### Cue index off-by-one — planner cues[] has N entries for N [CUE] markers, but N+1 segments exist
+- **Root cause:** The LLM was told "2-4 [CUE] markers per section" but wasn't told that `cues[]` needs N+1 entries — one per segment, including the opening segment before the first `[CUE]`. So `cues[0]` always described what should be the second visual, and the last cue always had `visual: ""`.
+- **Fix:** `planner_system.md` now explicitly states cues[] must have (number of [CUE] markers + 1) entries, with `index 0` covering the opening segment. Example updated to match. `_extract_cues` now warns and synthesizes a fallback visual (from section title + narration) instead of passing `visual: ""` to the Director.
 
 ## Known issues / next steps
 

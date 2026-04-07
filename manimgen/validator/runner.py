@@ -40,7 +40,9 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
             f.write("\n")
         return False, None
 
-    timeout = 300 if _is_3d_scene(scene_path) else 120
+    # Director scenes can be long (multiple cue beats in one section file).
+    # Use a larger timeout to avoid false "runtime" failures.
+    timeout = 360 if _is_3d_scene(scene_path) else 240
 
     try:
         result = subprocess.run(

@@ -49,14 +49,17 @@ class TestPlannerStoryboardOutput(unittest.TestCase):
                 "id": "section_01",
                 "title": "Test",
                 "narration": "A. [CUE] B. [CUE] C.",
-                # No cues[] provided — should be synthesised
+                # No cues[] provided — should be synthesised with non-empty fallbacks
             }]
         }
         result = _extract_cues(plan)
         section = result["sections"][0]
         self.assertEqual(len(section["cues"]), 3)
         self.assertEqual(section["cues"][0]["index"], 0)
-        self.assertEqual(section["cues"][0]["visual"], "")
+        # Fallback visual must be non-empty — empty string means Director gets no brief
+        self.assertTrue(len(section["cues"][0]["visual"]) > 0)
+        self.assertTrue(len(section["cues"][1]["visual"]) > 0)
+        self.assertTrue(len(section["cues"][2]["visual"]) > 0)
 
     def test_extract_cues_strips_cue_markers_from_narration(self):
         from manimgen.planner.lesson_planner import _extract_cues
@@ -84,6 +87,39 @@ class TestPlannerStoryboardOutput(unittest.TestCase):
         result = _extract_cues(plan)
         section = result["sections"][0]
         self.assertEqual(len(section["cue_word_indices"]), len(section["cues"]))
+
+    def test_extract_cues_planner_off_by_one_synthesises_fallback(self):
+        """Regression: planner gives N cues for N [CUE] markers instead of N+1.
+
+        When the LLM omits the opening cue (index 0), _extract_cues must:
+        - still produce N+1 entries (one per segment)
+        - fill the missing trailing entry with a non-empty fallback visual
+        - never pass visual: "" to the Director
+        """
+        from manimgen.planner.lesson_planner import _extract_cues
+
+        # 2 [CUE] markers → 3 segments, but planner only gave 2 cues (wrong)
+        plan = {
+            "sections": [{
+                "id": "section_01",
+                "title": "Binary Search",
+                "narration": "Opening sentence. [CUE] Middle sentence here. [CUE] Closing sentence.",
+                "cues": [
+                    {"index": 0, "visual": "Middle visual — planner started counting from first [CUE]"},
+                    {"index": 1, "visual": "Closing visual"},
+                ],
+            }]
+        }
+        result = _extract_cues(plan)
+        section = result["sections"][0]
+
+        # Must have 3 cues, not 2
+        self.assertEqual(len(section["cues"]), 3)
+        # All visuals must be non-empty
+        for cue in section["cues"]:
+            self.assertTrue(len(cue["visual"]) > 0, f"cue {cue['index']} has empty visual")
+        # Indices must be 0, 1, 2
+        self.assertEqual([c["index"] for c in section["cues"]], [0, 1, 2])
 
 
 class TestSceneGeneratorDirector(unittest.TestCase):

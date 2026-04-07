@@ -102,8 +102,6 @@ class TestPlanLesson:
                 "id": f"section_{i:02d}",
                 "title": f"Section {i}",
                 "narration": "Some narration text here.",
-                "visual_description": "Show things on screen.",
-                "key_objects": ["obj1"],
                 "duration_seconds": 30,
             }
             for i in range(1, n_sections + 1)
