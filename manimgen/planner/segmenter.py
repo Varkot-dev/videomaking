@@ -56,7 +56,12 @@ def compute_segments(
         audio_start = 0.0 if i == 0 else start
 
         if i < total - 1:
-            duration = starts[i + 1] - audio_start
+            # Use the .end of the last word in this segment, not the .start
+            # of the first word in the next segment. This ensures the last
+            # syllable of each cue is not cut off mid-word.
+            last_word_idx = cue_word_indices[i + 1] - 1
+            boundary = timestamps[last_word_idx].end if last_word_idx >= 0 else starts[i + 1]
+            duration = boundary - audio_start
         else:
             duration = audio_duration - audio_start
 

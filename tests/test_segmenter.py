@@ -46,20 +46,23 @@ class TestComputeSegments:
         segs = compute_segments(TIMESTAMPS, [0, 5], AUDIO_DURATION)
         assert len(segs) == 2
 
-    def test_two_cues_durations_sum_to_full_audio(self):
-        # Cue 0 starts from 0.0 (pre-speech silence included), so sum = full audio duration
+    def test_two_cues_durations_cover_audio(self):
+        # Cue 0: 0.0 → end of word 4 ("problem", 1.90)
+        # Cue 1: start of word 5 ("in", 1.92) → end of audio (4.20)
+        # Durations don't sum to audio_duration exactly (small gap between word end and next onset)
         segs = compute_segments(TIMESTAMPS, [0, 5], AUDIO_DURATION)
-        total = sum(s.duration for s in segs)
-        assert abs(total - AUDIO_DURATION) < 1e-6
+        assert len(segs) == 2
+        assert abs(segs[0].duration - 1.90) < 1e-6   # 0.0 → word4.end = 1.90
+        assert abs(segs[1].duration - (4.20 - 1.92)) < 1e-6  # word5.start → audio_end
 
     def test_three_cues_correct_durations(self):
         # cue at word 0 (0.10s), word 5 (1.92s), word 9 (3.40s)
         segs = compute_segments(TIMESTAMPS, [0, 5, 9], AUDIO_DURATION)
         assert len(segs) == 3
-        # seg 0: audio starts at 0.0 (pre-speech silence), ends at next cue onset 1.92 → 1.92s
-        assert abs(segs[0].duration - (1.92 - 0.0)) < 1e-6
-        # seg 1: 1.92 → 3.40 = 1.48s
-        assert abs(segs[1].duration - (3.40 - 1.92)) < 1e-6
+        # seg 0: audio starts at 0.0, boundary = word4.end = 1.90 → duration 1.90s
+        assert abs(segs[0].duration - 1.90) < 1e-6
+        # seg 1: starts at 1.92, boundary = word8.end = 3.30 → duration = 3.30 - 1.92 = 1.38s
+        assert abs(segs[1].duration - (3.30 - 1.92)) < 1e-6
         # seg 2: 3.40 → 4.20 = 0.80s
         assert abs(segs[2].duration - (AUDIO_DURATION - 3.40)) < 1e-6
 
