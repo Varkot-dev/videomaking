@@ -3,6 +3,7 @@ import subprocess
 import re
 from manimgen.llm import chat
 from manimgen.validator.env import get_render_env
+from manimgen import paths
 
 
 FALLBACK_TEMPLATE = '''from manimlib import *
@@ -40,7 +41,7 @@ def _estimate_hold(section: dict) -> int:
 
 def fallback_scene(section: dict) -> str | None:
     """Generate and render a constrained fallback scene; if that fails, use title card."""
-    scenes_dir = "manimgen/output/scenes"
+    scenes_dir = paths.scenes_dir()
     os.makedirs(scenes_dir, exist_ok=True)
 
     hold_seconds = _estimate_hold(section)

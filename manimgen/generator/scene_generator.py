@@ -2,6 +2,7 @@ import math
 import os
 import re
 from manimgen.llm import chat
+from manimgen import paths
 
 _WORDS_PER_MINUTE = 130
 
@@ -126,7 +127,7 @@ LAYOUT RULES (MANDATORY — violations will be rejected):
         code = re.sub(r"^```\w*\n?", "", code)
         code = re.sub(r"\n?```$", "", code)
 
-    scenes_dir = "manimgen/output/scenes"
+    scenes_dir = paths.scenes_dir()
     os.makedirs(scenes_dir, exist_ok=True)
 
     if cue_index is not None:

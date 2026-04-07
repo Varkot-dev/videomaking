@@ -6,6 +6,7 @@ from manimgen.validator.runner import _find_rendered_video
 from manimgen.validator.codeguard import precheck_and_autofix, apply_error_aware_fixes
 from manimgen.validator.env import get_render_env
 from manimgen.validator.layout_checker import check_layout
+from manimgen import paths
 
 MAX_RETRIES = 3
 MAX_LLM_FIX_CALLS = int(os.environ.get("MANIMGEN_MAX_RETRY_LLM_CALLS", "1"))
@@ -61,7 +62,7 @@ def retry_scene(section: dict, original_code: str, class_name: str, scene_path: 
     Returns (success, video_path).
     """
     code = original_code
-    logs_dir = "manimgen/output/logs"
+    logs_dir = paths.logs_dir()
     os.makedirs(logs_dir, exist_ok=True)
     system_prompt = _load_retry_system_prompt()
     llm_fix_calls_used = 0

@@ -9,6 +9,10 @@ output:
   scenes_dir: manimgen/output/scenes
   videos_dir: manimgen/output/videos
   logs_dir: manimgen/output/logs
+  audio_dir: manimgen/output/audio
+  muxed_dir: manimgen/output/muxed
+  exports_dir: manimgen/output/videos/exports
+  plan_cache: manimgen/output/plan.json
 
 rendering:
   quality: hd

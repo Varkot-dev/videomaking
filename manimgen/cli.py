@@ -13,10 +13,11 @@ from manimgen.validator.runner import run_scene
 from manimgen.validator.retry import retry_scene
 from manimgen.validator.fallback import fallback_scene
 from manimgen.renderer.assembler import assemble_video
+from manimgen import paths
 
 logger = logging.getLogger(__name__)
 
-_PLAN_CACHE = "manimgen/output/plan.json"
+_PLAN_CACHE = paths.plan_cache()
 
 
 def _load_config() -> dict:
@@ -41,7 +42,7 @@ def _run_tts_for_section(section: dict, idx: int) -> tuple[str, list, float] | N
         return None
 
     section_id = section.get("id", f"section_{idx:02d}")
-    audio_dir = "manimgen/output/audio"
+    audio_dir = paths.audio_dir()
     os.makedirs(audio_dir, exist_ok=True)
     audio_path = os.path.join(audio_dir, f"{section_id}.mp3")
 
@@ -61,8 +62,8 @@ def _run_tts_for_section(section: dict, idx: int) -> tuple[str, list, float] | N
 def _muxed_path_for(section: dict, idx: int, cue_index: int | None = None) -> str:
     section_id = section.get("id", f"section_{idx:02d}")
     if cue_index is not None:
-        return os.path.join("manimgen/output/muxed", f"{section_id}_cue{cue_index:02d}.mp4")
-    return os.path.join("manimgen/output/muxed", f"{section_id}.mp4")
+        return os.path.join(paths.muxed_dir(), f"{section_id}_cue{cue_index:02d}.mp4")
+    return os.path.join(paths.muxed_dir(), f"{section_id}.mp4")
 
 
 def _video_path_for(section: dict, cue_index: int | None = None) -> str:
@@ -140,7 +141,7 @@ def main():
                 section_id = section.get("id", f"section_{idx:02d}")
                 audio_slices = slice_audio(
                     audio_path, segments,
-                    output_dir="manimgen/output/audio",
+                    output_dir=paths.audio_dir(),
                     section_id=section_id,
                 )
                 print(f"[manimgen] Audio slices: {[os.path.basename(p) for p in audio_slices]}")

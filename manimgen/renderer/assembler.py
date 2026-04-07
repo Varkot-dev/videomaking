@@ -20,6 +20,7 @@ import os
 import re
 import subprocess
 
+from manimgen import paths
 
 _XFADE_DURATION = 0.3
 _CUE00_PATTERN = re.compile(r"_cue00\.mp4$")
@@ -38,7 +39,7 @@ def assemble_video(video_paths: list[str], title: str) -> str:
     Returns:
         Path to the assembled final .mp4.
     """
-    videos_dir = "manimgen/output/videos"
+    videos_dir = paths.videos_dir()
     os.makedirs(videos_dir, exist_ok=True)
 
     safe_title = title.lower().replace(" ", "_").replace("/", "-")

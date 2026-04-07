@@ -3,6 +3,7 @@ import os
 from datetime import datetime
 from manimgen.validator.codeguard import precheck_and_autofix
 from manimgen.validator.env import get_render_env
+from manimgen import paths
 
 
 def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
@@ -10,7 +11,7 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
     Run a ManimGL scene file and return (success, video_path).
     Logs the attempt to output/logs/.
     """
-    logs_dir = "manimgen/output/logs"
+    logs_dir = paths.logs_dir()
     os.makedirs(logs_dir, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
