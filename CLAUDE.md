@@ -114,6 +114,23 @@ For each section:
 
 ---
 
+## When to use the LLM vs hardcode
+
+**Hardcode (no API calls) when:**
+- Testing ManimGL rendering behaviour — camera, surfaces, animations, depth, opacity
+- Verifying a new 3D API works before adding it to the pipeline
+- Writing example scenes for the Director's few-shot reference (`examples/`)
+- All of the above: just write a scene directly in `examples/` and render with `manimgl file.py ClassName -c "#1C1C1C" -w`
+
+**Use the LLM when:**
+- Testing Director *output quality* — does it generate visually correct code for a given storyboard?
+- Running the full pipeline end-to-end on a real topic or PDF
+- The existing pytest suite already mocks LLM calls for correctness tests — real API only needed for quality evaluation
+
+**Rule:** if you're not evaluating LLM output quality, hardcode. Writing scenes manually is faster, free, and gives exact control over what's being tested.
+
+---
+
 ## Running the pipeline
 
 ```bash
@@ -269,7 +286,7 @@ Always: `VGroup(...).arrange(DOWN, buff=0.4)` — never two independent `.next_t
 ```python
 # Camera orientation — reorient takes DEGREES directly, no multiplication needed
 self.frame.reorient(-30, 70)          # theta_deg, phi_deg
-self.frame.add_ambient_rotation(speed=0.15)  # adds updater: increment_theta(speed * dt)
+self.frame.add_ambient_rotation(angular_speed=0.2)  # param is angular_speed, NOT speed
 self.frame.clear_updaters()           # call before FadeOut to stop rotation
 
 # ThreeDAxes — confirmed in coordinate_systems.py:535
