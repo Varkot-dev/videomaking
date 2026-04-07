@@ -1,7 +1,7 @@
 import subprocess
 import os
 from datetime import datetime
-from manimgen.validator.codeguard import precheck_and_autofix
+from manimgen.validator.codeguard import precheck_and_autofix_file as precheck_and_autofix
 from manimgen.validator.env import get_render_env
 from manimgen import paths
 
@@ -25,9 +25,9 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
     precheck = precheck_and_autofix(scene_path)
     if not precheck["ok"]:
         with open(log_path, "w") as f:
-            if precheck["applied_fixes"]:
+            if precheck.get("applied_fixes"):
                 f.write("=== PRECHECK AUTO-FIXES ===\n")
-                for fix in precheck["applied_fixes"]:
+                for fix in precheck.get("applied_fixes"):
                     f.write(f"- {fix}\n")
                 f.write("\n")
             if precheck.get("layout_warnings"):
@@ -52,9 +52,9 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
         )
 
         with open(log_path, "w") as f:
-            if precheck["applied_fixes"]:
+            if precheck.get("applied_fixes"):
                 f.write("=== PRECHECK AUTO-FIXES ===\n")
-                for fix in precheck["applied_fixes"]:
+                for fix in precheck.get("applied_fixes"):
                     f.write(f"- {fix}\n")
                 f.write("\n")
             if precheck.get("layout_warnings"):

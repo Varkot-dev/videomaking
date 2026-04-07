@@ -46,21 +46,17 @@ LEFT:    x ∈ [-7, -3.5]   — side annotation zone
 RIGHT:   x ∈ [3.5, 7]     — side annotation zone
 ```
 
-**Axes with a title present:**
-- Always use `x_length=` and `y_length=` constructor params to control physical size explicitly
-- Safe max: `x_length ≤ 8`, `y_length ≤ 5` when a title is present
-- Always `.center().shift(DOWN * 0.8)` when a title is present — never just `.center()`
-- Compute dimensions: `scale = min(max_w / x_span, max_h / y_span)` then `x_length=x_span*scale, y_length=y_span*scale`
+**Axes with a title present — use `width=` and `height=` params (ManimGL syntax):**
+- `width=` sets the physical screen width in ManimGL units
+- `height=` sets the physical screen height — use this to cap tall y-ranges
+- Safe max: `width ≤ 8`, `height ≤ 5` when a title is present
+- Always `.center().shift(DOWN * 0.8)` when a title is present
 
 **Example of correct axes with title:**
 ```python
-x_span = 3 - (-2)  # = 5
-y_span = 5 - (-1)  # = 6
-scale = min(8 / x_span, 5 / y_span)  # min(1.6, 0.83) = 0.83
 axes = Axes(
     x_range=[-2, 3, 1], y_range=[-1, 5, 1],
-    x_length=x_span * scale,  # 4.17
-    y_length=y_span * scale,  # 5.0  ← capped at 5
+    width=7, height=4.5,  # ManimGL uses width/height, NOT x_length/y_length
     axis_config={"color": GREY_B, "include_tip": True},
     x_axis_config={"include_numbers": True, "decimal_number_config": {"font_size": 24}},
     y_axis_config={"include_numbers": False},
@@ -89,7 +85,7 @@ DashedLine(start, end, dash_length=0.12, color=GREY_B, stroke_width=2)
 
 ### Axes and graphs
 ```python
-axes = Axes(x_range=[a,b,step], y_range=[c,d,step], x_length=W, y_length=H, ...)
+axes = Axes(x_range=[a,b,step], y_range=[c,d,step], width=W, height=H, ...)  # ManimGL: width/height not x_length/y_length
 curve = axes.get_graph(lambda x: expr, color=YELLOW, x_range=[a, b])
 dot_pos = axes.c2p(x_val, y_val)           # coordinate to screen point
 axes.input_to_graph_point(x, curve)        # point on a specific curve

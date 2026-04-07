@@ -152,7 +152,7 @@ Current code:
             with open(scene_path, "w") as f:
                 f.write(code)
             precheck = precheck_and_autofix(scene_path)
-            if precheck["applied_fixes"]:
+            if precheck.get("applied_fixes"):
                 with open(scene_path) as f:
                     code = f.read()
             continue
@@ -220,7 +220,7 @@ Original code:
 
         # Local auto-fixes are free and often resolve common ManimGL mismatches.
         precheck = precheck_and_autofix(scene_path)
-        if precheck["applied_fixes"]:
+        if precheck.get("applied_fixes"):
             with open(scene_path) as f:
                 code = f.read()
 

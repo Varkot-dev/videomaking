@@ -33,6 +33,9 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
         (r"\bCreate\s*\(", "ShowCreation(", "Create -> ShowCreation"),
         (r"self\.camera\.frame", "self.frame", "self.camera.frame -> self.frame"),
         (r"\bCircumscribe\s*\(", "FlashAround(", "Circumscribe -> FlashAround"),
+        # ManimCommunity Axes uses x_length/y_length; ManimGL uses width/height
+        (r"\bx_length\s*=", "width=", "x_length -> width (ManimGL Axes)"),
+        (r"\by_length\s*=", "height=", "y_length -> height (ManimGL Axes)"),
         (r"\bDARK_GREY\b", "GREY_D", "DARK_GREY -> GREY_D"),
         (r"\bDARK_GRAY\b", "GREY_D", "DARK_GRAY -> GREY_D"),
         (r"\bDARK_BLUE\b", "BLUE_D", "DARK_BLUE -> BLUE_D"),

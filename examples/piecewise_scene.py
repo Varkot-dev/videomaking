@@ -22,8 +22,8 @@ class PiecewiseScene(Scene):
         axes = Axes(
             x_range=[-0.5, 5, 1],
             y_range=[-0.5, 5, 1],
-            x_length=7,
-            y_length=5,
+            width=7,
+            height=5,
             axis_config={"color": GREY_B, "include_tip": True},
             x_axis_config={"include_numbers": True, "decimal_number_config": {"font_size": 24}},
             y_axis_config={"include_numbers": False},

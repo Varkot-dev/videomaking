@@ -238,15 +238,18 @@ axes = Axes(
 )
 ```
 
-### Axes sizing — use x_length/y_length, not set_width
+### Axes sizing — use width/height params (ManimGL), NOT x_length/y_length (ManimCommunity)
 ```python
-x_span = x_range[1] - x_range[0]
-y_span = y_range[1] - y_range[0]
-scale = min(8 / x_span, 5 / y_span)  # 5 = safe height with title
-axes = Axes(x_range=..., y_range=..., x_length=x_span*scale, y_length=y_span*scale)
-axes.center().shift(DOWN * 0.8)  # always shift down when title present
+# ManimGL Axes uses width= and height= (NOT x_length/y_length — that's ManimCommunity)
+axes = Axes(
+    x_range=[-2, 3, 1], y_range=[-1, 5, 1],
+    width=7, height=4.5,   # ← hard-caps screen size, prevents title overflow
+    axis_config={"color": GREY_B, "include_tip": True},
+    x_axis_config={"include_numbers": True, "decimal_number_config": {"font_size": 24}},
+    y_axis_config={"include_numbers": False},
+).center().shift(DOWN * 0.8)  # always shift down when title present
 ```
-**Never use `.set_width().center()` alone** — it preserves aspect ratio and overflows into title zone when y-range is tall. codeguard injects a height clamp as a fallback but x_length/y_length is the right fix.
+codeguard auto-fixes `x_length=` → `width=` and `y_length=` → `height=` if the LLM uses ManimCommunity syntax.
 
 ### Multiple annotations on same anchor
 Always: `VGroup(...).arrange(DOWN, buff=0.4)` — never two independent `.next_to(same_anchor)` calls

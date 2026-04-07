@@ -22,8 +22,8 @@ class JumpDiscontinuityScene(Scene):
         axes = Axes(
             x_range=[-0.5, 3.5, 1],
             y_range=[-0.5, 4.5, 1],
-            x_length=6,
-            y_length=5,
+            width=6,
+            height=5,
             axis_config={"color": GREY_B, "include_tip": True},
             x_axis_config={"include_numbers": True, "decimal_number_config": {"font_size": 24}},
             y_axis_config={"include_numbers": False},

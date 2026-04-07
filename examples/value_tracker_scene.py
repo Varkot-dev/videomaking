@@ -17,8 +17,8 @@ class ValueTrackerScene(Scene):
         axes = Axes(
             x_range=[-3, 3, 1],
             y_range=[-2, 5, 1],
-            x_length=9,
-            y_length=6,
+            width=9,
+            height=6,
             axis_config={"include_numbers": True, "decimal_number_config": {"font_size": 24}, "color": GREY_B},
         ).center().shift(DOWN * 0.3)
 
