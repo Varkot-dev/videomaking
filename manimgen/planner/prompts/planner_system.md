@@ -64,25 +64,60 @@ The narration above has 2 `[CUE]` markers → `cues[]` has 3 entries (index 0, 1
 ]
 ```
 
+## Technique menu — pick one per cue
+
+Every cue's `visual` field MUST start with `Technique: <name>` followed by the description. Choose from:
+
+| Name | When to use |
+|---|---|
+| `sweep_highlight` | scanning left-to-right across elements, pointer moving |
+| `stagger_reveal` | items appearing one by one with a delay (lists, steps, arrays) |
+| `camera_zoom` | narration says "exactly", "precisely", "zoom in", "notice that" |
+| `equation_morph` | algebra steps, simplification, "this becomes", "which equals" |
+| `color_fill` | area under a curve, probability region, integral, "accumulate" |
+| `grid_transform` | linear algebra, matrix, "what this does to space" |
+| `tracker_label` | label that updates as a value changes, dynamic relationships |
+| `brace_annotation` | labeling a span, distance, or width of a region |
+| `split_screen` | two diagrams side by side, "compare", "before vs after" |
+| `fade_reveal` | dramatic pause, clear screen then show the key insight |
+| `axes_curve` | standard function plot — use sparingly, at most 2 per video |
+
+**Enforcement rules:**
+- No two consecutive cues in the same section may use the same technique
+- At most 2 cues in the entire video may use `axes_curve` alone (combine with another technique instead)
+- At least 1 cue per video must use `camera_zoom`, `grid_transform`, or `equation_morph`
+- Any section where narration says "compare" or "contrast" → one cue MUST be `split_screen`
+
 ## Rules for the `visual` field — this is the most important thing you produce
 
-Each cue's `visual` field must describe EXACTLY what is on screen:
+Each cue's `visual` field must start with `Technique: <name>` then describe EXACTLY what is on screen:
 - **What objects appear**: shapes, axes, curves, text, arrows, dots — be specific
-- **What moves**: which object, in which direction, how far, at what speed  
+- **What moves**: which object, in which direction, how far, at what speed
 - **What values/expressions**: actual numbers, actual formulas (e.g. `f(x) = x²`, not "a parabola")
 - **Where things are positioned**: "top-left", "center-screen", "to the right of the axes", "bottom-center"
 - **Color**: be specific — yellow curve, red dot, blue highlight, white text
 - **What disappears**: if something fades out, say so
 
-Do NOT write: "show the concept of limits" or "illustrate binary search" or "animate the function". These are useless — they give the animator nothing to work with.
+**BAD** (vague, technique-free):
+```
+"visual": "Show the concept of limits"
+```
 
-DO write: "axes appear center-screen, x∈[-2,3] y∈[-1,5], yellow curve y=x² drawn from left to right, red dot starts at x=-1.5 and moves right along the curve, dashed vertical line at x=1 appears, annotation 'f(1)=1' appears to the right of the axes in white"
+**BAD** (has objects but no technique, no positions, no values):
+```
+"visual": "axes_curve. Axes appear. A curve is drawn. A dot moves along it."
+```
+
+**GOOD** (technique named, specific objects, positions, values, motion):
+```
+"visual": "Technique: sweep_highlight. A horizontal row of 10 grey boxes appears center-screen, each labeled with a sorted value (3, 7, 11, 15, 22, 31, 42, 58, 67, 74). A yellow SurroundingRectangle scans left-to-right at 0.2s per box. Target value 42 is shown top-right in yellow. When the highlight reaches box 7 (42), it turns green. Counter bottom-left increments from 1 to 7."
+```
 
 ## Visual variety rules
 
 Each section must look visually DIFFERENT from every other section. Enforce this:
 - Mix: axes+curves, plain text+bullets, geometric shapes, number lines, grids, arrows
-- No two consecutive sections can both start by drawing axes
+- No two consecutive sections can both open with axes
 - Use color intentionally: pick a dominant color per section and stick to it
 - At least one section per video should have NO axes at all — pure text, shapes, or abstract visuals
 - Think cinematically: what would be the most visually striking way to show this idea?
