@@ -6,12 +6,7 @@ build/
 .env
 .env.*
 config.local.yaml
-manimgen/output/scenes/
-manimgen/output/videos/
-manimgen/output/logs/
-manimgen/output/audio/
-manimgen/output/muxed/
-manimgen/output/plan.json
+manimgen/output/
 latex_cache/
 videos/
 *.pdf
