@@ -10,7 +10,6 @@ from manimgen import paths
 
 MAX_RETRIES = 3
 MAX_LLM_FIX_CALLS = int(os.environ.get("MANIMGEN_MAX_RETRY_LLM_CALLS", "1"))
-MAX_SPEC_RETRIES = 2
 RETRY_ERROR_SIGNATURE_CHARS = 500
 RETRY_PROMPT_STDERR_CHARS = 3000
 RETRY_PROMPT_CODE_CHARS = 7000
@@ -56,48 +55,6 @@ def _truncate_for_prompt(text: str, max_chars: int) -> str:
     )
 
 
-def retry_spec(
-    section: dict,
-    cue_index: int | None,
-    total_cues: int | None,
-    duration_seconds: float,
-    errors: list[str],
-) -> dict:
-    """Re-ask LLM for a valid spec when validation fails. Budget: MAX_SPEC_RETRIES."""
-    import json, re
-
-    here = os.path.dirname(__file__)
-    spec_prompt_path = os.path.join(here, "..", "generator", "prompts", "spec_system.md")
-    with open(os.path.normpath(spec_prompt_path)) as f:
-        system = f.read()
-    error_block = "\n".join(errors)
-    user_message = f"""Section title: {section['title']}
-Visual description: {section['visual_description']}
-Key objects: {', '.join(section.get('key_objects', []))}
-Duration: {duration_seconds:.2f} seconds
-
-Your previous spec was invalid. Fix the following errors and output only valid JSON:
-
-{error_block}
-
-Pick the most appropriate template. Output only valid JSON.
-"""
-    if cue_index is not None and total_cues and total_cues > 1:
-        user_message += f"\nCUE: This is segment {cue_index + 1} of {total_cues}. Animate only the relevant part."
-
-    raw = chat(system=system, user=user_message)
-
-    def _safe_json_loads(s):
-        try:
-            return json.loads(s)
-        except json.JSONDecodeError:
-            sanitized = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', s)
-            return json.loads(sanitized)
-
-    from manimgen.utils import strip_fencing
-    return _safe_json_loads(strip_fencing(raw))
-
-
 def retry_scene(section: dict, original_code: str, class_name: str, scene_path: str) -> tuple[bool, str | None]:
     """
     Retry generating and running a scene up to MAX_RETRIES times.
@@ -117,39 +74,13 @@ def retry_scene(section: dict, original_code: str, class_name: str, scene_path: 
             layout = check_layout(result["video_path"])
             if layout["ok"] or layout["skipped"]:
                 return True, result["video_path"]
-            # Scene rendered but has layout problems — treat as a soft failure
+            # Scene rendered but has layout problems. Prefer keeping the rendered
+            # output over risking regressions/fallback in additional fix rounds.
             print(f"[retry] Attempt {attempt}/{MAX_RETRIES} rendered but has layout issues:")
             for line in layout["issues"].splitlines():
                 print(f"[retry]   {line}")
-            if attempt == MAX_RETRIES or llm_fix_calls_used >= MAX_LLM_FIX_CALLS:
-                # Accept the video rather than fallback — layout is better than nothing
-                print("[retry] Accepting video despite layout issues (retry budget exhausted)")
-                return True, result["video_path"]
-            # Ask LLM to fix layout
-            prompt_code = _truncate_for_prompt(code, RETRY_PROMPT_CODE_CHARS)
-            fixed = chat(
-                system=system_prompt,
-                user=f"""This ManimGL scene rendered successfully but has visual layout problems.
-Fix the layout issues described below. Do not change the mathematical content.
-
-Layout issues:
-{layout["issues"]}
-
-Current code:
-{prompt_code}""",
-            )
-            llm_fix_calls_used += 1
-            if fixed.startswith("```"):
-                fixed = re.sub(r"^```\w*\n?", "", fixed)
-                fixed = re.sub(r"\n?```$", "", fixed)
-            code = fixed
-            with open(scene_path, "w") as f:
-                f.write(code)
-            precheck = precheck_and_autofix(scene_path)
-            if precheck.get("applied_fixes"):
-                with open(scene_path) as f:
-                    code = f.read()
-            continue
+            print("[retry] Accepting video despite layout issues (prefer render over fallback)")
+            return True, result["video_path"]
 
         error_type = _classify_error(result["stderr"])
         guidance = _fix_guidance(error_type)
@@ -229,7 +160,8 @@ def _run_and_capture(scene_path: str, class_name: str) -> dict:
             stderr += "\nLayout warnings:\n- " + "\n- ".join(precheck["layout_warnings"])
         return {"success": False, "video_path": None, "stderr": stderr}
 
-    timeout = 300 if _is_3d_scene(scene_path) else 120
+    # Director scenes can be long; avoid false timeout-driven fallbacks.
+    timeout = 360 if _is_3d_scene(scene_path) else 240
     try:
         result = subprocess.run(
             ["manimgl", scene_path, class_name, "-w", "--hd", "-c", "#1C1C1C"],
@@ -249,12 +181,12 @@ def _load_retry_system_prompt() -> str:
     here = os.path.dirname(__file__)
     root = os.path.dirname(here)
     retry_system_path = os.path.join(here, "prompts", "retry_system.md")
-    rules_core_path = os.path.join(root, "generator", "prompts", "rules_core.md")
+    director_system_path = os.path.join(root, "generator", "prompts", "director_system.md")
     with open(retry_system_path) as f:
         system = f.read()
-    with open(rules_core_path) as f:
-        rules = f.read()
-    return system.strip() + "\n\n" + rules
+    with open(director_system_path) as f:
+        director = f.read()
+    return system.strip() + "\n\n" + director
 
 
 def _write_attempt_artifacts(logs_dir: str, class_name: str, attempt: int, code: str, stderr: str) -> None:

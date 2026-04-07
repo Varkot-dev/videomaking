@@ -80,18 +80,30 @@ def _normalise_all(paths: list[str], work_dir: str) -> list[str]:
     norm_paths = []
     for i, path in enumerate(paths):
         norm = os.path.join(work_dir, f"_norm_{i:03d}.mp4")
-        subprocess.run(
-            [
+        if _has_audio_stream(path):
+            cmd = [
                 "ffmpeg", "-y",
                 "-i", path,
                 "-vf", "scale=1920:1080,fps=30,format=yuv420p",
                 "-c:v", "libx264", "-preset", "veryfast",
                 "-c:a", "aac", "-ar", "48000",
                 norm,
-            ],
-            check=True,
-            capture_output=True,
-        )
+            ]
+        else:
+            # Some fallback/error paths can leave us with video-only clips.
+            # Inject silent audio so concat/xfade filters always have [v][a].
+            dur = _video_duration(path)
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", path,
+                "-f", "lavfi", "-t", str(dur), "-i", "anullsrc=r=48000:cl=stereo",
+                "-vf", "scale=1920:1080,fps=30,format=yuv420p",
+                "-c:v", "libx264", "-preset", "veryfast",
+                "-c:a", "aac", "-ar", "48000",
+                "-shortest",
+                norm,
+            ]
+        subprocess.run(cmd, check=True, capture_output=True)
         norm_paths.append(norm)
     return norm_paths
 
@@ -151,7 +163,12 @@ def _concat(
     result = section_clips[0]
     for i in range(1, len(section_clips)):
         tmp = os.path.join(work_dir, f"_xfade_{i:03d}.mp4")
-        _xfade_pair(result, section_clips[i], tmp)
+        try:
+            _xfade_pair(result, section_clips[i], tmp)
+        except subprocess.CalledProcessError:
+            # Fallback to hard concat when ffmpeg xfade cannot be computed for
+            # a particular pair (rare codec/timeline edge case).
+            _hard_concat([result, section_clips[i]], tmp)
         # Clean up intermediates (but not the normalised originals — caller does that)
         if result not in norm_paths and os.path.exists(result):
             os.remove(result)
@@ -201,6 +218,30 @@ def _video_duration(path: str) -> float:
         check=True, capture_output=True, text=True,
     )
     return max(0.1, float(result.stdout.strip()))
+
+
+def _has_audio_stream(path: str) -> bool:
+    try:
+        proc = subprocess.Popen(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "a:0",
+                "-show_entries", "stream=codec_type",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                path,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        out, _ = proc.communicate(timeout=10)
+        if proc.returncode != 0:
+            return True
+        return out.strip() != ""
+    except Exception:
+        # If probing fails, keep existing behavior and assume audio is present.
+        # This avoids crashing normalization on transient probe failures.
+        return True
 
 
 def _xfade_pair(a: str, b: str, out: str) -> None:

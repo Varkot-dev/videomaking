@@ -11,6 +11,7 @@ The scene must:
 - Have exactly one class inheriting from `Scene`
 - Use `self.wait(N)` at each cue boundary to hit the exact durations given
 - Clean up with `self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)` at the end
+- Do NOT add "Fix:" comments or second-guess API rules in comments. Follow this prompt literally.
 
 ## Cue structure
 
@@ -68,8 +69,8 @@ axes = Axes(
 ### Text and math
 ```python
 Text("string", font_size=48, color=WHITE)     # plain text
-Tex(r"\frac{1}{x}", font_size=36, color=YELLOW)  # LaTeX math
-# font_size= is valid on Text() but NOT on Tex() — for Tex, scale after:
+Tex(r"\frac{1}{x}", color=YELLOW).scale(1.1)  # LaTeX math
+# font_size= is valid on Text() but NOT on Tex().
 label = Tex(r"f(x) = x^2").scale(0.9)
 ```
 
@@ -88,7 +89,7 @@ DashedLine(start, end, dash_length=0.12, color=GREY_B, stroke_width=2)
 axes = Axes(x_range=[a,b,step], y_range=[c,d,step], width=W, height=H, ...)  # ManimGL: width/height not x_length/y_length
 curve = axes.get_graph(lambda x: expr, color=YELLOW, x_range=[a, b])
 dot_pos = axes.c2p(x_val, y_val)           # coordinate to screen point
-axes.input_to_graph_point(x, curve)        # point on a specific curve
+graph_pos = axes.input_to_graph_point(x, curve)  # point on a specific curve
 ```
 
 ### Animations
@@ -134,6 +135,7 @@ font_size= inside axis_config    # crashes — use decimal_number_config
 tip_length=, tip_width=          # banned kwargs on Arrow
 corner_radius= on Rectangle      # not supported in ManimGL
 obj.animate.FadeIn(...)          # .animate only for transform/shift/color
+axes.get_graph_point(...)        # use axes.input_to_graph_point(x, curve)
 ```
 
 ## Color palette (use these names or #hex)

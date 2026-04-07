@@ -256,6 +256,12 @@ Always: `VGroup(...).arrange(DOWN, buff=0.4)` — never two independent `.next_t
 
 ---
 
+## Fixed bugs (in addition to A/V sync)
+
+### Cue index off-by-one — planner cues[] has N entries for N [CUE] markers, but N+1 segments exist
+- **Root cause:** The LLM was told "2-4 [CUE] markers per section" but wasn't told that `cues[]` needs N+1 entries — one per segment, including the opening segment before the first `[CUE]`. So `cues[0]` always described what should be the second visual, and the last cue always had `visual: ""`.
+- **Fix:** `planner_system.md` now explicitly states cues[] must have (number of [CUE] markers + 1) entries, with `index 0` covering the opening segment. Example updated to match. `_extract_cues` now warns and synthesizes a fallback visual (from section title + narration) instead of passing `visual: ""` to the Director.
+
 ## Known issues / next steps
 
 1. **Cue-word tokenization mismatch risk:** `cue_parser` uses `str.split()` word counts; edge-tts may tokenize differently. No integration test guards this yet.
