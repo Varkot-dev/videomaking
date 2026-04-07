@@ -86,10 +86,10 @@ class TestCapSections:
         assert result == {"title": "Test"}
 
     def test_topic_cap_constant_is_8(self):
-        assert _MAX_SECTIONS_TOPIC == 8
+        assert _MAX_SECTIONS_TOPIC == 6
 
     def test_pdf_cap_constant_is_10(self):
-        assert _MAX_SECTIONS_PDF == 10
+        assert _MAX_SECTIONS_PDF == 8
 
 
 # ── plan_lesson (mocked LLM) ──────────────────────────────────────────────────

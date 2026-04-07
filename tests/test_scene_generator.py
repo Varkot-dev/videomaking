@@ -7,13 +7,17 @@ LLM calls are mocked — zero API cost.
 
 import pytest
 from manimgen.generator.scene_generator import (
-    _estimate_narration_duration,
-    _class_name_from_section,
+    _estimate_duration,
+    _class_name,
     _WORDS_PER_MINUTE,
 )
 
+# Aliases for test readability
+_estimate_narration_duration = _estimate_duration
+_class_name_from_section = _class_name
 
-# ── _estimate_narration_duration ──────────────────────────────────────────────
+
+# ── _estimate_duration ──────────────────────────────────────────────────────
 
 class TestEstimateNarrationDuration:
 
@@ -63,7 +67,7 @@ class TestEstimateNarrationDuration:
         assert 20 <= duration <= 60
 
 
-# ── _class_name_from_section ──────────────────────────────────────────────────
+# ── _class_name ──────────────────────────────────────────────────────────────
 
 class TestClassNameFromSection:
 
