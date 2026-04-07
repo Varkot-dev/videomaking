@@ -45,17 +45,36 @@ def _extract_cues(plan: dict) -> dict:
         section["narration"] = clean
         section["cue_word_indices"] = indices
 
-        # Ensure section["cues"] exists and is indexed correctly
+        # Ensure section["cues"] exists and is indexed correctly.
+        # cues[] must have len(indices) entries — one per segment (including the
+        # opening segment at index 0, before the first [CUE]).
         existing_cues = section.get("cues", [])
-        # Fill any missing cue entries with empty visuals
+        n_segments = len(indices)
+        if existing_cues and len(existing_cues) != n_segments:
+            logger.warning(
+                "[planner] Section '%s' has %d cues[] but %d segments (%d [CUE] markers). "
+                "Planner likely omitted the opening cue (index 0). Synthesising fallbacks for missing entries.",
+                section.get("id", "?"),
+                len(existing_cues),
+                n_segments,
+                n_segments - 1,
+            )
+
+        title = section.get("title", "")
         cues_out = []
-        for i in range(len(indices)):
+        for i in range(n_segments):
             if i < len(existing_cues):
                 entry = dict(existing_cues[i])
                 entry["index"] = i
                 cues_out.append(entry)
             else:
-                cues_out.append({"index": i, "visual": ""})
+                # Synthesise a minimal fallback so the Director never receives visual: "".
+                fallback = f"Section '{title}': animate segment {i + 1} of {n_segments}."
+                logger.warning(
+                    "[planner] Section '%s' cue %d has no visual description — using fallback: %r",
+                    section.get("id", "?"), i, fallback,
+                )
+                cues_out.append({"index": i, "visual": fallback})
         section["cues"] = cues_out
 
         if len(indices) == 1:

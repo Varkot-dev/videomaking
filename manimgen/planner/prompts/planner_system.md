@@ -18,20 +18,50 @@ Return ONLY a valid JSON object. No markdown, no explanation.
       "cues": [
         {
           "index": 0,
-          "visual": "A horizontal row of 12 grey rectangles appears center-screen, each containing a number (2, 7, 11, 15, 23, 31, 42, 58, 67, 74, 89, 95). A yellow highlight box slowly scans left to right through each element, one by one. Text 'Target: 67' appears top-right in white."
+          "visual": "Title 'Binary Search' fades in top-center in white font_size 52. A horizontal row of 12 grey rectangles appears center-screen, each labeled with a number (2, 7, 11, 15, 23, 31, 42, 58, 67, 74, 89, 95). Text 'Target: 67' appears top-right in yellow."
         },
         {
           "index": 1,
-          "visual": "The scanning highlight stops mid-way. A red X appears over it. The number '1,000,000' fades in large in the center, then fades out. Text 'O(n)' appears in red bottom-center."
+          "visual": "A yellow highlight box sweeps left-to-right across the 12 rectangles one by one, each lighting up briefly. A counter in bottom-left increments from 1 to 12. The highlight stops at element 9 (67). Red text 'O(n) — up to 1,000,000 checks' appears bottom-center."
         },
         {
           "index": 2,
-          "visual": "All elements fade to grey except the middle one (42), which glows blue. An arrow points at it from above labeled 'midpoint'. The scene pauses on this image."
+          "visual": "All rectangles fade to grey. The middle element (42) glows blue. A white arrow drops from above onto it, labeled 'midpoint?'. The 12 rectangles split: left half fades further (lighter grey), right half stays normal grey. Scene holds."
         }
       ]
     }
   ]
 }
+```
+
+**CRITICAL — cues[] array length rule:**
+
+If your narration contains N `[CUE]` markers, `cues[]` MUST have exactly **N + 1** entries.
+
+- `index 0` = the opening segment, before the first `[CUE]`
+- `index 1` = the segment after the first `[CUE]`
+- ...
+- `index N` = the closing segment, after the last `[CUE]`
+
+The narration above has 2 `[CUE]` markers → `cues[]` has 3 entries (index 0, 1, 2). This is correct.
+
+**WRONG** — only writing one cue per `[CUE]` marker (misses the opening segment, leaves last cue empty):
+```json
+"narration": "Opening text. [CUE] Middle text. [CUE] Closing text.",
+"cues": [
+  {"index": 0, "visual": "Middle visual here"},
+  {"index": 1, "visual": "Closing visual here"}
+]
+```
+
+**CORRECT** — N+1 cues for N markers, index 0 covers the opening:
+```json
+"narration": "Opening text. [CUE] Middle text. [CUE] Closing text.",
+"cues": [
+  {"index": 0, "visual": "Opening visual — what plays from the start"},
+  {"index": 1, "visual": "Middle visual — what plays after first [CUE]"},
+  {"index": 2, "visual": "Closing visual — what plays after second [CUE]"}
+]
 ```
 
 ## Rules for the `visual` field — this is the most important thing you produce
