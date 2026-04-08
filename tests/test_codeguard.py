@@ -397,3 +397,39 @@ class TestSurroundingRectangleAutoWrap:
         # Only assert the banned pattern still catches it:
         errors = validate_scene_code(code)
         assert any("ShowCreation" in e for e in errors)
+
+
+# ── Tex() \text{} outer wrapper strip ──────────────────────────────────────
+
+class TestTexTextOuterWrapperStrip:
+
+    def test_strips_text_wrapper_single_quotes(self):
+        code = r"label = Tex(r'\text{Bubble Sort}')"
+        fixed, applied = apply_known_fixes(code)
+        assert r"\text{" not in fixed
+        assert "Tex(r'Bubble Sort')" in fixed
+        assert any(r"\text{}" in a for a in applied)
+
+    def test_strips_text_wrapper_double_quotes(self):
+        code = r'label = Tex(r"\text{Step 1}")'
+        fixed, applied = apply_known_fixes(code)
+        assert r"\text{" not in fixed
+        assert r'Tex(r"Step 1")' in fixed
+
+    def test_does_not_strip_mid_expression(self):
+        # \text{} used correctly inside an expression — must NOT be touched
+        code = r'label = Tex(r"f(x) = \text{identity}")'
+        fixed, applied = apply_known_fixes(code)
+        assert r"\text{identity}" in fixed
+        assert applied == []
+
+    def test_does_not_strip_mixed_math_and_text(self):
+        # Valid use: math with a text annotation
+        code = r'label = Tex(r"\forall n \in \mathbb{N}, \text{n is positive}")'
+        fixed, applied = apply_known_fixes(code)
+        assert r"\text{n is positive}" in fixed
+        assert applied == []
+
+    def test_validate_detects_outer_text_wrapper(self):
+        errors = validate_scene_code(r'Tex(r"\text{Bubble Sort}")')
+        assert any(r"\text{}" in e for e in errors)

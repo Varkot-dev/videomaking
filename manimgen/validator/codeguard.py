@@ -21,6 +21,11 @@ _BANNED_PATTERNS: list[tuple[str, str]] = [
         "Wrap SurroundingRectangle/BackgroundRectangle in ShowCreation(): "
         "self.play(ShowCreation(SurroundingRectangle(...))).",
     ),
+    (
+        r"""Tex\(\s*r?['"]\s*\\text\{[^}]*\}\s*['"]\s*\)""",
+        r"Remove outer \text{} wrapper from Tex(): use Tex(r'content') not Tex(r'\text{content}'). "
+        r"\text{} inside a longer expression like Tex(r'f(x) = \text{label}') is fine.",
+    ),
 ]
 
 _BANNED_KWARGS = [
@@ -145,6 +150,10 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
     if font_applied:
         applied.append(font_applied)
 
+    fixed, text_applied = _strip_outer_text_wrapper(fixed)
+    if text_applied:
+        applied.append(text_applied)
+
     return fixed, applied
 
 
@@ -176,6 +185,24 @@ def _remove_font_kwarg_from_tex(code: str) -> tuple[str, str | None]:
     new, count = re.subn(pattern, r"\1\2", code)
     if count:
         return new, f"removed font= from Tex ({count})"
+    return code, None
+
+
+def _strip_outer_text_wrapper(code: str) -> tuple[str, str | None]:
+    r"""Strip \text{...} when it is the sole content of a Tex() first argument.
+
+    Matches:  Tex(r"\text{some label}")  or  Tex("\text{some label}")
+    Leaves:   Tex(r"f(x) = \text{annotation}")  — \text mid-expression is valid.
+    """
+    # Match only when \text{...} is the ENTIRE string argument (anchored by
+    # quote boundaries). Avoids touching valid mid-expression uses.
+    pattern = re.compile(
+        r"""(Tex\(\s*r?)(['"]) \s* \\text\{([^}]*)\} \s* \2""",
+        re.VERBOSE,
+    )
+    new, count = re.subn(pattern, r"\1\2\3\2", code)
+    if count:
+        return new, r"stripped outer \text{{}} wrapper from Tex() ({})".format(count)
     return code, None
 
 
