@@ -446,3 +446,33 @@ class TestTexTextOuterWrapperStrip:
         code = r'Tex(r"\text{a}", r"\text{b}")'
         errors = validate_scene_code(code)
         assert any(r"\text{}" in e for e in errors)
+
+
+# ── VGroup item assignment ban ────────────────────────────────────────────
+
+class TestVGroupItemAssignmentBan:
+
+    def test_detects_double_index_assignment(self):
+        errors = validate_scene_code("vgroup[i][j] = new_obj")
+        assert any("VGroup" in e and "item assignment" in e for e in errors)
+
+    def test_detects_single_index_assignment(self):
+        errors = validate_scene_code("cells[0] = Text('new')")
+        assert any("VGroup" in e and "item assignment" in e for e in errors)
+
+    def test_normal_index_read_not_flagged(self):
+        # Reading from index is fine
+        errors = validate_scene_code("obj = vgroup[0]")
+        assert not any("item assignment" in e for e in errors)
+
+    def test_equality_comparison_not_flagged(self):
+        # vgroup[0] == something — comparison, not assignment
+        errors = validate_scene_code("if vgroup[0] == other: pass")
+        assert not any("item assignment" in e for e in errors)
+
+    def test_apply_known_fixes_makes_no_change(self):
+        # No autofix — structural problem
+        code = "vgroup[0][1] = new_mob"
+        fixed, applied = apply_known_fixes(code)
+        assert fixed == code
+        assert applied == []

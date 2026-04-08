@@ -26,6 +26,12 @@ _BANNED_PATTERNS: list[tuple[str, str]] = [
         r"Remove outer \text{} wrapper from Tex(): use Tex(r'content') not Tex(r'\text{content}'). "
         r"\text{} inside a longer expression like Tex(r'f(x) = \text{label}') is fine.",
     ),
+    (
+        r"\w+\[.+?\]\s*=(?!=)\s*\S",
+        "VGroup does not support item assignment (vgroup[i] = x raises TypeError). "
+        "Use a Python list for mutable indexed storage, then rebuild: "
+        "items[i] = new_mob; group = VGroup(*items).",
+    ),
 ]
 
 _BANNED_KWARGS = [
