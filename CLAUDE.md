@@ -415,6 +415,47 @@ All four high-priority patterns that caused 60% fallback rate in "bubble sort" r
 
 Director prompt (`director_system.md`), retry prompt (`retry_system.md`), and `scene_generator.py` hardcoded rule also corrected. 5 new example scenes added to `examples/` covering sweep_highlight, stagger_reveal, equation_morph, brace_annotation, fade_reveal. 337 tests pass.
 
+### HIGH PRIORITY — VGroup swap pattern causes 40% fallback rate (2 of 5 sections)
+Confirmed from "bubble sort" smoke test on 2026-04-08 (branch main, post-fix). Sections 03 and 04 still fall back.
+
+**Root cause:** When the topic involves an algorithm that physically swaps elements (bubble sort, selection sort, insertion sort), the Director generates animated swap code using VGroup item assignment like:
+```python
+boxes[i], boxes[i+1] = boxes[i+1], boxes[i]    # ← CRASH: VGroup.__setitem__ not supported
+labels[j], labels[j + 1] = labels[j + 1], labels[j]  # ← same crash
+```
+The LLM knows it needs to track which physical box is at which position after swaps, and reaches for Python's natural tuple-swap idiom — but VGroup doesn't support `__setitem__`.
+
+**Why codeguard can't auto-fix it:** The swap `boxes[i], boxes[i+1] = boxes[i+1], boxes[i]` is valid Python syntax (tuple unpacking), but semantically wrong for VGroup. There's no safe mechanical transformation — the correct fix is architectural: use a **parallel Python list** (`box_list = list(boxes)`) for index tracking, and only use VGroup for rendering.
+
+**Why the retry LLM also fails:** The retry budget is 1 LLM call. The LLM receives the precheck error message and the broken code, but rewriting a 100+ line scene to restructure the entire swap loop is beyond what a repair call reliably does — especially since the pattern recurs several times.
+
+**Architectural options for next session:**
+
+**Option A — Example scene (highest leverage, zero pipeline changes)**
+Add `examples/bubble_sort_swap_scene.py` tagged `techniques: array_swap`. Show the correct pattern:
+```python
+box_list = list(boxes)   # parallel Python list for index tracking
+# ... swap animation ...
+box_list[i], box_list[i+1] = box_list[i+1], box_list[i]  # swap the list references
+# boxes VGroup is rebuilt or not used for index access after swaps
+```
+`_index_examples()` picks it up automatically when any cue visual mentions "swap", "sort", "exchange".
+
+**Option B — Planner-level constraint**
+Add a rule to `planner_system.md`: when generating visuals for swap-based algorithms, always describe the visual as "two boxes move to each other's positions" (pure animation) rather than implying programmatic index tracking. This avoids the swap-reference problem by framing it as a pure `.animate.move_to()` problem — no need to track which box is logically at which index.
+
+**Option C — codeguard pattern + auto-fix**
+Detect `\w+\[(\w+)\],\s*\w+\[(\w+)\]\s*=` (tuple-swap on subscript) and rewrite to insert `_list = list(\w+)` before the swap and update references. High complexity, easy to get wrong.
+
+**Recommendation:** A + B together. Example scene teaches the correct visual pattern. Planner constraint prevents the Director from needing index tracking at all. Together they close this class of failure for any algorithm with swaps.
+
+**Log artifacts** (2026-04-08 run):
+- `output/logs/Section03Scene_attempt1.py` — 115 lines, swap at line 77: `boxes[i], boxes[i+1] = boxes[i+1], boxes[i]`
+- `output/logs/Section04Scene_attempt1.py` — 184 lines, swap at line 131: `labels[j], labels[j + 1] = labels[j + 1], labels[j]`
+- `output/logs/Section03Scene_20260408_162749.log` — precheck error: VGroup item assignment
+- `output/logs/Section04Scene_20260408_162901.log` — precheck error: VGroup item assignment
+- Section 05 **FIXED** — `\text{}` wrapper stripped by new codeguard fix, 0 issues after
+
 ### Other known issues
 4. **Cue-word tokenization mismatch risk:** `cue_parser` uses `str.split()` word counts; edge-tts may tokenize differently. No integration test guards this yet.
 5. **PDF rendering:** Currently renders every page to PNG unconditionally, even text-heavy PDFs. Should use 3-way logic (text-only / image-only / mixed).
@@ -436,7 +477,7 @@ Director prompt (`director_system.md`), retry prompt (`retry_system.md`), and `s
 ## Testing (zero cost)
 
 ```bash
-python3 -m pytest tests/ -v                    # all 314 tests (excl. LLM-calling tests)
+python3 -m pytest tests/ -v                    # all 337 tests (excl. LLM-calling tests)
 python3 -m pytest tests/test_codeguard.py -v   # just static fixes
 python3 -m pytest tests/test_pipeline_contracts.py -v   # A/V sync contracts
 python3 -m pytest tests/test_cue_parser.py tests/test_segmenter.py tests/test_audio_slicer.py -v  # CUE pipeline
