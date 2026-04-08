@@ -9,19 +9,20 @@ class ParametricSurfaceScene(ThreeDScene):
     Key rules demonstrated here:
     - ThreeDScene base class enables depth test and 3D camera; never use Scene for 3D content.
     - self.frame.reorient(theta_degrees, phi_degrees) sets initial camera orientation.
-    - self.frame.add_ambient_rotation(speed) drives continuous spin — remove updaters before FadeOut.
+    - self.frame.add_ambient_rotation(angular_speed=...) drives continuous spin — remove updaters before FadeOut.
     - ThreeDAxes(x_range, y_range, z_range) for 3D coordinate frame.
     - ParametricSurface(uv_func, u_range, v_range) — uv_func returns a 3D point directly (no axes.c2p needed).
     - SurfaceMesh on top of ParametricSurface for wireframe overlay.
     - surface.set_color_by_xyz_func(glsl_snippet) — takes a GLSL string (e.g. "z"), not a Python lambda.
-    - surface.set_shading(diffuse, specular, ambient) for lighting depth cues.
+    - surface.set_shading(reflectiveness, gloss, shadow) for lighting depth cues.
     - clear_updaters() on self.frame before FadeOut to stop rotation.
+    - label.fix_in_frame() pins 2D text to screen — add_fixed_in_frame_mobjects() does NOT exist.
     """
 
     def construct(self):
         # --- Title ---
         title = Text("Parametric Surfaces", font_size=52).to_edge(UP, buff=0.5)
-        self.add_fixed_in_frame_mobjects(title)
+        title.fix_in_frame()
         self.play(Write(title), run_time=1.0)
         self.wait(0.3)
 
@@ -64,12 +65,12 @@ class ParametricSurfaceScene(ThreeDScene):
         # --- Formula label pinned to frame (not 3D space) ---
         formula = Tex(r"z = \sin(x)\cos(y)", color=YELLOW).scale(0.9)
         formula.to_corner(DL, buff=0.5)
-        self.add_fixed_in_frame_mobjects(formula)
+        formula.fix_in_frame()
         self.play(FadeIn(formula, shift=RIGHT * 0.3), run_time=0.8)
         self.wait(0.3)
 
         # --- Ambient camera rotation ---
-        self.frame.add_ambient_rotation(speed=0.15)
+        self.frame.add_ambient_rotation(angular_speed=0.15)
         self.wait(4.0)
 
         # --- Stop rotation, clean exit ---
