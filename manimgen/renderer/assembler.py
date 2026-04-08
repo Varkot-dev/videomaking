@@ -26,6 +26,14 @@ _XFADE_DURATION = 0.3
 _CUE00_PATTERN = re.compile(r"_cue00\.mp4$")
 
 
+def _vf_scale() -> str:
+    """Build the FFmpeg -vf scale filter string from config."""
+    res = paths.render_resolution()          # e.g. "1920x1080"
+    w, h = res.replace("x", ":").split(":")
+    fps = paths.render_fps()
+    return f"scale={w}:{h},fps={fps},format=yuv420p"
+
+
 def assemble_video(video_paths: list[str], title: str) -> str:
     """Concatenate cue clips into the final video.
 
@@ -84,7 +92,7 @@ def _normalise_all(paths: list[str], work_dir: str) -> list[str]:
             cmd = [
                 "ffmpeg", "-y",
                 "-i", path,
-                "-vf", "scale=1920:1080,fps=30,format=yuv420p",
+                "-vf", _vf_scale(),
                 "-c:v", "libx264", "-preset", "veryfast",
                 "-c:a", "aac", "-ar", "48000",
                 norm,
@@ -97,7 +105,7 @@ def _normalise_all(paths: list[str], work_dir: str) -> list[str]:
                 "ffmpeg", "-y",
                 "-i", path,
                 "-f", "lavfi", "-t", str(dur), "-i", "anullsrc=r=48000:cl=stereo",
-                "-vf", "scale=1920:1080,fps=30,format=yuv420p",
+                "-vf", _vf_scale(),
                 "-c:v", "libx264", "-preset", "veryfast",
                 "-c:a", "aac", "-ar", "48000",
                 "-shortest",

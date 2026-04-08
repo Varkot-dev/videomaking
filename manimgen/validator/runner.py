@@ -46,7 +46,7 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
 
     try:
         result = subprocess.run(
-            ["manimgl", scene_path, class_name, "-w", "--hd", "-c", "#1C1C1C"],
+            ["manimgl", scene_path, class_name, "-w", paths.render_quality_flag(), "-c", "#1C1C1C"],
             capture_output=True,
             text=True,
             timeout=timeout,

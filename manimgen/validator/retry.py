@@ -8,8 +8,8 @@ from manimgen.validator.env import get_render_env
 from manimgen.validator.layout_checker import check_layout
 from manimgen import paths
 
-MAX_RETRIES = 3
-MAX_LLM_FIX_CALLS = int(os.environ.get("MANIMGEN_MAX_RETRY_LLM_CALLS", "1"))
+MAX_RETRIES = paths.render_max_retries()
+MAX_LLM_FIX_CALLS = int(os.environ.get("MANIMGEN_MAX_RETRY_LLM_CALLS", str(MAX_RETRIES)))
 RETRY_ERROR_SIGNATURE_CHARS = 500
 RETRY_PROMPT_STDERR_CHARS = 3000
 RETRY_PROMPT_CODE_CHARS = 7000
@@ -164,7 +164,7 @@ def _run_and_capture(scene_path: str, class_name: str) -> dict:
     timeout = 360 if _is_3d_scene(scene_path) else 240
     try:
         result = subprocess.run(
-            ["manimgl", scene_path, class_name, "-w", "--hd", "-c", "#1C1C1C"],
+            ["manimgl", scene_path, class_name, "-w", paths.render_quality_flag(), "-c", "#1C1C1C"],
             capture_output=True,
             text=True,
             timeout=timeout,
