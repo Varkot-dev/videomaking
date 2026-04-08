@@ -433,3 +433,16 @@ class TestTexTextOuterWrapperStrip:
     def test_validate_detects_outer_text_wrapper(self):
         errors = validate_scene_code(r'Tex(r"\text{Bubble Sort}")')
         assert any(r"\text{}" in e for e in errors)
+
+    def test_no_r_prefix_stripped(self):
+        # Tex("\text{label}") without r prefix — should also strip
+        code = 'label = Tex("\\text{Bubble Sort}")'
+        fixed, applied = apply_known_fixes(code)
+        assert "\\text{" not in fixed
+        assert any("\\text{}" in a for a in applied)
+
+    def test_multi_arg_second_text_flagged_by_validator(self):
+        # Multi-arg: fix handles first arg only, but validator catches the second
+        code = r'Tex(r"\text{a}", r"\text{b}")'
+        errors = validate_scene_code(code)
+        assert any(r"\text{}" in e for e in errors)

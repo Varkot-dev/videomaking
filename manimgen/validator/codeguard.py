@@ -22,7 +22,7 @@ _BANNED_PATTERNS: list[tuple[str, str]] = [
         "self.play(ShowCreation(SurroundingRectangle(...))).",
     ),
     (
-        r"""Tex\(\s*r?['"]\s*\\text\{[^}]*\}\s*['"]\s*\)""",
+        r"""Tex\(\s*r?['"]\s*\\text\{[^}]*\}\s*['"]\s*[,)]""",
         r"Remove outer \text{} wrapper from Tex(): use Tex(r'content') not Tex(r'\text{content}'). "
         r"\text{} inside a longer expression like Tex(r'f(x) = \text{label}') is fine.",
     ),
@@ -202,7 +202,7 @@ def _strip_outer_text_wrapper(code: str) -> tuple[str, str | None]:
     )
     new, count = re.subn(pattern, r"\1\2\3\2", code)
     if count:
-        return new, r"stripped outer \text{{}} wrapper from Tex() ({})".format(count)
+        return new, f"stripped outer \\text{{}} wrapper from Tex() ({count})"
     return code, None
 
 
