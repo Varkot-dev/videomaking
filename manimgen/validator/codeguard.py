@@ -232,33 +232,9 @@ def apply_error_aware_fixes(code: str, stderr: str) -> tuple[str, list[str]]:
         kw_match = re.search(r"got an unexpected keyword argument '(\w+)'", stderr)
         if kw_match:
             bad_kw = kw_match.group(1)
-            if bad_kw == "font_size":
-                # font_size is valid on Text() but not Tex()/MathTex(). Convert to
-                # .scale() so sizing is preserved: Tex("x", font_size=48) -> Tex("x").scale(1.5)
-                # 32 = baseline, scale = font_size / 32
-                def _fs_to_scale(m: re.Match) -> str:
-                    fs_val = m.group(1).strip()
-                    try:
-                        scale = round(float(fs_val) / 32, 2)
-                    except ValueError:
-                        scale = 1.0
-                    return f").scale({scale})"
-                new_fixed = re.sub(
-                    r",?\s*font_size\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*(\))",
-                    lambda m: f").scale({round(float(m.group(1)) / 32, 2)})",
-                    fixed,
-                )
-                count = fixed != new_fixed
-                if count:
-                    applied.append(f"font_size= on Tex -> .scale() ({count})")
-                    fixed = new_fixed
-                else:
-                    # Fallback: just strip it
-                    new_fixed, count = re.subn(rf",?\s*{bad_kw}\s*=\s*[^,\)\n]+", "", fixed)
-                    if count:
-                        applied.append(f"removed unexpected kwarg '{bad_kw}' ({count})")
-                        fixed = new_fixed
-            else:
+            # font_size= is a valid kwarg on Tex() (handled internally) — do not strip or convert.
+            # Only strip genuinely unexpected kwargs.
+            if bad_kw != "font_size":
                 new_fixed, count = re.subn(rf",?\s*{bad_kw}\s*=\s*[^,\)\n]+", "", fixed)
                 if count:
                     applied.append(f"removed unexpected kwarg '{bad_kw}' ({count})")

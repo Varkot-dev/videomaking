@@ -476,3 +476,33 @@ class TestVGroupItemAssignmentBan:
         fixed, applied = apply_known_fixes(code)
         assert fixed == code
         assert applied == []
+
+
+# ── font_size= on Tex() — not double-scaled ───────────────────────────────────
+
+class TestFontSizeOnTexNotDoubleScaled:
+
+    def test_font_size_on_tex_left_alone_by_error_aware(self):
+        # font_size= is a valid Tex() kwarg — must NOT be converted to .scale()
+        code = 'label = Tex(r"x^2 + y^2", font_size=48)'
+        fixed, applied = apply_error_aware_fixes(
+            code,
+            "TypeError: Animation.__init__() got an unexpected keyword argument 'font_size'"
+        )
+        assert ".scale(" not in fixed
+        assert "font_size=48" in fixed
+
+    def test_font_size_not_stripped_by_known_fixes(self):
+        # apply_known_fixes must not touch font_size= on Tex either
+        code = 'eq = Tex(r"\\frac{1}{2}", font_size=36)'
+        fixed, applied = apply_known_fixes(code)
+        assert "font_size=36" in fixed
+        assert applied == []
+
+    def test_other_unexpected_kwarg_still_stripped(self):
+        # Other genuinely unknown kwargs must still be stripped
+        code = "FadeIn(obj, bogus_param=True)"
+        stderr = "TypeError: Animation.__init__() got an unexpected keyword argument 'bogus_param'"
+        fixed, applied = apply_error_aware_fixes(code, stderr)
+        assert "bogus_param" not in fixed
+        assert any("bogus_param" in a for a in applied)

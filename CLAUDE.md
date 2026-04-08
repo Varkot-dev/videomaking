@@ -10,7 +10,7 @@ Uses an audio-first CUE pipeline where spoken word timestamps drive animation du
 **Stack:** Python 3.13, ManimGL (3b1b fork), Gemini 2.5 Flash, FFmpeg 8.1, LaTeX, edge-tts, Flask (editor)
 
 **Repo:** `https://github.com/Varkot-dev/videomaking.git` — branch `main`
-**297 tests, all passing** (`python3 -m pytest tests/ --ignore=tests/test_scene_generator.py --ignore=tests/test_planner.py -v`)
+**314 tests, all passing** (`python3 -m pytest tests/ --ignore=tests/test_scene_generator.py --ignore=tests/test_planner.py --ignore=tests/test_pipeline_e2e.py -v`)
 
 ---
 
@@ -49,7 +49,7 @@ manimgen/
 │   │   └── prompts/             # planner_system.md, planner_pdf_system.md
 │   ├── generator/
 │   │   ├── scene_generator.py   # Director: LLM → one ManimGL Scene per section
-│   │   └── prompts/             # director_system.md, rules_core.md
+│   │   └── prompts/             # director_system.md
 │   ├── validator/
 │   │   ├── codeguard.py         # static checks + auto-fixes (font_size→scale, banned kwargs, layout smells)
 │   │   ├── runner.py            # subprocess manimgl with -c #1C1C1C, logs attempt
@@ -68,7 +68,7 @@ manimgen/
 │       ├── server.py            # Flask UI for clip review, reorder, trim, export
 │       └── templates/editor.html
 ├── examples/                    # hand-written verified ManimGL scenes (Director few-shot reference)
-├── tests/                       # 318 pytest tests
+├── tests/                       # 314 pytest tests
 ├── config.yaml                  # LLM provider, TTS config, render quality
 ├── requirements.txt
 └── setup.py                     # console_scripts: manimgen, manimgen-edit
@@ -142,7 +142,7 @@ export GEMINI_API_KEY=...       # or ANTHROPIC_API_KEY + LLM_PROVIDER=anthropic
 
 manimgen "binary search"        # topic mode (up to 6 sections)
 manimgen --pdf notes.pdf        # PDF mode (up to 8 sections)
-manimgen --resume               # resume from cached plan.json (skips already-muxed)
+manimgen --resume               # resume from cached plan.json (skips LLM planning call)
 
 # Cost control
 MANIMGEN_MAX_RETRY_LLM_CALLS=1 manimgen "topic"   # cap retry LLM calls to 1 per scene
@@ -182,7 +182,7 @@ Resolution order (first wins):
 ### 1. Prompt architecture (Director model)
 - `planner/prompts/planner_system.md`: outputs storyboard with `cues[{index, visual}]`. Each `visual` starts with `Technique: <name>` and gives exact ManimGL-implementable descriptions (specific objects, colors, positions, motion). NOT vague concept descriptions.
 - `generator/prompts/director_system.md`: ManimGL API reference, layout zone rules, banned patterns, technique table. Kept tight — no inline scaffolds.
-- `examples/`: 20 hand-written verified ManimGL scenes (includes 3D scenes). Each has a `techniques:` tag in its docstring — `scene_generator.py` reads this tag to select relevant examples per section automatically. No hardcoded mappings in code.
+- `examples/`: 22 hand-written verified ManimGL scenes (includes 3D scenes). Each has a `techniques:` tag in its docstring — `scene_generator.py` reads this tag to select relevant examples per section automatically. No hardcoded mappings in code.
 - **DELETED:** `generator/prompts/spec_system.md`, `templates/` directory, `spec_schema.py` — the template engine is gone.
 
 **Example technique tag format** (first line inside class docstring):
@@ -237,7 +237,7 @@ Three layers of defense against text-over-diagram overlap:
 ## Key rules for development
 
 1. **Never use `--background_color`** — the correct flag is `-c "#1C1C1C"`
-2. **ManimGL `Tex()` does NOT accept `font_size=`** — only `Text()` does. codeguard converts it to `.scale()`.
+2. **ManimGL `Tex()` accepts `font_size=`** — it is a real parameter (default 48) handled internally via `.scale()`. `Text()` also accepts it. Do NOT convert `Tex(r"x", font_size=48)` to `.scale()` — that double-scales.
 3. **All prompts live as `.md` files** in `prompts/` dirs — never inline Python strings
 4. **Retry order:** codeguard auto-fix → error-aware fix (token-free) → LLM fix (budget-capped) → fallback
 5. **Token budget:** `MAX_LLM_FIX_CALLS` (default 1) limits paid retry calls
@@ -248,6 +248,7 @@ Three layers of defense against text-over-diagram overlap:
 10. **codeguard is the first line of defense** — extend it for any new known-bad pattern before touching prompts
 11. **Adding a new example scene:** add the file to `examples/`, add `techniques: <name>, <name>` as the first line of the class docstring. `scene_generator.py` picks it up automatically — no code changes needed.
 12. **Master Guidelines (`MASTER GUIDELINES.md`)** — no hardcoded mappings in code, no duplicate sources of truth, no speculative abstractions. Data lives in data (files, config); code reads it.
+13. **No duplicate source files** — the package lives exclusively in `manimgen/manimgen/`. Never create top-level mirrors of `cli.py`, `llm.py`, `validator/`, etc. at `manimgen/` root level. `find_packages()` picks up both and causes import confusion.
 
 ---
 
@@ -391,11 +392,31 @@ self.play(light.animate.move_to(3 * IN), run_time=5)
 
 ## Known issues / next steps
 
-1. **Cue-word tokenization mismatch risk:** `cue_parser` uses `str.split()` word counts; edge-tts may tokenize differently. No integration test guards this yet.
-2. **config.yaml partially wired:** `tts.*` and `llm_provider` are read by code. `output.*` and `rendering.*` paths are still hardcoded.
-3. **PDF rendering:** Currently renders every page to PNG unconditionally, even text-heavy PDFs. Should use 3-way logic (text-only / image-only / mixed).
-4. **No single integration test** for the full plan → TTS → slice → render → mux → assemble pipeline (only unit tests per module).
-5. **layout_checker.py uses LLM vision** — costs money per rendered frame check. Consider making it opt-in or running only on non-fallback scenes.
+### Visual feedback loop (partially fixed — 2026-04-08)
+Root cause identified from Section02Scene.mp4: rendered scenes with visual defects ship as final output. Status:
+
+1. **Layout checker feedback wired** ✓ — `retry.py` now feeds structured visual feedback back into an LLM fix call within the existing retry budget.
+2. **Only one frame sampled** (`layout_checker.py`) — extracts t=1.0s only. Mid-animation defects (swaps, transitions) are invisible. Fix: use `ffprobe` to get duration, sample frames at 25%/50%/75%, send all in one `chat()` call.
+3. **Layout checker prompt returns prose, not actionable feedback** (`layout_checker_system.md`) — returns "blue rectangle too wide" but the retry loop needs "caused by SurroundingRectangle on a mutating VGroup — recreate after each swap." Fix: rewrite prompt to return structured `ISSUE/CAUSE/FIX` lines the LLM can act on directly.
+
+**Files to change:** `layout_checker_system.md`, `layout_checker.py`, new `tests/test_layout_checker.py`
+
+**What was ruled out:** Adding more Director prompt rules or example scenes does not scale — no finite set of examples covers all animation types for arbitrary PDFs. The vision layer is the only general solution.
+
+### HIGH PRIORITY — Codeguard missing patterns (causing 60% fallback rate)
+Confirmed from "bubble sort" pipeline run on 2026-04-08: sections 3, 4, 5 all fell back due to static errors codeguard doesn't catch. Fix these in `codeguard.py` first before next pipeline run:
+
+1. **`self.play(SurroundingRectangle(...))` without ShowCreation** → `TypeError: Object SurroundingRectangle cannot be converted to an animation`. Fix: auto-rewrite to `self.play(ShowCreation(SurroundingRectangle(...)))`.
+2. **`Tex(r"\text{...}")` outside math mode** → `LatexError: Missing $ inserted`. Fix: strip `\text{}` wrapper or rewrite as `Text(...)`.
+3. **`vgroup[i][j] = value` VGroup item assignment** → `TypeError: 'VGroup' object does not support item assignment`. Can't auto-fix safely — add to banned patterns so retry prompt knows exactly what's wrong.
+
+All three are token-free static fixes. Add to `apply_known_fixes()` and `_BANNED_PATTERNS` in `codeguard.py`, with tests in `test_codeguard.py`.
+
+### Other known issues
+4. **Cue-word tokenization mismatch risk:** `cue_parser` uses `str.split()` word counts; edge-tts may tokenize differently. No integration test guards this yet.
+5. **PDF rendering:** Currently renders every page to PNG unconditionally, even text-heavy PDFs. Should use 3-way logic (text-only / image-only / mixed).
+6. **No single integration test** for the full plan → TTS → slice → render → mux → assemble pipeline (only unit tests per module).
+7. **layout_checker.py uses LLM vision** — costs money per rendered frame check. Currently Gemini (cheaper). Consider making opt-in or running only on non-fallback scenes.
 
 ---
 
@@ -412,7 +433,7 @@ self.play(light.animate.move_to(3 * IN), run_time=5)
 ## Testing (zero cost)
 
 ```bash
-python3 -m pytest tests/ -v                    # all 297 tests (excl. LLM-calling tests)
+python3 -m pytest tests/ -v                    # all 314 tests (excl. LLM-calling tests)
 python3 -m pytest tests/test_codeguard.py -v   # just static fixes
 python3 -m pytest tests/test_pipeline_contracts.py -v   # A/V sync contracts
 python3 -m pytest tests/test_cue_parser.py tests/test_segmenter.py tests/test_audio_slicer.py -v  # CUE pipeline
