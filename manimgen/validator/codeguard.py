@@ -16,6 +16,11 @@ _BANNED_PATTERNS: list[tuple[str, str]] = [
     (r"\.get_tex_string\s*\(", "Never call .get_tex_string() to read back values — store data in Python variables instead."),
     (r"\bscale_factor\s*=", "Remove `scale_factor`; FadeIn/FadeOut in ManimGL does not support it."),
     (r"\bCircumscribe\s*\(", "Use `FlashAround(...)` in ManimGL, not `Circumscribe(...)`."),
+    (
+        r"self\.play\(\s*(?:Surrounding|Background)Rectangle\s*\(",
+        "Wrap SurroundingRectangle/BackgroundRectangle in ShowCreation(): "
+        "self.play(ShowCreation(SurroundingRectangle(...))).",
+    ),
 ]
 
 _BANNED_KWARGS = [
@@ -34,6 +39,18 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
         (r"\bCreate\s*\(", "ShowCreation(", "Create -> ShowCreation"),
         (r"self\.camera\.frame", "self.frame", "self.camera.frame -> self.frame"),
         (r"\bCircumscribe\s*\(", "FlashAround(", "Circumscribe -> FlashAround"),
+        # SurroundingRectangle/BackgroundRectangle are Mobjects, not Animations.
+        # Wrap them in ShowCreation() so self.play() can accept them.
+        (
+            r"self\.play\(\s*(SurroundingRectangle\s*\([^)]*\))\s*\)",
+            r"self.play(ShowCreation(\1))",
+            "wrapped SurroundingRectangle in ShowCreation",
+        ),
+        (
+            r"self\.play\(\s*(BackgroundRectangle\s*\([^)]*\))\s*\)",
+            r"self.play(ShowCreation(\1))",
+            "wrapped BackgroundRectangle in ShowCreation",
+        ),
         # ManimCommunity Axes uses x_length/y_length; ManimGL uses width/height
         (r"\bx_length\s*=", "width=", "x_length -> width (ManimGL Axes)"),
         (r"\by_length\s*=", "height=", "y_length -> height (ManimGL Axes)"),

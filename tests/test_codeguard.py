@@ -338,3 +338,34 @@ class TestRemoveFontFromTex:
         fixed, label = _remove_font_kwarg_from_tex(code)
         assert "font=" in fixed
         assert label is None
+
+
+# ── SurroundingRectangle/BackgroundRectangle AutoWrap ──────────────────────
+
+class TestSurroundingRectangleAutoWrap:
+
+    def test_bare_surrounding_rect_wrapped_in_show_creation(self):
+        code = "self.play(SurroundingRectangle(obj))"
+        fixed, applied = apply_known_fixes(code)
+        assert "ShowCreation(SurroundingRectangle(obj))" in fixed
+        assert any("ShowCreation" in a for a in applied)
+
+    def test_bare_surrounding_rect_with_kwargs_wrapped(self):
+        code = "self.play(SurroundingRectangle(obj, color=YELLOW))"
+        fixed, applied = apply_known_fixes(code)
+        assert "ShowCreation(SurroundingRectangle(obj, color=YELLOW))" in fixed
+
+    def test_already_wrapped_not_double_wrapped(self):
+        code = "self.play(ShowCreation(SurroundingRectangle(obj)))"
+        fixed, applied = apply_known_fixes(code)
+        assert fixed == code
+        assert applied == []
+
+    def test_bare_background_rectangle_wrapped(self):
+        code = "self.play(BackgroundRectangle(obj))"
+        fixed, applied = apply_known_fixes(code)
+        assert "ShowCreation(BackgroundRectangle(obj))" in fixed
+
+    def test_validate_detects_bare_surrounding_rect(self):
+        errors = validate_scene_code("self.play(SurroundingRectangle(obj))")
+        assert any("ShowCreation" in e for e in errors)
