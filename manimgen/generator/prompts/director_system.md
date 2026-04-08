@@ -21,7 +21,7 @@ class SectionName(Scene):
 **Never show a black screen.** The user must always have something to look at.
 
 - Only FadeOut an element when something new is about to replace it.
-- If a cue has no major new animation, add a supporting visual instead: a label that appears, an arrow pointing at the key element, a SurroundingRectangle highlighting what the narrator is describing, a counter updating, a Brace with annotation.
+- If a cue has no major new animation, add a supporting visual instead: a label that appears, an arrow pointing at the key element, `self.play(ShowCreation(SurroundingRectangle(obj, color=YELLOW)))` highlighting what the narrator is describing, a counter updating, a Brace with annotation.
 - The full FadeOut (`FadeOut(m) for m in self.mobjects`) happens **only at the very end of the last cue** — never mid-scene.
 - Between cues: elements stay on screen and build. New elements appear on top of existing ones.
 
@@ -78,10 +78,31 @@ When axes + title both present: `axes.center().shift(DOWN * 0.8)` — always, wi
 | `width=W, height=H` in Axes | `x_length=W, y_length=H` |
 | `TransformMatchingTex(a, b)` | `TransformMatchingShapes(a, b)` |
 
-### Text
+### Mobjects vs Animations — the most common crash source
+
+`self.play()` only accepts **animations**, never raw Mobjects. Every shape you create is a Mobject. To display it, wrap it in an animation:
+
 ```python
-Text("string", font_size=48, color=WHITE)        # accepts font_size=
-Tex(r"\frac{1}{x}", color=YELLOW).scale(1.1)     # NO font_size= on Tex — use .scale()
+rect = SurroundingRectangle(obj, color=YELLOW)
+self.play(ShowCreation(rect))          # ✓ ShowCreation wraps the Mobject
+self.play(FadeIn(rect))                # ✓ FadeIn also works
+self.play(rect)                        # ✗ CRASH — rect is a Mobject, not an animation
+```
+
+This applies to every shape: `SurroundingRectangle`, `Circle`, `Arrow`, `Brace`, `Rectangle`, etc. The only objects that go directly into `self.play()` are animations like `ShowCreation(...)`, `Write(...)`, `FadeIn(...)`, `obj.animate.method(...)`.
+
+### Text — Tex for math, Text for labels
+```python
+# Math, equations, symbols, proofs — always Tex
+Tex(r"\frac{1}{x}", color=YELLOW)          # font_size= is valid: Tex(r"x^2", font_size=48)
+Tex(r"\forall n \in \mathbb{N}, n \geq 0") # proofs, logic, discrete math — Tex
+
+# Plain readable labels — always Text
+Text("Step 1", font_size=36, color=WHITE)  # no LaTeX needed
+
+# NEVER wrap an entire label in \text{}
+Tex(r"\text{Bubble Sort}")   # ✗ wrong — use Text("Bubble Sort") or Tex(r"Bubble Sort")
+Tex(r"f(x) = \text{output}") # ✓ \text{} mid-expression is fine
 ```
 
 ### Axes — always width/height, always shift down when title present
@@ -116,7 +137,7 @@ Rectangle(width=3.0, height=1.5, fill_color=BLUE, fill_opacity=0.3, stroke_width
 Circle(radius=1.0, color=BLUE)
 Arrow(start, end, color=WHITE)          # no tip_length= or tip_width=
 DashedLine(start, end, dash_length=0.12, color=GREY_B, stroke_width=2)
-SurroundingRectangle(obj, color=YELLOW, buff=0.1)
+SurroundingRectangle(obj, color=YELLOW, buff=0.1)  # always wrap: self.play(ShowCreation(SurroundingRectangle(...)))
 Brace(obj, direction=DOWN, buff=0.15, color=YELLOW)
 NumberLine(x_range=[a, b, step], length=L, include_numbers=True,
            decimal_number_config={"font_size": 28}, color=GREY_B)
@@ -185,16 +206,18 @@ obj.set_backstroke(width=8)    # text over busy backgrounds
 
 ## Banned — these crash
 ```
-font_size= on Tex()           → use .scale()
-tip_length=, tip_width=       → banned on Arrow
-corner_radius= on Rectangle   → not in ManimGL
-font= on Tex() or TexText()   → not supported
-x_length=, y_length= in Axes  → use width=, height=
-obj.animate with FadeIn/Out   → split into separate self.play() calls
-obj._mobjects                 → use obj.submobjects
-obj.get_tex_string()          → NEVER read values back from mobjects; store data in plain Python variables/lists
-Transform(text_a, text_b)     → crashes if glyphs differ in point count; use FadeOut(a) then FadeIn(b) to swap labels
-scan_rect.animate.move_to(x) → only moves, never resizes; use scan_rect.become(SurroundingRectangle(x, ...)) to resize+move
+self.play(SurroundingRectangle(...))  → CRASH — wrap in animation: self.play(ShowCreation(SurroundingRectangle(...)))
+Tex(r"\text{whole label}")            → use Text("whole label") or Tex(r"whole label") instead
+tip_length=, tip_width=               → banned on Arrow
+corner_radius= on Rectangle           → not in ManimGL
+font= on Tex() or TexText()           → not supported
+font_size= on Tex()                   → valid and correct — Tex(r"x^2", font_size=48) works fine
+x_length=, y_length= in Axes         → use width=, height=
+obj.animate with FadeIn/Out           → split into separate self.play() calls
+obj._mobjects                         → use obj.submobjects
+obj.get_tex_string()                  → NEVER read values back from mobjects; store in Python variables
+Transform(text_a, text_b)             → crashes if glyphs differ; use FadeOut(a) then FadeIn(b)
+scan_rect.animate.move_to(x)          → only moves, never resizes; use scan_rect.become(SurroundingRectangle(x, ...))
 ```
 
 ## Cinematic Technique Reference
