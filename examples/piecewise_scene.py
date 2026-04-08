@@ -3,6 +3,7 @@ from manimlib import *
 
 class PiecewiseScene(Scene):
     """
+    techniques: axes_curve
     Pattern: Piecewise function — multiple get_graph calls each with restricted x_range,
     open and filled endpoint dots, color-coded pieces.
 

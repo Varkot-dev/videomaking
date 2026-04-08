@@ -3,6 +3,7 @@ from manimlib import *
 
 class ShapeScene(Scene):
     """
+    techniques: stagger_reveal, fade_reveal
     Pattern: Shape animation — create, transform, recolor, group, fade.
     Covers: Circle, Square, Triangle, VGroup, ShowCreation, Transform,
             ReplacementTransform, set_color, arrange, GrowFromCenter.

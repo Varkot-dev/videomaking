@@ -3,6 +3,7 @@ from manimlib import *
 
 class EpsilonDeltaScene(Scene):
     """
+    techniques: tracker_label, brace_annotation
     Pattern: Epsilon-delta definition — two shrinking bands (horizontal epsilon, vertical delta)
     centered on a limit point, animated via ValueTrackers.
 

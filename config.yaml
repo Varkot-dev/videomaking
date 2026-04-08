@@ -15,9 +15,10 @@ output:
   plan_cache: manimgen/output/plan.json
 
 rendering:
-  quality: hd
+  quality: hd           # hd = 1080p | m = 480p | l = 720p
   resolution: "1920x1080"
-  max_retries: 3
+  fps: 30
+  max_retries: 1        # LLM retry calls per scene (increase for production)
 
 tts:
   engine: edge-tts  # edge-tts | elevenlabs | openai

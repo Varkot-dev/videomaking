@@ -3,6 +3,7 @@ from manimlib import *
 
 class CameraZoomScene(Scene):
     """
+    techniques: camera_zoom
     Pattern: Camera zoom into a region of interest, then zoom back out.
 
     Key techniques demonstrated:

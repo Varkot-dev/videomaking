@@ -3,6 +3,7 @@ from manimlib import *
 
 class NumberLineScene(Scene):
     """
+    techniques: number_line, brace_annotation
     Pattern: Number line — intervals, point markers, arrows, labels.
     No axes needed. Good for: sequences, intervals, modular arithmetic, delta-epsilon on 1D.
 

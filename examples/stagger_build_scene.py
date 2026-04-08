@@ -3,6 +3,7 @@ from manimlib import *
 
 class StaggerBuildScene(Scene):
     """
+    techniques: stagger_reveal, sweep_highlight
     Pattern: Staggered element-by-element reveal — for arrays, lists, steps,
     or any sequence where items should appear one after another.
 

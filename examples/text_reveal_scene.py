@@ -3,6 +3,7 @@ from manimlib import *
 
 class TextRevealScene(Scene):
     """
+    techniques: stagger_reveal, fade_reveal
     Pattern: Pure text scene — title, bullet points revealed one at a time,
     key term highlighted. No axes. Good for definitions, motivation, recap.
 

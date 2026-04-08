@@ -3,6 +3,7 @@ from manimlib import *
 
 class MatrixScene(Scene):
     """
+    techniques: grid_transform
     Pattern: Matrix transformation — show a number plane grid being
     transformed by a 2x2 matrix, with the matrix displayed on screen.
     Covers: NumberPlane, ApplyMatrix, IntegerMatrix, VGroup, Write, Transform.

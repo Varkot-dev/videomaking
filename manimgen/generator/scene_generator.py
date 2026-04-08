@@ -129,8 +129,11 @@ def _build_user_message(section: dict, cue_durations: list[float]) -> str:
         "5. Axes: `width=` and `height=` only — never `x_length=` or `y_length=`.",
         "6. `Tex()` has no `font_size=` — use `.scale()`. `Text()` accepts `font_size=`.",
         "7. Use `ShowCreation()`, `Tex()`, `self.frame` — never ManimCommunity equivalents.",
-        "8. End with `self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)`.",
+        "8. VISUAL CONTINUITY: Never show a black screen. Only FadeOut an element when something new replaces it. "
+           "If a cue has no new animation, add a relevant annotation, label, or highlight instead of waiting on empty screen. "
+           "End the scene with a gentle FadeOut only on the very last cue.",
         "9. Use at least 2 different techniques from the Cinematic Technique Reference.",
+        "10. Store all data values in plain Python variables/lists — never read state back from mobject attributes.",
         "",
         "Output ONLY Python. No explanation, no markdown fencing.",
     ]

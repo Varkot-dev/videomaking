@@ -3,6 +3,7 @@ from manimlib import *
 
 class ColorFillScene(Scene):
     """
+    techniques: color_fill, brace_annotation
     Pattern: Filled area under a curve — used for integrals, probability
     regions, or any "area between" concept.
 

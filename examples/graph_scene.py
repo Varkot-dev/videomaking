@@ -3,6 +3,7 @@ from manimlib import *
 
 class GraphScene(Scene):
     """
+    techniques: axes_curve, tracker_label
     Pattern: Graph plotting with title — axes, function curve, external labels, dynamic tracing.
 
     Key layout rules demonstrated here:

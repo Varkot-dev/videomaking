@@ -12,7 +12,29 @@ from manimlib import *   # always first line
 class SectionName(Scene):
     def construct(self):
         ...
+        # Last cue only: gentle fade out
         self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)
+```
+
+## Visual continuity — most important rule
+
+**Never show a black screen.** The user must always have something to look at.
+
+- Only FadeOut an element when something new is about to replace it.
+- If a cue has no major new animation, add a supporting visual instead: a label that appears, an arrow pointing at the key element, a SurroundingRectangle highlighting what the narrator is describing, a counter updating, a Brace with annotation.
+- The full FadeOut (`FadeOut(m) for m in self.mobjects`) happens **only at the very end of the last cue** — never mid-scene.
+- Between cues: elements stay on screen and build. New elements appear on top of existing ones.
+
+```python
+# WRONG — leaves black screen while audio plays
+self.play(FadeOut(boxes), run_time=0.5)
+self.wait(4.0)
+
+# RIGHT — keep boxes visible, add annotation instead
+label = Text("Largest bubbles to the end", font_size=28, color=YELLOW)
+label.next_to(boxes, DOWN, buff=0.4)
+self.play(Write(label), run_time=0.6)
+self.wait(3.4)
 ```
 
 ## Cue timing
@@ -125,6 +147,19 @@ self.play(grid.animate.apply_matrix([[a, b], [c, d]]), run_time=2.5)
 self.wait(seconds)
 ```
 
+### Sweep highlight — correct pattern for scanning across elements
+```python
+# WRONG — move_to only translates, never resizes the rectangle
+scan_rect = SurroundingRectangle(boxes[0], color=YELLOW, buff=0.05)
+self.play(scan_rect.animate.move_to(boxes[1]))  # still same size as boxes[0]
+
+# RIGHT — become() resizes and repositions in one call
+scan_rect = SurroundingRectangle(boxes[0], color=YELLOW, buff=0.05)
+self.play(ShowCreation(scan_rect), run_time=0.3)
+for i in range(1, len(boxes)):
+    self.play(scan_rect.become(SurroundingRectangle(boxes[i], color=YELLOW, buff=0.05)), run_time=0.2)
+```
+
 ### ValueTracker
 ```python
 t = ValueTracker(start)
@@ -158,6 +193,8 @@ x_length=, y_length= in Axes  → use width=, height=
 obj.animate with FadeIn/Out   → split into separate self.play() calls
 obj._mobjects                 → use obj.submobjects
 obj.get_tex_string()          → NEVER read values back from mobjects; store data in plain Python variables/lists
+Transform(text_a, text_b)     → crashes if glyphs differ in point count; use FadeOut(a) then FadeIn(b) to swap labels
+scan_rect.animate.move_to(x) → only moves, never resizes; use scan_rect.become(SurroundingRectangle(x, ...)) to resize+move
 ```
 
 ## Cinematic Technique Reference

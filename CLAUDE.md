@@ -1,5 +1,8 @@
 # ManimGen — Session Guide
 
+## Session primer
+Read `SESSION_2026_04_07.md` at the start of each session — it contains what was done last session, current git state, uncommitted changes, and what to do next.
+
 ## What this project is
 Automated pipeline: **topic string or PDF → 3Blue1Brown-style animated explainer video with narration.**
 Uses an audio-first CUE pipeline where spoken word timestamps drive animation durations — no speed warping.

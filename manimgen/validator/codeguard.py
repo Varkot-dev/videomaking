@@ -13,6 +13,7 @@ _BANNED_PATTERNS: list[tuple[str, str]] = [
     (r"\btip_shape\s*=", "Remove `tip_shape`; ManimGL Arrow does not support it."),
     (r"\bcorner_radius\s*=", "Remove `corner_radius`; SurroundingRectangle does not support it."),
     (r"Arrow\(\s*ORIGIN\s*,\s*ORIGIN\s*[,)]", "Arrow start/end cannot be the same point."),
+    (r"\.get_tex_string\s*\(", "Never call .get_tex_string() to read back values — store data in Python variables instead."),
     (r"\bscale_factor\s*=", "Remove `scale_factor`; FadeIn/FadeOut in ManimGL does not support it."),
     (r"\bCircumscribe\s*\(", "Use `FlashAround(...)` in ManimGL, not `Circumscribe(...)`."),
 ]
@@ -37,6 +38,7 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
         (r"\bx_length\s*=", "width=", "x_length -> width (ManimGL Axes)"),
         (r"\by_length\s*=", "height=", "y_length -> height (ManimGL Axes)"),
         (r"\.get_graph_point\s*\(", ".input_to_graph_point(", "get_graph_point -> input_to_graph_point"),
+        (r"\._mobjects\b", ".submobjects", "_mobjects -> submobjects"),
         (r"\bDARK_GREY\b", "GREY_D", "DARK_GREY -> GREY_D"),
         (r"\bDARK_GRAY\b", "GREY_D", "DARK_GRAY -> GREY_D"),
         (r"\bDARK_BLUE\b", "BLUE_D", "DARK_BLUE -> BLUE_D"),
@@ -238,6 +240,18 @@ def apply_error_aware_fixes(code: str, stderr: str) -> tuple[str, list[str]]:
         if cast_label:
             applied.append(cast_label)
 
+    if "could not broadcast input array" in stderr:
+        # Transform between mobjects with different point counts (e.g. Text("5") vs Text("11")).
+        # Replace Transform(a, b) with FadeOut(a)/FadeIn(b) which doesn't require matching geometry.
+        new_fixed, count = re.subn(
+            r"\bTransform\(([^,]+),\s*([^)]+)\)",
+            r"FadeOut(\1), FadeIn(\2)",
+            fixed,
+        )
+        if count:
+            applied.append(f"Transform -> FadeOut/FadeIn (point count mismatch) ({count})")
+            fixed = new_fixed
+
     if "TypeError" in stderr and ".animate" in stderr:
         lines = fixed.split("\n")
         new_lines: list[str] = []
@@ -317,8 +331,8 @@ def _check_layout_smells(code: str) -> list[str]:
         warnings.append("Label moved into axes area; this often overlaps curves/ticks.")
     lines = code.strip().splitlines()
     tail = "\n".join(lines[-12:]) if lines else ""
-    if "FadeOut" not in tail and "self.remove" not in tail:
-        warnings.append("Scene tail has no cleanup FadeOut/self.remove; visuals may linger.")
+    if "FadeOut" not in "\n".join(lines):
+        warnings.append("Scene has no FadeOut at all — add one at the very end of the last cue.")
     # Detect multiple .next_to() calls sharing the same anchor within 6 lines — likely overlap
     _check_next_to_stacking(lines, warnings)
     # Axes tick font size: missing decimal_number_config causes oversized tick labels (default is 36)

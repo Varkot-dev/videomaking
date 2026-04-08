@@ -3,6 +3,7 @@ from manimlib import *
 
 class ValueTrackerScene(Scene):
     """
+    techniques: tracker_label
     Pattern: ValueTracker driving multiple always_redraw objects simultaneously —
     a dot on a curve, a vertical line, and a coordinate label all staying in sync.
 

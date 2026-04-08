@@ -3,6 +3,7 @@ from manimlib import *
 
 class LimitScene(Scene):
     """
+    techniques: axes_curve, camera_zoom
     Pattern: Limits — canonical visual structure for any limit concept.
 
     A limit scene MUST contain ALL of the following:

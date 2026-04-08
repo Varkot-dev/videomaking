@@ -3,6 +3,7 @@ from manimlib import *
 
 class CodeScene(Scene):
     """
+    techniques: code_reveal, stagger_reveal
     Pattern: Code/pseudocode display — steps appearing line by line,
     with highlighting to draw attention to specific lines.
     Covers: Text, VGroup, FadeIn, SurroundingRectangle, LaggedStart,

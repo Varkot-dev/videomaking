@@ -3,6 +3,7 @@ from manimlib import *
 
 class TextScene(Scene):
     """
+    techniques: fade_reveal
     Pattern: Text display — title, subtitle, body text, fade in/out.
     Covers: Text, VGroup, Write, FadeIn, FadeOut, positioning.
     """

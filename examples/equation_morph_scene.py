@@ -3,6 +3,7 @@ from manimlib import *
 
 class EquationMorphScene(Scene):
     """
+    techniques: equation_morph
     Pattern: Algebra step-by-step — equations build up line by line, then
     morph into each other using TransformMatchingTex.
 

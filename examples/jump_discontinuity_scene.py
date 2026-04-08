@@ -3,6 +3,7 @@ from manimlib import *
 
 class JumpDiscontinuityScene(Scene):
     """
+    techniques: split_screen, tracker_label
     Pattern: Jump discontinuity — two separate curve pieces, open circles at endpoints,
     dots approaching from each side, annotation showing limit DNE.
 
