@@ -127,7 +127,7 @@ def _build_user_message(section: dict, cue_durations: list[float]) -> str:
         "3. Timing: per cue, sum(run_time values) + self.wait() = cue duration exactly.",
         "4. Title zone (y > 2.6): section title Text only.",
         "5. Axes: `width=` and `height=` only — never `x_length=` or `y_length=`.",
-        "6. `Tex()` has no `font_size=` — use `.scale()`. `Text()` accepts `font_size=`.",
+        "6. `Tex()` accepts `font_size=` (e.g. `Tex(r'x^2', font_size=48)`). `Text()` also accepts it.",
         "7. Use `ShowCreation()`, `Tex()`, `self.frame` — never ManimCommunity equivalents.",
         "8. VISUAL CONTINUITY: Never show a black screen. Only FadeOut an element when something new replaces it. "
            "If a cue has no new animation, add a relevant annotation, label, or highlight instead of waiting on empty screen. "
