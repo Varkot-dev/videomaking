@@ -386,3 +386,14 @@ class TestSurroundingRectangleAutoWrap:
     def test_validate_detects_bare_surrounding_rect(self):
         errors = validate_scene_code("self.play(SurroundingRectangle(obj))")
         assert any("ShowCreation" in e for e in errors)
+
+    def test_multiple_nested_call_args_not_auto_fixed(self):
+        # Known limitation: [^)]* stops at first ')' so multiple nested calls
+        # as positional args are not safely auto-fixed. They ARE caught by the
+        # banned pattern so validate_scene_code still fires for LLM retry.
+        code = "self.play(SurroundingRectangle(func(a), func(b)))"
+        fixed, applied = apply_known_fixes(code)
+        # Do not assert on fixed content — behavior is undefined for this case.
+        # Only assert the banned pattern still catches it:
+        errors = validate_scene_code(code)
+        assert any("ShowCreation" in e for e in errors)

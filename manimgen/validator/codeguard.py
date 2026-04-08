@@ -47,8 +47,10 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
             r"self.play(ShowCreation(\1)\3",
             "wrapped SurroundingRectangle/BackgroundRectangle in ShowCreation",
         ),
-        # NOTE: The regex handles nested parens correctly because group 3 captures the terminating
-        # ) which is re-emitted in the replacement, balancing parens even for VGroup(a, b) cases.
+        # NOTE: [^)]* matches up to the first ')' — works for single-level nesting like
+        # SurroundingRectangle(VGroup(a, b)) but will mismatch if multiple nested calls
+        # appear as separate positional args, e.g. SurroundingRectangle(func(a), func(b)).
+        # That pattern is extremely rare in LLM-generated ManimGL code.
         # ManimCommunity Axes uses x_length/y_length; ManimGL uses width/height
         (r"\bx_length\s*=", "width=", "x_length -> width (ManimGL Axes)"),
         (r"\by_length\s*=", "height=", "y_length -> height (ManimGL Axes)"),
