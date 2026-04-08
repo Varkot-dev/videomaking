@@ -41,16 +41,14 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
         (r"\bCircumscribe\s*\(", "FlashAround(", "Circumscribe -> FlashAround"),
         # SurroundingRectangle/BackgroundRectangle are Mobjects, not Animations.
         # Wrap them in ShowCreation() so self.play() can accept them.
+        # This regex handles both types and also handles trailing play kwargs like run_time=.
         (
-            r"self\.play\(\s*(SurroundingRectangle\s*\([^)]*\))\s*\)",
-            r"self.play(ShowCreation(\1))",
-            "wrapped SurroundingRectangle in ShowCreation",
+            r"self\.play\(\s*((Surrounding|Background)Rectangle\s*\([^)]*\))(\s*[,)])",
+            r"self.play(ShowCreation(\1)\3",
+            "wrapped SurroundingRectangle/BackgroundRectangle in ShowCreation",
         ),
-        (
-            r"self\.play\(\s*(BackgroundRectangle\s*\([^)]*\))\s*\)",
-            r"self.play(ShowCreation(\1))",
-            "wrapped BackgroundRectangle in ShowCreation",
-        ),
+        # NOTE: The regex handles nested parens correctly because group 3 captures the terminating
+        # ) which is re-emitted in the replacement, balancing parens even for VGroup(a, b) cases.
         # ManimCommunity Axes uses x_length/y_length; ManimGL uses width/height
         (r"\bx_length\s*=", "width=", "x_length -> width (ManimGL Axes)"),
         (r"\by_length\s*=", "height=", "y_length -> height (ManimGL Axes)"),

@@ -366,6 +366,23 @@ class TestSurroundingRectangleAutoWrap:
         fixed, applied = apply_known_fixes(code)
         assert "ShowCreation(BackgroundRectangle(obj))" in fixed
 
+    def test_surrounding_rect_with_run_time_kwarg_fixed(self):
+        code = "self.play(SurroundingRectangle(obj, color=YELLOW), run_time=1.5)"
+        fixed, applied = apply_known_fixes(code)
+        assert "ShowCreation(SurroundingRectangle(obj, color=YELLOW))" in fixed
+        assert "run_time=1.5" in fixed
+        assert any("ShowCreation" in a for a in applied)
+
+    def test_nested_mobject_arg_also_fixed(self):
+        # SurroundingRectangle(VGroup(a, b)) with nested parens IS auto-fixed correctly
+        # The regex [^)]* stops at the first ), but then group 3 captures that ), so
+        # the replacement correctly re-emits it, balancing parens.
+        code = "self.play(SurroundingRectangle(VGroup(a, b)))"
+        fixed, applied = apply_known_fixes(code)
+        assert "ShowCreation(SurroundingRectangle(VGroup(a, b)))" in fixed
+        assert fixed.count("(") == fixed.count(")")  # parens balanced
+        assert any("ShowCreation" in a for a in applied)
+
     def test_validate_detects_bare_surrounding_rect(self):
         errors = validate_scene_code("self.play(SurroundingRectangle(obj))")
         assert any("ShowCreation" in e for e in errors)
