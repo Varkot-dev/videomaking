@@ -456,6 +456,25 @@ Detect `\w+\[(\w+)\],\s*\w+\[(\w+)\]\s*=` (tuple-swap on subscript) and rewrite 
 - `output/logs/Section04Scene_20260408_162901.log` — precheck error: VGroup item assignment
 - Section 05 **FIXED** — `\text{}` wrapper stripped by new codeguard fix, 0 issues after
 
+### HIGH PRIORITY — A/V timing mismatch (muxer duration warnings)
+Observed in 2026-04-08 smoke test run output:
+```
+[muxer] Duration mismatch: video=3.167s audio=5.093s diff=1.926s
+[muxer] Duration mismatch: video=4.933s audio=6.036s diff=1.103s
+[muxer] Duration mismatch: video=5.467s audio=3.498s diff=1.969s
+[muxer] Duration mismatch: video=3.167s audio=5.914s diff=2.748s
+```
+Video is rendering shorter than the cue audio. The Director is not hitting the exact timing contract (`sum(run_times) + self.wait() = cue_duration`). The muxer pads with a freeze-frame, so it doesn't crash — but the last 1–3 seconds of many cues are a frozen still.
+
+**Root cause (suspected):** The Director generates timing comments like `# 1.5 + 2.7 = 4.2 ✓` but gets the arithmetic wrong, especially when animations are inside loops (where total run_time depends on loop count, not a fixed number). The prompt says "timing must be exact" but doesn't catch loop-time miscalculation.
+
+**Fix options:**
+- codeguard: detect `self.wait(` with a negative or zero argument (indicates over-run) and clamp to 0.01
+- Prompt: add explicit rule "if any animations are inside a loop, compute total loop time in a comment before the wait"
+- Muxer: the freeze-frame pad is the right fallback — consider logging a WARNING at diff > 1.0s so it's visible in CI
+
+**Files:** `manimgen/validator/codeguard.py`, `generator/prompts/director_system.md`, `renderer/muxer.py`
+
 ### Other known issues
 4. **Cue-word tokenization mismatch risk:** `cue_parser` uses `str.split()` word counts; edge-tts may tokenize differently. No integration test guards this yet.
 5. **PDF rendering:** Currently renders every page to PNG unconditionally, even text-heavy PDFs. Should use 3-way logic (text-only / image-only / mixed).
