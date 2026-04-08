@@ -74,13 +74,27 @@ def retry_scene(section: dict, original_code: str, class_name: str, scene_path: 
             layout = check_layout(result["video_path"])
             if layout["ok"] or layout["skipped"]:
                 return True, result["video_path"]
-            # Scene rendered but has layout problems. Prefer keeping the rendered
-            # output over risking regressions/fallback in additional fix rounds.
-            print(f"[retry] Attempt {attempt}/{MAX_RETRIES} rendered but has layout issues:")
+
+            # Scene rendered but has visual defects. Feed structured feedback
+            # back into the retry loop if budget allows.
+            print(f"[retry] Attempt {attempt}/{MAX_RETRIES} rendered but has visual defects:")
             for line in layout["issues"].splitlines():
                 print(f"[retry]   {line}")
-            print("[retry] Accepting video despite layout issues (prefer render over fallback)")
-            return True, result["video_path"]
+
+            if llm_fix_calls_used >= MAX_LLM_FIX_CALLS:
+                print("[retry] LLM retry budget exhausted — accepting video despite visual issues.")
+                return True, result["video_path"]
+
+            print("[retry] Requesting visual fix from LLM...")
+            code = _request_visual_fix(code, layout["issues"], system_prompt)
+            llm_fix_calls_used += 1
+            with open(scene_path, "w") as f:
+                f.write(code)
+            precheck = precheck_and_autofix(scene_path)
+            if precheck.get("applied_fixes"):
+                with open(scene_path) as f:
+                    code = f.read()
+            continue
 
         error_type = _classify_error(result["stderr"])
         guidance = _fix_guidance(error_type)
@@ -187,6 +201,27 @@ def _load_retry_system_prompt() -> str:
     with open(director_system_path) as f:
         director = f.read()
     return system.strip() + "\n\n" + director
+
+
+def _request_visual_fix(code: str, issues: str, system_prompt: str) -> str:
+    """Ask the LLM to fix code based on structured visual feedback from layout_checker."""
+    prompt_code = _truncate_for_prompt(code, RETRY_PROMPT_CODE_CHARS)
+    fixed = chat(
+        system=system_prompt,
+        user=f"""This ManimGL scene rendered successfully but has visual defects detected by frame analysis.
+
+Visual defects found (ISSUE | CAUSE | FIX format):
+{issues}
+
+Fix the code to resolve these visual defects. Return only the corrected Python — no markdown.
+
+Original code:
+{prompt_code}""",
+    )
+    if fixed.startswith("```"):
+        fixed = re.sub(r"^```\w*\n?", "", fixed)
+        fixed = re.sub(r"\n?```$", "", fixed)
+    return fixed
 
 
 def _write_attempt_artifacts(logs_dir: str, class_name: str, attempt: int, code: str, stderr: str) -> None:
