@@ -50,18 +50,7 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
         (r"\bCreate\s*\(", "ShowCreation(", "Create -> ShowCreation"),
         (r"self\.camera\.frame", "self.frame", "self.camera.frame -> self.frame"),
         (r"\bCircumscribe\s*\(", "FlashAround(", "Circumscribe -> FlashAround"),
-        # SurroundingRectangle/BackgroundRectangle are Mobjects, not Animations.
-        # Wrap them in ShowCreation() so self.play() can accept them.
-        # This regex handles both types and also handles trailing play kwargs like run_time=.
-        (
-            r"self\.play\(\s*((Surrounding|Background)Rectangle\s*\([^)]*\))(\s*[,)])",
-            r"self.play(ShowCreation(\1)\3",
-            "wrapped SurroundingRectangle/BackgroundRectangle in ShowCreation",
-        ),
-        # NOTE: [^)]* matches up to the first ')' — works for single-level nesting like
-        # SurroundingRectangle(VGroup(a, b)) but will mismatch if multiple nested calls
-        # appear as separate positional args, e.g. SurroundingRectangle(func(a), func(b)).
-        # That pattern is extremely rare in LLM-generated ManimGL code.
+        # ManimCommunity Axes uses x_length/y_length; ManimGL uses width/height
         # ManimCommunity Axes uses x_length/y_length; ManimGL uses width/height
         (r"\bx_length\s*=", "width=", "x_length -> width (ManimGL Axes)"),
         (r"\by_length\s*=", "height=", "y_length -> height (ManimGL Axes)"),
@@ -160,6 +149,10 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
     if text_applied:
         applied.append(text_applied)
 
+    fixed, rect_applied = _wrap_bare_rect_in_show_creation(fixed)
+    if rect_applied:
+        applied.append(rect_applied)
+
     return fixed, applied
 
 
@@ -191,6 +184,68 @@ def _remove_font_kwarg_from_tex(code: str) -> tuple[str, str | None]:
     new, count = re.subn(pattern, r"\1\2", code)
     if count:
         return new, f"removed font= from Tex ({count})"
+    return code, None
+
+
+def _wrap_bare_rect_in_show_creation(code: str) -> tuple[str, str | None]:
+    """Wrap bare SurroundingRectangle/BackgroundRectangle in ShowCreation().
+
+    self.play(SurroundingRectangle(obj, color=YELLOW))
+      → self.play(ShowCreation(SurroundingRectangle(obj, color=YELLOW)))
+
+    Uses depth-aware paren matching so nested args like
+    SurroundingRectangle(Text("hello"), color=YELLOW) are handled correctly.
+    """
+    rect_start_re = re.compile(
+        r"self\.play\(\s*((Surrounding|Background)Rectangle)\s*\("
+    )
+    result_parts: list[str] = []
+    pos = 0
+    count = 0
+    while pos < len(code):
+        m = rect_start_re.search(code, pos)
+        if not m:
+            result_parts.append(code[pos:])
+            break
+
+        # Check if already wrapped in ShowCreation/FadeIn/Write
+        prefix = code[m.start(0):m.start(1)]
+        # m.start(0) is "self.play(", m.start(1) is the rect name
+        # Capture text between "self.play(" and the rect name
+        between = code[m.start(0) + len("self.play("):m.start(1)].strip()
+        if between:
+            # There's something already there (e.g. ShowCreation()
+            result_parts.append(code[pos:m.end(0)])
+            pos = m.end(0)
+            continue
+
+        # Walk depth-aware from the opening paren of Rectangle(
+        rect_open = m.end(0) - 1  # index of '(' after Rectangle name
+        depth = 1
+        i = rect_open + 1
+        while i < len(code) and depth > 0:
+            if code[i] == '(':
+                depth += 1
+            elif code[i] == ')':
+                depth -= 1
+            i += 1
+        rect_close = i - 1  # index of the matching ')'
+
+        # The full rect call including its closing paren
+        rect_call = code[m.start(1):rect_close + 1]
+
+        # What comes after the rect call: should be ')' to close self.play()
+        # or ', run_time=...' etc. — we keep those unchanged
+        after_rect = code[rect_close + 1:]
+
+        result_parts.append(code[pos:m.start(1)])
+        result_parts.append(f"ShowCreation({rect_call})")
+        pos = rect_close + 1
+        count += 1
+
+    new_code = "".join(result_parts)
+    if count:
+        return new_code, f"wrapped bare SurroundingRectangle/BackgroundRectangle in ShowCreation ({count})"
     return code, None
 
 

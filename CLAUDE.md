@@ -68,7 +68,9 @@ manimgen/
 │       ├── server.py            # Flask UI for clip review, reorder, trim, export
 │       └── templates/editor.html
 ├── examples/                    # hand-written verified ManimGL scenes (Director few-shot reference)
-├── tests/                       # 314 pytest tests
+│                                # Each scene has `techniques: <name>, <name>` as first line of class
+│                                # docstring — scene_generator._index_examples() indexes them at runtime
+├── tests/                       # 337 pytest tests
 ├── config.yaml                  # LLM provider, TTS config, render quality
 ├── requirements.txt
 └── setup.py                     # console_scripts: manimgen, manimgen-edit
@@ -403,14 +405,15 @@ Root cause identified from Section02Scene.mp4: rendered scenes with visual defec
 
 **What was ruled out:** Adding more Director prompt rules or example scenes does not scale — no finite set of examples covers all animation types for arbitrary PDFs. The vision layer is the only general solution.
 
-### HIGH PRIORITY — Codeguard missing patterns (causing 60% fallback rate)
-Confirmed from "bubble sort" pipeline run on 2026-04-08: sections 3, 4, 5 all fell back due to static errors codeguard doesn't catch. Fix these in `codeguard.py` first before next pipeline run:
+### Codeguard missing patterns — FIXED 2026-04-08 (branch feature/director-examples)
+All four high-priority patterns that caused 60% fallback rate in "bubble sort" run are now fixed:
 
-1. **`self.play(SurroundingRectangle(...))` without ShowCreation** → `TypeError: Object SurroundingRectangle cannot be converted to an animation`. Fix: auto-rewrite to `self.play(ShowCreation(SurroundingRectangle(...)))`.
-2. **`Tex(r"\text{...}")` outside math mode** → `LatexError: Missing $ inserted`. Fix: strip `\text{}` wrapper or rewrite as `Text(...)`.
-3. **`vgroup[i][j] = value` VGroup item assignment** → `TypeError: 'VGroup' object does not support item assignment`. Can't auto-fix safely — add to banned patterns so retry prompt knows exactly what's wrong.
+1. **`self.play(SurroundingRectangle(...))` without ShowCreation** — depth-aware `_wrap_bare_rect_in_show_creation()` in `codeguard.py` handles nested args correctly (e.g. `SurroundingRectangle(Text("x"), color=YELLOW)`).
+2. **`Tex(r"\text{...}")` outer wrapper** — `_strip_outer_text_wrapper()` strips the wrapper. Mid-expression `\text{}` left alone.
+3. **`vgroup[i] = value` VGroup item assignment** — added to `_BANNED_PATTERNS`. Not auto-fixable; retry prompt now has the explanation.
+4. **Double-scale bug** — removed the `font_size=` → `.scale()` conversion from `apply_error_aware_fixes()`. `Tex(font_size=48)` is valid, was being double-scaled.
 
-All three are token-free static fixes. Add to `apply_known_fixes()` and `_BANNED_PATTERNS` in `codeguard.py`, with tests in `test_codeguard.py`.
+Director prompt (`director_system.md`), retry prompt (`retry_system.md`), and `scene_generator.py` hardcoded rule also corrected. 5 new example scenes added to `examples/` covering sweep_highlight, stagger_reveal, equation_morph, brace_annotation, fade_reveal. 337 tests pass.
 
 ### Other known issues
 4. **Cue-word tokenization mismatch risk:** `cue_parser` uses `str.split()` word counts; edge-tts may tokenize differently. No integration test guards this yet.
