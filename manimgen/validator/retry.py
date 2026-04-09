@@ -16,6 +16,11 @@ RETRY_PROMPT_CODE_CHARS = 7000
 
 
 def _classify_error(stderr: str) -> str:
+    # Check precheck-specific errors BEFORE generic TypeError/AttributeError —
+    # precheck output contains the word "TypeError" in its explanation text,
+    # which would otherwise cause a false match on the generic TypeError branch.
+    if "Precheck failed" in stderr and "VGroup" in stderr and "item assignment" in stderr:
+        return "precheck_vgroup"
     if "SyntaxError" in stderr:
         return "syntax"
     if "ImportError" in stderr or "ModuleNotFoundError" in stderr:
@@ -29,6 +34,15 @@ def _classify_error(stderr: str) -> str:
 
 def _fix_guidance(error_type: str) -> str:
     guidance = {
+        "precheck_vgroup": (
+            "Fix VGroup item assignment. VGroup does NOT support boxes[i] = x or "
+            "boxes[i], boxes[j] = boxes[j], boxes[i] — these raise TypeError at runtime. "
+            "The correct pattern: before any swaps, create a parallel Python list: "
+            "box_list = list(boxes); label_list = list(labels). "
+            "Then swap the list references: box_list[i], box_list[j] = box_list[j], box_list[i]. "
+            "Use box_list[k].get_center() for position lookups after swaps. "
+            "Never assign into the VGroup directly. Never use boxes[i] after the first swap."
+        ),
         "syntax": "Fix the Python syntax error shown in the traceback.",
         "import": "Fix the import. Use `from manimlib import *`. Do not import from `manim`.",
         "attribute": "Fix the attribute error. Check the correct ManimGL method name and signature.",

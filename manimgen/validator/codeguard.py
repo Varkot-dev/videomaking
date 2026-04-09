@@ -294,6 +294,68 @@ def _strip_outer_text_wrapper(code: str) -> tuple[str, str | None]:
     return code, None
 
 
+def _detect_tmt_on_text(code: str) -> list[str]:
+    """Return error strings if TransformMatchingTex is used on Text() variables.
+
+    TransformMatchingTex matches LaTeX glyph submobjects. On Text() objects it
+    produces scrambled animation output (not a crash, but visually broken).
+    """
+    text_var_re = re.compile(
+        r"\b(\w+)\s*=\s*(?:always_redraw\(\s*lambda[^:]*:\s*)?Text\s*\("
+    )
+    text_vars: set[str] = set(text_var_re.findall(code))
+    if not text_vars:
+        return []
+    tmt_re = re.compile(r"TransformMatchingTex\(\s*(\w+)\s*,")
+    errors = []
+    for m in tmt_re.finditer(code):
+        a = m.group(1)
+        if a in text_vars:
+            errors.append(
+                f"TransformMatchingTex({a}, ...) — '{a}' is a Text() object. "
+                "TransformMatchingTex only works on Tex() objects (LaTeX glyph matching). "
+                "Use FadeOut(a), FadeIn(b) for Text() counter/label updates."
+            )
+    return errors
+
+
+def _fix_transform_matching_tex_on_text(code: str) -> tuple[str, str | None]:
+    """Auto-convert TransformMatchingTex(Text_var, ...) to FadeOut/FadeIn.
+
+    Collects variable names assigned via Text(...), then rewrites any
+    TransformMatchingTex(a, b, ...) where a is a Text variable to
+    FadeOut(a, run_time=X), FadeIn(b, run_time=X) preserving run_time= if present.
+    Does NOT touch TransformMatchingTex where the first arg is a Tex() variable.
+    """
+    text_var_re = re.compile(
+        r"\b(\w+)\s*=\s*(?:always_redraw\(\s*lambda[^:]*:\s*)?Text\s*\("
+    )
+    text_vars: set[str] = set(text_var_re.findall(code))
+    if not text_vars:
+        return code, None
+
+    tmt_re = re.compile(
+        r"TransformMatchingTex\(\s*(\w+)\s*,\s*(\w+)\s*(?:,\s*([^)]*))?\)"
+    )
+    count = 0
+
+    def _replacer(m: re.Match) -> str:
+        nonlocal count
+        a, b = m.group(1), m.group(2)
+        extra = m.group(3) or ""
+        if a not in text_vars:
+            return m.group(0)
+        rt_match = re.search(r"run_time\s*=\s*[\d.]+", extra)
+        rt = f", {rt_match.group(0)}" if rt_match else ""
+        count += 1
+        return f"FadeOut({a}{rt}), FadeIn({b}{rt})"
+
+    result = tmt_re.sub(_replacer, code)
+    if count:
+        return result, f"TransformMatchingTex(Text, ...) -> FadeOut/FadeIn ({count})"
+    return code, None
+
+
 def apply_error_aware_fixes(code: str, stderr: str) -> tuple[str, list[str]]:
     """Deterministic, token-free repairs driven by actual runtime traceback."""
     fixed = code
@@ -390,6 +452,8 @@ def validate_scene_code(code: str) -> list[str]:
     for pattern, message in _BANNED_PATTERNS:
         if re.search(pattern, code):
             errors.append(message)
+
+    errors.extend(_detect_tmt_on_text(code))
 
     return errors
 
