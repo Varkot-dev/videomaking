@@ -27,10 +27,24 @@ _BANNED_PATTERNS: list[tuple[str, str]] = [
         r"\text{} inside a longer expression like Tex(r'f(x) = \text{label}') is fine.",
     ),
     (
-        r"\w+\[.+?\]\s*=(?!=)\s*\S",
-        "VGroup does not support item assignment (vgroup[i] = x raises TypeError). "
-        "Use a Python list for mutable indexed storage, then rebuild: "
-        "items[i] = new_mob; group = VGroup(*items).",
+        # Tuple-swap on VGroup-style names: boxes[i], boxes[j] = boxes[j], boxes[i]
+        # Only matches known VGroup-style plural names. Excludes _list suffix (safe parallel lists).
+        r"\b(boxes|labels|cells|group|vgroup|mobs|mobjects|elems|elements|shapes|squares|circles|arrows)\b(?!_list)"
+        r"\[.+?\]\s*,\s*"
+        r"(boxes|labels|cells|group|vgroup|mobs|mobjects|elems|elements|shapes|squares|circles|arrows)\b(?!_list)"
+        r"\[.+?\]\s*=(?!=)",
+        "VGroup does not support item assignment. "
+        "Use a parallel Python list: box_list = list(boxes), then swap box_list[i], box_list[j]. "
+        "Never assign into the VGroup directly.",
+    ),
+    (
+        # Single-assign on VGroup-style name: boxes[i] = new_mob
+        # Excludes _list suffix names.
+        r"\b(boxes|labels|cells|group|vgroup|mobs|mobjects|elems|elements|shapes|squares|circles|arrows)\b(?!_list)"
+        r"\[.+?\]\s*=(?!=)\s*\S",
+        "VGroup does not support item assignment. "
+        "Use a parallel Python list: box_list = list(boxes). "
+        "Never assign into the VGroup directly.",
     ),
 ]
 
@@ -152,6 +166,19 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
     fixed, rect_applied = _wrap_bare_rect_in_show_creation(fixed)
     if rect_applied:
         applied.append(rect_applied)
+
+    fixed, tmt_applied = _fix_transform_matching_tex_on_text(fixed)
+    if tmt_applied:
+        applied.append(tmt_applied)
+
+    new_fixed, count = re.subn(
+        r"self\.wait\(\s*(?:-\s*[\d.]+|0+\.0+|(?<!\d)0(?![\d.]))\s*\)",
+        "self.wait(0.01)",
+        fixed,
+    )
+    if count:
+        applied.append(f"clamped negative/zero self.wait() to 0.01 ({count})")
+        fixed = new_fixed
 
     return fixed, applied
 

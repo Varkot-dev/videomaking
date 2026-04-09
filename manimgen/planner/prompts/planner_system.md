@@ -76,6 +76,7 @@ The `visual` field MUST start with `Technique: <name>`. Choose from this exact l
 |---|---|---|
 | `stagger_reveal` | items appearing one by one (lists, steps, array elements, bullets) | LaggedStart FadeIn on VGroup elements |
 | `sweep_highlight` | scanning left-to-right across a sequence, searching, comparing | SurroundingRectangle moving across boxes |
+| `array_swap` | two elements physically exchange positions (bubble sort, selection sort, insertion sort, any swap) | two boxes + labels animate to each other's screen positions using parallel Python list for index tracking |
 | `camera_zoom` | "exactly", "precisely", "look closely", "notice that", "zoom in" | self.frame.animate.scale() to a focal point |
 | `equation_morph` | algebra steps, "this becomes", "which equals", "simplify", "factor" | TransformMatchingTex between Tex objects |
 | `color_fill` | area under curve, integral, probability region, "accumulate", "shade" | axes.get_area() + Brace annotation |
@@ -116,6 +117,7 @@ The visual field must give the animator enough information to write exact ManimG
 - Do NOT request "glow effects", "blur", "shadow" — not available
 - Do NOT request animation timing in seconds here — that comes from the TTS segmenter
 - Do NOT use vague words like "show", "display", "visualize" — describe what appears and how
+- **Swap-based algorithms (bubble sort, selection sort, insertion sort, any algorithm that exchanges elements):** You have full knowledge of the algorithm's state — use it. For each swap, specify exactly *which values* move and *what they do*: "the box labeled 64 and the box labeled 34 animate to each other's screen positions." Never say "iterate through the array and swap." The Director has no algorithm knowledge and must not simulate state. Your job is to pre-compute each visual transition so the Director only writes `.move_to()` calls. One swap = one cue, described as: "value X at left, value Y at right — they cross and settle."
 
 **Implementable visual vocabulary (use these, not others):**
 - **Boxes/arrays**: Square or Rectangle with fill_color, stroke color, Text label inside

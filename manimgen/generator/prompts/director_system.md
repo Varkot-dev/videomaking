@@ -53,6 +53,26 @@ self.play(scan_rect.animate.move_to(boxes[4]), run_time=1.5)
 self.wait(2.1)   # 2.0 + 0.5 + 1.5 + 2.1 = 6.1 ✓
 ```
 
+### Loop timing — do not hardcode wait when animation count depends on data
+
+If any animations are inside a loop, compute the total animation time in a variable BEFORE the wait, then subtract it:
+
+```python
+# WRONG — hardcoded wait only subtracts one iteration
+for i in range(n - 1):
+    self.play(scan_rect.become(SurroundingRectangle(boxes[i], color=YELLOW, buff=0.05)), run_time=0.2)
+self.wait(4.0 - 0.2)   # ← wrong: only subtracts one iteration, not all n-1
+
+# RIGHT — accumulate then subtract
+anim_time = 0.0
+for i in range(n - 1):
+    self.play(scan_rect.become(SurroundingRectangle(boxes[i], color=YELLOW, buff=0.05)), run_time=0.2)
+    anim_time += 0.2
+self.wait(max(0.01, 4.0 - anim_time))
+```
+
+Rule: `self.wait(max(0.01, cue_duration - total_anim_time))` — always use `max(0.01, ...)` to guard against over-run.
+
 ## Layout zones
 
 Frame: 8 units tall × ~14 units wide (x ∈ [−7, 7], y ∈ [−4, 4]).
@@ -181,6 +201,35 @@ for i in range(1, len(boxes)):
     self.play(scan_rect.become(SurroundingRectangle(boxes[i], color=YELLOW, buff=0.05)), run_time=0.2)
 ```
 
+### Array swap — correct pattern for exchange animations (bubble sort, selection sort, etc.)
+```python
+# WRONG — VGroup does NOT support item assignment
+boxes[i], boxes[j] = boxes[j], boxes[i]   # CRASH: TypeError
+labels[i] = new_label                      # CRASH: TypeError
+
+# RIGHT — use a parallel Python list for index tracking
+boxes = VGroup(*[Square(...) for _ in values]).arrange(RIGHT, buff=0.12).center()
+labels = VGroup(*[Text(str(v), ...).move_to(boxes[k]) for k, v in enumerate(values)])
+
+box_list = list(boxes)    # parallel Python list — tracks logical order after swaps
+label_list = list(labels)
+
+# To animate swap of positions i and j:
+pos_i = box_list[i].get_center()
+pos_j = box_list[j].get_center()
+self.play(
+    box_list[i].animate.move_to(pos_j),
+    box_list[j].animate.move_to(pos_i),
+    label_list[i].animate.move_to(pos_j),
+    label_list[j].animate.move_to(pos_i),
+    run_time=0.55,
+)
+# Update the Python list — never touch boxes[i] directly after swaps
+box_list[i], box_list[j] = box_list[j], box_list[i]
+label_list[i], label_list[j] = label_list[j], label_list[i]
+# box_list[k] is now the mobject at logical position k
+```
+
 ### ValueTracker
 ```python
 t = ValueTracker(start)
@@ -218,6 +267,7 @@ obj._mobjects                         → use obj.submobjects
 obj.get_tex_string()                  → NEVER read values back from mobjects; store in Python variables
 Transform(text_a, text_b)             → crashes if glyphs differ; use FadeOut(a) then FadeIn(b)
 scan_rect.animate.move_to(x)          → only moves, never resizes; use scan_rect.become(SurroundingRectangle(x, ...))
+boxes[i], boxes[j] = boxes[j], boxes[i]  → CRASH: VGroup does not support item assignment; use a parallel Python list: box_list = list(boxes), then swap box_list[i], box_list[j]
 ```
 
 ## Cinematic Technique Reference
@@ -229,6 +279,7 @@ The verified reference scenes at the bottom of this prompt show each technique i
 | Technique | When to use |
 |---|---|
 | `sweep_highlight` | scanning across a sequence, searching, comparing elements |
+| `array_swap` | two elements exchange positions — bubble sort, selection sort, any swap algorithm |
 | `stagger_reveal` | items appearing one by one (lists, bullets, array elements) |
 | `camera_zoom` | "zoom in", "notice that", "exactly", "precisely" |
 | `equation_morph` | algebra steps, "this becomes", "which equals", "factor" |

@@ -52,6 +52,12 @@ def mux_audio_video(video_path: str, audio_path: str, output_path: str) -> str:
             "check cue placement or scene render timing.",
             video_dur, audio_dur, diff,
         )
+    if diff > 1.5:
+        logger.warning(
+            "[muxer] LARGE MISMATCH (%.3fs) — last %.1fs of this cue will be a freeze-frame. "
+            "Director likely miscalculated loop timing. Check loop wait() calls in the scene.",
+            diff, diff,
+        )
 
     if audio_dur > video_dur:
         _mux_freeze_video(video_path, audio_path, output_path, audio_dur)
