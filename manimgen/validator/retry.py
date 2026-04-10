@@ -128,17 +128,7 @@ def retry_scene(section: dict, original_code: str, class_name: str, scene_path: 
                 return True, result["video_path"]
 
             print("[retry] Requesting visual fix from LLM...")
-            
-            # Extract only the FIX instruction for the code-fixing LLM
-            fix_only = []
-            for line in combined_issues:
-                if "FIX:" in line:
-                    parts = line.split("FIX:")
-                    fix_only.append("- " + parts[-1].strip())
-                else:
-                    fix_only.append("- " + line.strip())
-            
-            code = _request_visual_fix(code, "\n".join(fix_only), system_prompt)
+            code = _request_visual_fix(code, "\n".join(combined_issues), system_prompt)
             llm_fix_calls_used += 1
             with open(scene_path, "w") as f:
                 f.write(code)
