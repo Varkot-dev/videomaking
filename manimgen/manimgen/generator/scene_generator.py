@@ -12,7 +12,7 @@ import os
 import re
 from manimgen.llm import chat
 from manimgen import paths
-from manimgen.utils import strip_fencing, section_class_name
+from manimgen.utils import strip_fencing, section_class_name, load_reference_frames
 from manimgen.validator.codeguard import precheck_and_autofix
 
 _WORDS_PER_MINUTE = 130
@@ -178,7 +178,8 @@ def generate_scenes(
             + examples
         )
 
-    raw = chat(system=system, user=user_message)
+    ref_frames = load_reference_frames()
+    raw = chat(system=system, user=user_message, images=ref_frames)
     code = strip_fencing(raw)
 
     if not code.startswith("from manimlib"):

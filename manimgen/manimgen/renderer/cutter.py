@@ -17,13 +17,15 @@ _MAX_PARALLEL_CUTS = min(4, (os.cpu_count() or 1))
 
 
 def _cut_one(video_path: str, start: float, dur: float, out_path: str, i: int) -> str:
+    from manimgen import paths as _paths
     cmd = [
         "ffmpeg", "-y",
-        "-ss", f"{start:.6f}",
         "-i", video_path,
+        "-ss", f"{start:.6f}",
         "-t", f"{dur:.6f}",
         "-c:v", "libx264", "-preset", "fast", "-crf", "18",
         "-pix_fmt", "yuv420p",
+        "-r", str(_paths.render_fps()),
         "-an",
         out_path,
     ]

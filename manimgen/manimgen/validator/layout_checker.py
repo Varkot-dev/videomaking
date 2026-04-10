@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 
 from manimgen.llm import chat
+from manimgen.utils import load_reference_frames
 
 logger = logging.getLogger(__name__)
 
@@ -129,21 +130,25 @@ def check_layout(video_path: str) -> dict:
 
     logger.debug("[layout_checker] Checking %d frames from %s", len(frames), video_path)
 
+    ref_frames = load_reference_frames()
+
     try:
         response = chat(
             system=_load_layout_system_prompt(),
             user=(
-                f"Review these {len(frames)} animation frame(s) sampled across the video timeline "
-                "for visual defects. Check all frames."
+                f"The FIRST {len(ref_frames)} images are Gold Standard reference frames of the aesthetic you must enforce.\n"
+                f"The REMAINING {len(frames)} images are candidate frames sampled across the video timeline.\n\n"
+                "Review the candidate frames. Compare their layout, typography, negative space, and proportions against the Gold Standard references. "
+                "If the candidates look cramped, misaligned, or amateurish compared to the references, reject them."
             ),
-            images=frames,
+            images=ref_frames + frames,
         )
     except Exception as exc:
         logger.warning("[layout_checker] LLM call failed: %s", exc)
-        return {"ok": True, "issues": "", "skipped": True}
+        return {"ok": True, "issues": "", "skipped": True, "frames": []}
 
     clean = response.strip()
     if clean.upper() == "OK":
-        return {"ok": True, "issues": "", "skipped": False}
+        return {"ok": True, "issues": "", "skipped": False, "frames": frames}
 
-    return {"ok": False, "issues": clean, "skipped": False}
+    return {"ok": False, "issues": clean, "skipped": False, "frames": frames}

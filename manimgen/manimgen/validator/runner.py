@@ -46,7 +46,7 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
 
     try:
         result = subprocess.run(
-            ["manimgl", scene_path, class_name, "-w", paths.render_quality_flag(), "-c", "#1C1C1C"],
+            ["manimgl", scene_path, class_name, "-w", paths.render_quality_flag(), "--fps", str(paths.render_fps()), "-c", "#1C1C1C"],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -82,8 +82,21 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
 
 def _find_rendered_video(class_name: str) -> str | None:
     """Search common ManimGL output directories for the rendered video."""
-    search_dirs = ["videos", "media/videos"]
+    from manimgen import paths as _paths
+    # ManimGL writes to "videos/" relative to the scene file's directory.
+    # Also check the configured output videos dir in case of prior pipeline runs.
+    here = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(here))
+    search_dirs = [
+        os.path.join(project_root, "videos"),
+        os.path.join(project_root, "media", "videos"),
+        "videos",
+        "media/videos",
+        _paths.videos_dir(),
+    ]
     for d in search_dirs:
+        if not os.path.isdir(d):
+            continue
         for root, _, files in os.walk(d):
             for f in files:
                 if class_name in f and f.endswith(".mp4"):

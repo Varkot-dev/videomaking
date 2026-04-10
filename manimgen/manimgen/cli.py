@@ -181,7 +181,7 @@ def _run_section(
                         f.write(code)
         success, video_path = run_scene(scene_path, class_name)
         if not success:
-            success, video_path = retry_scene(section, code, class_name, scene_path)
+            success, video_path = retry_scene(section, code, class_name, scene_path, cue_durations=cue_durations)
         if not success:
             log.info("[manimgen] All retries failed, using fallback")
             video_path = fallback_scene(section)
@@ -200,17 +200,13 @@ def _run_section(
         from manimgen.renderer.muxer import mux_audio_video
 
         cue_starts = cue_start_times_from_durations(cue_durations)
-        try:
-            cue_video_clips = cut_video_at_cues(
-                video_path,
-                cue_starts,
-                cue_durations,
-                output_dir=paths.muxed_dir(),
-                section_id=section_id,
-            )
-        except Exception as e:
-            logger.warning("[manimgen] Cue cutting failed: %s — using full video per cue", e)
-            cue_video_clips = [video_path] * len(segments)
+        cue_video_clips = cut_video_at_cues(
+            video_path,
+            cue_starts,
+            cue_durations,
+            output_dir=paths.muxed_dir(),
+            section_id=section_id,
+        )
 
         produced: list[str] = []
         for i, (cue_clip, audio_slice) in enumerate(zip(cue_video_clips, audio_slices)):
