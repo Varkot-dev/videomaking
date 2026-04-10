@@ -7,8 +7,8 @@ Key invariants to enforce:
   - Audio longer → tpad (freeze last video frame)
   - Video longer → apad (pad audio with silence)
   - Equal durations → apad path (video >= audio branch)
-  - Large mismatch (>0.5s) logs a warning
-  - Small mismatch (<0.5s) produces no warning
+  - Large mismatch (>1.0s) logs a warning
+  - Small mismatch (<1.0s) produces no warning
   - ffprobe failure → RuntimeError with install hint
   - ffmpeg failure → RuntimeError with output path
   - Output directory is created if missing
@@ -196,13 +196,13 @@ class TestWarnings:
         assert any("mismatch" in r.message.lower() for r in caplog.records)
 
     def test_no_warning_on_small_mismatch(self, tmp_path, caplog):
-        # 0.1s diff — well under the 0.5s threshold
+        # 0.1s diff — well under the 1.0s threshold
         with caplog.at_level(logging.WARNING, logger="manimgen.renderer.muxer"):
             _run_mux(video_dur=10.0, audio_dur=10.1, tmp_path=tmp_path)
         assert not any("mismatch" in r.message.lower() for r in caplog.records)
 
     def test_warning_threshold_constant_is_correct(self):
-        assert _WARN_THRESHOLD_SECONDS == 0.5
+        assert _WARN_THRESHOLD_SECONDS == 1.0
 
     def test_warning_includes_both_durations(self, tmp_path, caplog):
         with caplog.at_level(logging.WARNING, logger="manimgen.renderer.muxer"):

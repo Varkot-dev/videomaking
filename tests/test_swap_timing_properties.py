@@ -165,21 +165,21 @@ class TestMuxerWarningThresholdProperties:
             f"diff={diff:.3f}s incorrectly triggered LARGE MISMATCH. warnings={warnings}"
         )
 
-    @given(st.floats(min_value=0.51, max_value=30.0, allow_nan=False, allow_infinity=False))
+    @given(st.floats(min_value=1.01, max_value=30.0, allow_nan=False, allow_infinity=False))
     @settings(max_examples=300, suppress_health_check=[HealthCheck.too_slow])
-    def test_standard_mismatch_warning_fires_above_half_second(self, diff: float):
-        """For any |video - audio| > 0.5s at least one warning must appear."""
+    def test_standard_mismatch_warning_fires_above_one_second(self, diff: float):
+        """For any |video - audio| > 1.0s at least one warning must appear."""
         video_dur = 5.0
         audio_dur = video_dur + diff
         warnings = _run_muxer_capture_warnings(video_dur, audio_dur)
         assert len(warnings) > 0, (
-            f"diff={diff:.3f}s produced no warnings at all. expected at least the 0.5s one."
+            f"diff={diff:.3f}s produced no warnings at all. expected at least the 1.0s one."
         )
 
-    @given(st.floats(min_value=0.0, max_value=0.49, allow_nan=False, allow_infinity=False))
+    @given(st.floats(min_value=0.0, max_value=0.99, allow_nan=False, allow_infinity=False))
     @settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow])
-    def test_no_warning_below_half_second(self, diff: float):
-        """For any |video - audio| <= 0.5s no warning should appear."""
+    def test_no_warning_below_one_second(self, diff: float):
+        """For any |video - audio| <= 1.0s no warning should appear."""
         video_dur = 5.0
         audio_dur = video_dur + diff
         warnings = _run_muxer_capture_warnings(video_dur, audio_dur)

@@ -13,7 +13,9 @@ _BANNED_PATTERNS: list[tuple[str, str]] = [
     (r"\btip_shape\s*=", "Remove `tip_shape`; ManimGL Arrow does not support it."),
     (r"\bcorner_radius\s*=", "Remove `corner_radius`; SurroundingRectangle does not support it."),
     (r"Arrow\(\s*ORIGIN\s*,\s*ORIGIN\s*[,)]", "Arrow start/end cannot be the same point."),
-    (r"\.get_tex_string\s*\(", "Never call .get_tex_string() to read back values — store data in Python variables instead."),
+    (r"\.get_tex_string\s*\(", "Never call .get_tex_string() to read back values — store data in a plain Python list instead (e.g. current_values = [5, 3, 8, 1]) and compare current_values[i] > current_values[j]. Never read values back from Tex/Text mobjects."),
+    (r"\.set_fill_color\s*\(", "Use .set_fill(color) not .set_fill_color(). ManimGL: obj.set_fill(RED, opacity=1)."),
+    (r"\.set_text\s*\(", "Text has no set_text() method in ManimGL. To update a counter label: create a new Text(...) and use FadeOut(old), FadeIn(new) or ReplacementTransform(old, new)."),
     (r"\bscale_factor\s*=", "Remove `scale_factor`; FadeIn/FadeOut in ManimGL does not support it."),
     (r"\bCircumscribe\s*\(", "Use `FlashAround(...)` in ManimGL, not `Circumscribe(...)`."),
     (
@@ -70,6 +72,7 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
         (r"\by_length\s*=", "height=", "y_length -> height (ManimGL Axes)"),
         (r"\.get_graph_point\s*\(", ".input_to_graph_point(", "get_graph_point -> input_to_graph_point"),
         (r"\._mobjects\b", ".submobjects", "_mobjects -> submobjects"),
+        (r"\.set_fill_color\s*\(", ".set_fill(", "set_fill_color -> set_fill"),
         (r"\bDARK_GREY\b", "GREY_D", "DARK_GREY -> GREY_D"),
         (r"\bDARK_GRAY\b", "GREY_D", "DARK_GRAY -> GREY_D"),
         (r"\bDARK_BLUE\b", "BLUE_D", "DARK_BLUE -> BLUE_D"),
@@ -170,6 +173,10 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
     fixed, tmt_applied = _fix_transform_matching_tex_on_text(fixed)
     if tmt_applied:
         applied.append(tmt_applied)
+
+    fixed, become_applied = _fix_become_inside_play(fixed)
+    if become_applied:
+        applied.append(become_applied)
 
     new_fixed, count = re.subn(
         r"self\.wait\(\s*(?:-\s*[\d.]+|0+\.0+|(?<!\d)0(?![\d.]))\s*\)",
@@ -356,6 +363,97 @@ def _fix_transform_matching_tex_on_text(code: str) -> tuple[str, str | None]:
     return code, None
 
 
+def _fix_become_inside_play(code: str) -> tuple[str, str | None]:
+    """Rewrite self.play(obj.become(...), ...) to the correct two-step form.
+
+    In ManimGL, become() returns self (the mutated Mobject), not an Animation.
+    Passing it to self.play() is equivalent to self.play(obj) which crashes with
+    "Object X cannot be converted to an animation".
+
+    Correct pattern:
+        obj.become(SurroundingRectangle(...))
+        self.play(ShowCreation(obj), run_time=X)
+
+    Handles both single-line and multiline self.play() forms:
+        # single-line:
+        self.play(scan_rect.become(SurroundingRectangle(...)), run_time=0.2)
+        # multiline:
+        self.play(
+            scan_rect.become(SurroundingRectangle(...)),
+            run_time=0.2
+        )
+    """
+    # Find self.play( ... var.become( ... ) ... ) using depth-aware scan on the full code.
+    # We do NOT use .animate.become() — that is a different (valid) pattern.
+    play_re = re.compile(r"([ \t]*)self\.play\(")
+    result_parts: list[str] = []
+    pos = 0
+    count = 0
+
+    while pos < len(code):
+        m = play_re.search(code, pos)
+        if not m:
+            result_parts.append(code[pos:])
+            break
+
+        indent = m.group(1)
+        play_open = m.end() - 1  # index of '(' in self.play(
+
+        # Walk the full self.play(...) call depth-aware
+        depth = 1
+        i = play_open + 1
+        while i < len(code) and depth > 0:
+            if code[i] == '(':
+                depth += 1
+            elif code[i] == ')':
+                depth -= 1
+            i += 1
+        play_close = i - 1  # index of the closing ) of self.play(...)
+
+        play_interior = code[play_open + 1:play_close]  # everything inside self.play(...)
+
+        # Check if interior contains var.become( but NOT var.animate.become(
+        become_re = re.compile(r"(?<!\.)(?<!animate\.)(\w+)\.become\(")
+        bm = become_re.search(play_interior)
+
+        if not bm:
+            # No bare .become() — leave unchanged
+            result_parts.append(code[pos:play_close + 1])
+            pos = play_close + 1
+            continue
+
+        var_name = bm.group(1)
+
+        # Extract the content of var.become(...) using depth-aware scan inside play_interior
+        become_open_in_interior = bm.end() - 1  # '(' of become(
+        bdepth = 1
+        bi = become_open_in_interior + 1
+        while bi < len(play_interior) and bdepth > 0:
+            if play_interior[bi] == '(':
+                bdepth += 1
+            elif play_interior[bi] == ')':
+                bdepth -= 1
+            bi += 1
+        become_close_in_interior = bi - 1
+        become_inner = play_interior[become_open_in_interior + 1:become_close_in_interior]
+
+        # Extract run_time kwarg from the play_interior (after the become call)
+        after_become = play_interior[become_close_in_interior + 1:]
+        rt_match = re.search(r"run_time\s*=\s*[\d.]+", after_become)
+        rt_str = f", {rt_match.group(0)}" if rt_match else ""
+
+        # Emit: become() on its own line, then self.play(ShowCreation(...))
+        result_parts.append(code[pos:m.start()])  # code before this self.play
+        result_parts.append(f"{indent}{var_name}.become({become_inner})\n")
+        result_parts.append(f"{indent}self.play(ShowCreation({var_name}){rt_str})")
+        pos = play_close + 1
+        count += 1
+
+    if count:
+        return "".join(result_parts), f"self.play(obj.become(...)) -> become()+ShowCreation ({count})"
+    return code, None
+
+
 def apply_error_aware_fixes(code: str, stderr: str) -> tuple[str, list[str]]:
     """Deterministic, token-free repairs driven by actual runtime traceback."""
     fixed = code
@@ -484,6 +582,83 @@ def _check_next_to_stacking(lines: list[str], warnings: list[str]) -> None:
                 break  # one warning per anchor is enough
 
 
+def _check_loop_timing_smells(code: str) -> list[str]:
+    """Warn when self.wait() follows a for/while loop body that has no accumulator variable.
+
+    Pattern that causes A/V mismatch: the Director computes total loop run_time as
+    `n * per_iter_time` but only subtracts `per_iter_time` in the wait. The correct
+    pattern is to accumulate `anim_time += per_iter_time` inside the loop and then
+    use `self.wait(max(0.01, cue_dur - anim_time))`.
+
+    Heuristic:
+      1. Find every for/while block.
+      2. If that block contains a self.play(..., run_time=...) call,
+         and does NOT contain an anim_time += or total_time += accumulator pattern,
+         and is immediately followed by a self.wait() call (within 4 lines after
+         the block ends),
+      → emit a structured warning.
+    """
+    warnings: list[str] = []
+    lines = code.splitlines()
+
+    # Locate for/while loop start lines
+    loop_header_re = re.compile(r"^(\s*)(for |while )")
+    accumulator_re = re.compile(r"\banim_time\s*\+=|\btotal_time\s*\+=|\bloop_time\s*\+=|\brun_total\s*\+=")
+    play_with_runtime_re = re.compile(r"self\.play\(.*run_time\s*=")
+    wait_re = re.compile(r"self\.wait\s*\(")
+
+    i = 0
+    while i < len(lines):
+        header_m = loop_header_re.match(lines[i])
+        if not header_m:
+            i += 1
+            continue
+
+        loop_indent = header_m.group(1)
+        loop_body_indent = loop_indent + "    "
+        loop_start = i
+        loop_end = i  # will advance past the loop body
+
+        # Collect loop body lines: those indented deeper than the loop header
+        j = i + 1
+        while j < len(lines):
+            stripped = lines[j]
+            if stripped.strip() == "":
+                j += 1
+                continue
+            # A line at same or lesser indent that is non-empty ends the loop
+            line_indent = len(stripped) - len(stripped.lstrip())
+            header_indent = len(loop_indent)
+            if line_indent <= header_indent:
+                break
+            j += 1
+        loop_end = j  # first line after loop body
+
+        body_lines = lines[loop_start + 1:loop_end]
+        body_text = "\n".join(body_lines)
+
+        has_play_runtime = bool(play_with_runtime_re.search(body_text))
+        has_accumulator = bool(accumulator_re.search(body_text))
+
+        if has_play_runtime and not has_accumulator:
+            # Check the next few lines for a self.wait()
+            look_ahead = lines[loop_end:loop_end + 4]
+            for la_line in look_ahead:
+                if wait_re.search(la_line):
+                    line_num = loop_end + 1  # 1-indexed
+                    warnings.append(
+                        f"Loop timing: self.wait() after loop at line ~{line_num} — "
+                        "accumulate run_times inside the loop: "
+                        "`anim_time += <run_time>`, then use "
+                        "`self.wait(max(0.01, cue_dur - anim_time))`."
+                    )
+                    break
+
+        i = loop_end if loop_end > i else i + 1
+
+    return warnings
+
+
 def _check_layout_smells(code: str) -> list[str]:
     """Heuristic warnings for overlap-prone layout patterns."""
     warnings: list[str] = []
@@ -551,6 +726,7 @@ def precheck_and_autofix_file(scene_path: str) -> dict[str, Any]:
 
     errors = validate_scene_code(fixed)
     layout_warnings = _check_layout_smells(fixed)
+    layout_warnings.extend(_check_loop_timing_smells(fixed))
     if errors:
         return {
             "ok": False,

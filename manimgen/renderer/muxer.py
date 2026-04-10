@@ -21,7 +21,23 @@ logger = logging.getLogger(__name__)
 
 # Mismatches larger than this are logged as warnings — indicates a cue
 # placement or TTS/render timing problem worth investigating.
-_WARN_THRESHOLD_SECONDS = 0.5
+_WARN_THRESHOLD_SECONDS = 1.0
+
+# Module-level mismatch log — each entry is a dict with video_path, diff, cue info.
+# The CLI reads this at the end of a run and prints a summary.
+# Call clear_mismatch_log() at the start of each pipeline run.
+_mismatch_log: list[dict] = []
+
+
+def clear_mismatch_log() -> None:
+    """Reset the mismatch log. Call at the start of each pipeline run."""
+    global _mismatch_log
+    _mismatch_log = []
+
+
+def get_mismatch_log() -> list[dict]:
+    """Return the accumulated mismatch log entries for this pipeline run."""
+    return list(_mismatch_log)
 
 
 def mux_audio_video(video_path: str, audio_path: str, output_path: str) -> str:
@@ -52,6 +68,12 @@ def mux_audio_video(video_path: str, audio_path: str, output_path: str) -> str:
             "check cue placement or scene render timing.",
             video_dur, audio_dur, diff,
         )
+        _mismatch_log.append({
+            "output_path": output_path,
+            "video_dur": video_dur,
+            "audio_dur": audio_dur,
+            "diff": diff,
+        })
     if diff > 1.5:
         logger.warning(
             "[muxer] LARGE MISMATCH (%.3fs) — last %.1fs of this cue will be a freeze-frame. "
