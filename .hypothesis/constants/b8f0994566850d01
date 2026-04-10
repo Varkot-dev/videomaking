@@ -1,0 +1,4 @@
+# file: /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/manimgen/generator/scene_generator.py
+# hypothesis_version: 6.151.12
+
+[10.0, 130, 512, '## Cue breakdown', '## Hard constraints', '## Scene to generate', ',', '..', '.py', '3d_surface', 'camera_rotation', 'cue_word_indices', 'cues', 'director_system.md', 'duration_seconds', 'examples', 'from manimlib', 'graph_scene.py', 'narration', 'prompts', 'techniques:\\s*(.+)', 'visual', 'w']

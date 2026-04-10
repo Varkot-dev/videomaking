@@ -80,7 +80,6 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
         (r"self\.camera\.frame", "self.frame", "self.camera.frame -> self.frame"),
         (r"\bCircumscribe\s*\(", "FlashAround(", "Circumscribe -> FlashAround"),
         # ManimCommunity Axes uses x_length/y_length; ManimGL uses width/height
-        # ManimCommunity Axes uses x_length/y_length; ManimGL uses width/height
         (r"\bx_length\s*=", "width=", "x_length -> width (ManimGL Axes)"),
         (r"\by_length\s*=", "height=", "y_length -> height (ManimGL Axes)"),
         (r"\.get_graph_point\s*\(", ".input_to_graph_point(", "get_graph_point -> input_to_graph_point"),

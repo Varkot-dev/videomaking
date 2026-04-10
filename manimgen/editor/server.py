@@ -10,6 +10,7 @@ Opens at http://localhost:5001
 
 import argparse
 import json
+import logging
 import os
 import subprocess
 import webbrowser
@@ -20,6 +21,7 @@ from flask import Flask, jsonify, render_template, request, send_file
 from manimgen import paths
 
 app = Flask(__name__)
+logger = logging.getLogger(__name__)
 
 # Resolved at startup
 VIDEOS_DIR: Path = Path(paths.videos_dir())
@@ -103,7 +105,8 @@ def api_exports():
     for p in sorted(exports_dir.glob("*.mp4")):
         try:
             size = p.stat().st_size
-        except Exception:
+        except Exception as exc:
+            logger.warning("[editor] Could not stat export file %s: %s", p.name, exc)
             size = 0
         exports.append({
             "filename": p.name,
@@ -188,13 +191,13 @@ def api_export():
         for tp in trimmed_paths:
             try:
                 tp.unlink()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("[editor] Could not remove temp clip %s: %s", tp.name, exc)
         if list_path.exists():
             try:
                 list_path.unlink()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("[editor] Could not remove concat list %s: %s", list_path.name, exc)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -222,20 +225,20 @@ def main():
     for tmp in VIDEOS_DIR.glob("_tmp_*.mp4"):
         try:
             tmp.unlink()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("[editor] Startup cleanup: could not remove %s: %s", tmp.name, exc)
     for concat_list in VIDEOS_DIR.glob("concat_list_*.txt"):
         try:
             concat_list.unlink()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("[editor] Startup cleanup: could not remove %s: %s", concat_list.name, exc)
     # Also clean legacy concat_list.txt (pre-run-id naming)
     legacy_concat = VIDEOS_DIR / "concat_list.txt"
     if legacy_concat.exists():
         try:
             legacy_concat.unlink()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("[editor] Startup cleanup: could not remove legacy concat list: %s", exc)
 
     print(f"[editor] Loading clips from: {VIDEOS_DIR}")
     print(f"[editor] Exports will be saved to: {OUTPUT_DIR}")

@@ -5,6 +5,12 @@ gemini_api_key: ""      # GEMINI_API_KEY — used during development/testing
 # Which LLM to use: "anthropic" | "gemini"
 llm_provider: "gemini"
 
+# Model selection — override here without touching code
+llm:
+  gemini_model: "gemini-2.5-flash"
+  anthropic_model: "claude-sonnet-4-6"
+  max_tokens: 4096        # Only used by Anthropic provider
+
 output:
   scenes_dir: manimgen/output/scenes
   videos_dir: manimgen/output/videos
@@ -17,7 +23,7 @@ output:
 rendering:
   quality: hd           # hd = 1080p | m = 480p | l = 720p
   resolution: "1920x1080"
-  fps: 30
+  fps: 60
   max_retries: 3        # LLM retry calls per scene (increase for production)
 
 tts:

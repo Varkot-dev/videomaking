@@ -11,6 +11,7 @@ Usage:
     response = chat(system="...", user="...")
 """
 
+import logging
 import os
 
 import yaml
@@ -18,18 +19,40 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
+_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
+
+_DEFAULTS = {
+    "llm_provider": "gemini",
+    "gemini_model": "gemini-2.5-flash",
+    "anthropic_model": "claude-sonnet-4-6",
+    "anthropic_max_tokens": 4096,
+}
+
+
+def _load_llm_config() -> dict:
+    """Load LLM config from config.yaml, falling back to defaults."""
+    try:
+        with open(_CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f) or {}
+        llm_cfg = cfg.get("llm", {})
+        return {
+            "llm_provider":         str(cfg.get("llm_provider", _DEFAULTS["llm_provider"])).lower(),
+            "gemini_model":         llm_cfg.get("gemini_model",         _DEFAULTS["gemini_model"]),
+            "anthropic_model":      llm_cfg.get("anthropic_model",      _DEFAULTS["anthropic_model"]),
+            "anthropic_max_tokens": int(llm_cfg.get("max_tokens",       _DEFAULTS["anthropic_max_tokens"])),
+        }
+    except (OSError, yaml.YAMLError) as exc:
+        logger.warning("[llm] Could not read config.yaml (%s) — using defaults", exc)
+        return dict(_DEFAULTS)
+
 
 def _resolve_provider() -> str:
     env = os.environ.get("LLM_PROVIDER", "").strip().lower()
     if env:
         return env
-    config_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
-    try:
-        with open(config_path) as f:
-            cfg = yaml.safe_load(f) or {}
-        return str(cfg.get("llm_provider", "gemini")).lower()
-    except Exception:
-        return "gemini"
+    return _load_llm_config()["llm_provider"]
 
 
 def chat(system: str, user: str, images: list[str] | None = None) -> str:
@@ -56,6 +79,7 @@ def _gemini(system: str, user: str, images: list[str]) -> str:
     from google import genai
     from google.genai import types
 
+    cfg = _load_llm_config()
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
     contents: list = []
@@ -68,7 +92,7 @@ def _gemini(system: str, user: str, images: list[str]) -> str:
     contents.append(user)
 
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model=cfg["gemini_model"],
         contents=contents,
         config=types.GenerateContentConfig(system_instruction=system),
     )
@@ -78,6 +102,7 @@ def _gemini(system: str, user: str, images: list[str]) -> str:
 def _anthropic(system: str, user: str, images: list[str]) -> str:
     import anthropic
 
+    cfg = _load_llm_config()
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
     content: list = []
@@ -89,8 +114,8 @@ def _anthropic(system: str, user: str, images: list[str]) -> str:
     content.append({"type": "text", "text": user})
 
     message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=4096,
+        model=cfg["anthropic_model"],
+        max_tokens=cfg["anthropic_max_tokens"],
         system=system,
         messages=[{"role": "user", "content": content}],
     )

@@ -1,3 +1,4 @@
+import enum
 import re
 import subprocess
 import os
@@ -15,41 +16,57 @@ RETRY_PROMPT_STDERR_CHARS = 3000
 RETRY_PROMPT_CODE_CHARS = 7000
 
 
-def _classify_error(stderr: str) -> str:
+class SceneErrorType(str, enum.Enum):
+    """Classifies ManimGL render errors for targeted fix guidance.
+
+    Inherits str so instances compare equal to their string values and can be
+    used transparently as dict keys without extra conversion.
+    """
+    PRECHECK_VGROUP = "precheck_vgroup"
+    SYNTAX          = "syntax"
+    IMPORT          = "import"
+    ATTRIBUTE       = "attribute"
+    TYPE            = "type"
+    RUNTIME         = "runtime"
+
+
+def _classify_error(stderr: str) -> SceneErrorType:
     # Check precheck-specific errors BEFORE generic TypeError/AttributeError —
     # precheck output contains the word "TypeError" in its explanation text,
     # which would otherwise cause a false match on the generic TypeError branch.
     if "Precheck failed" in stderr and "VGroup" in stderr and "item assignment" in stderr:
-        return "precheck_vgroup"
+        return SceneErrorType.PRECHECK_VGROUP
     if "SyntaxError" in stderr:
-        return "syntax"
+        return SceneErrorType.SYNTAX
     if "ImportError" in stderr or "ModuleNotFoundError" in stderr:
-        return "import"
+        return SceneErrorType.IMPORT
     if "AttributeError" in stderr:
-        return "attribute"
+        return SceneErrorType.ATTRIBUTE
     if "TypeError" in stderr:
-        return "type"
-    return "runtime"
+        return SceneErrorType.TYPE
+    return SceneErrorType.RUNTIME
 
 
-def _fix_guidance(error_type: str) -> str:
-    guidance = {
-        "precheck_vgroup": (
-            "Fix VGroup item assignment. VGroup does NOT support boxes[i] = x or "
-            "boxes[i], boxes[j] = boxes[j], boxes[i] — these raise TypeError at runtime. "
-            "The correct pattern: before any swaps, create a parallel Python list: "
-            "box_list = list(boxes); label_list = list(labels). "
-            "Then swap the list references: box_list[i], box_list[j] = box_list[j], box_list[i]. "
-            "Use box_list[k].get_center() for position lookups after swaps. "
-            "Never assign into the VGroup directly. Never use boxes[i] after the first swap."
-        ),
-        "syntax": "Fix the Python syntax error shown in the traceback.",
-        "import": "Fix the import. Use `from manimlib import *`. Do not import from `manim`.",
-        "attribute": "Fix the attribute error. Check the correct ManimGL method name and signature.",
-        "type": "Fix the type error. Check argument types and counts for the method.",
-        "runtime": "Simplify the scene logic. Reduce animations, check object creation order.",
-    }
-    return guidance.get(error_type, "Fix the error shown in the traceback.")
+_FIX_GUIDANCE: dict[SceneErrorType, str] = {
+    SceneErrorType.PRECHECK_VGROUP: (
+        "Fix VGroup item assignment. VGroup does NOT support boxes[i] = x or "
+        "boxes[i], boxes[j] = boxes[j], boxes[i] — these raise TypeError at runtime. "
+        "The correct pattern: before any swaps, create a parallel Python list: "
+        "box_list = list(boxes); label_list = list(labels). "
+        "Then swap the list references: box_list[i], box_list[j] = box_list[j], box_list[i]. "
+        "Use box_list[k].get_center() for position lookups after swaps. "
+        "Never assign into the VGroup directly. Never use boxes[i] after the first swap."
+    ),
+    SceneErrorType.SYNTAX:    "Fix the Python syntax error shown in the traceback.",
+    SceneErrorType.IMPORT:    "Fix the import. Use `from manimlib import *`. Do not import from `manim`.",
+    SceneErrorType.ATTRIBUTE: "Fix the attribute error. Check the correct ManimGL method name and signature.",
+    SceneErrorType.TYPE:      "Fix the type error. Check argument types and counts for the method.",
+    SceneErrorType.RUNTIME:   "Simplify the scene logic. Reduce animations, check object creation order.",
+}
+
+
+def _fix_guidance(error_type: SceneErrorType) -> str:
+    return _FIX_GUIDANCE.get(error_type, "Fix the error shown in the traceback.")
 
 
 def _build_error_signature(error_type: str, stderr: str) -> str:
@@ -104,10 +121,10 @@ def retry_scene(section: dict, original_code: str, class_name: str, scene_path: 
             llm_fix_calls_used += 1
             with open(scene_path, "w") as f:
                 f.write(code)
-            precheck = precheck_and_autofix(scene_path)
-            if precheck.get("applied_fixes"):
-                with open(scene_path) as f:
-                    code = f.read()
+            precheck_and_autofix(scene_path)
+            # Always reload — precheck may have applied auto-fixes in-place
+            with open(scene_path) as f:
+                code = f.read()
             continue
 
         error_type = _classify_error(result["stderr"])
@@ -172,10 +189,10 @@ Original code:
             f.write(code)
 
         # Local auto-fixes are free and often resolve common ManimGL mismatches.
-        precheck = precheck_and_autofix(scene_path)
-        if precheck.get("applied_fixes"):
-            with open(scene_path) as f:
-                code = f.read()
+        # Always reload — precheck may have applied auto-fixes in-place.
+        precheck_and_autofix(scene_path)
+        with open(scene_path) as f:
+            code = f.read()
 
     return False, None
 

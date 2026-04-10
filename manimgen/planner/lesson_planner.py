@@ -133,6 +133,24 @@ def _format_research_brief(brief: dict) -> str:
     if prerequisites:
         lines.append(f"Prerequisites: {', '.join(prerequisites)}")
 
+    historical_context = brief.get("historical_context", "")
+    if historical_context:
+        lines.append(f"\nHistorical Context:\n  {historical_context}")
+
+    t_vs_i = brief.get("textbook_vs_intuition", {})
+    if t_vs_i:
+        lines.append("\nTextbook vs Intuition:")
+        if "textbook" in t_vs_i:
+            lines.append(f"  Textbook: {t_vs_i['textbook']}")
+        if "intuition" in t_vs_i:
+            lines.append(f"  Intuition: {t_vs_i['intuition']}")
+
+    perspectives = brief.get("multiple_perspectives", {})
+    if perspectives:
+        lines.append("\nMultiple Perspectives:")
+        for k, v in perspectives.items():
+            lines.append(f"  • {k.title()}: {v}")
+
     core_concepts = brief.get("core_concepts", [])
     if core_concepts:
         lines.append("\nCore concepts:")
