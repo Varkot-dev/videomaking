@@ -95,12 +95,36 @@ from manimgen.utils import strip_fencing as _strip_fencing
 
 
 def _safe_json_loads(raw: str) -> dict:
-    import re
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
-        sanitized = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', raw)
-        return json.loads(sanitized)
+        return json.loads(_escape_bad_backslashes(raw))
+
+
+def _escape_bad_backslashes(s: str) -> str:
+    """Escape backslashes that are not valid JSON escape sequences.
+
+    JSON allows: \\\\ \\" \\/ \\b \\f \\n \\r \\t \\uXXXX
+    LaTeX in LLM output often contains valid \\n, \\t but also
+    \\theta, \\nabla, \\alpha etc. which are invalid JSON escapes.
+    We walk the string and double-escape any backslash not followed by a
+    valid JSON escape character.
+    """
+    valid_escapes = set('"\\\/bfnrtu')
+    out = []
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if ch == '\\':
+            if i + 1 < len(s) and s[i + 1] in valid_escapes:
+                out.append(ch)          # keep valid escape as-is
+            else:
+                out.append('\\\\')      # double-escape bare backslash
+            i += 1
+        else:
+            out.append(ch)
+        i += 1
+    return ''.join(out)
 
 
 def research_topic(topic: str) -> dict:

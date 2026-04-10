@@ -299,6 +299,7 @@ Transform(text_a, text_b)             → crashes if glyphs differ; use FadeOut(
 scan_rect.animate.move_to(x)          → only moves, never resizes; call scan_rect.become(SurroundingRectangle(x, ...)) BEFORE self.play, then self.play(ShowCreation(scan_rect))
 self.play(obj.become(SurroundingRectangle(...)))  → CRASH — become() returns self (a Mobject), not an Animation; call become() first, then self.play(ShowCreation(obj))
 boxes[i], boxes[j] = boxes[j], boxes[i]  → CRASH: VGroup does not support item assignment; use a parallel Python list: box_list = list(boxes), then swap box_list[i], box_list[j]
+tex_obj.get_parts_by_tex_expression(r"\symbol")  → DOES NOT EXIST in ManimGL Tex. To highlight a sub-expression, create a separate Tex() object and position it with .move_to() or .next_to(). For a single token, try get_part_by_tex(r"\symbol") instead.
 ```
 
 ## Cinematic Technique Reference
@@ -386,6 +387,16 @@ self.play(
 4. Text over a NumberPlane or busy background → `.set_backstroke(width=8)`.
 5. Short cue (< 2s): one animation + one wait. Don't cram 4 animations.
 6. Long cue (> 8s): chain multiple animations — don't just wait.
+7. **Title + equation NEVER both at top.** If a title exists at `to_edge(UP)` and you also have a LaTeX equation, place the equation below the title: `equation.next_to(title, DOWN, buff=0.4)` — never `.center()` when a title is present. Otherwise they overlap.
+8. **Never place multiple dots/labels at the same coordinate.** If you create 3 dots at the same `axes.c2p(x, y)`, they will stack invisibly. Stagger them: place each at a different x value, or reveal them one at a time.
+9. **y_axis_config must always have `"include_numbers": False`.** Add y-axis labels manually as `Text` objects placed with `.next_to(axes.y_axis.n2p(n), LEFT, buff=0.15)`. Never `include_numbers=True` on y_axis — ManimGL rotates them and they pile up.
+10. **In ThreeDScene, ALL Text/Tex/title objects MUST call `.fix_in_frame()` immediately after creation.** Without it, text rotates with the 3D camera and appears diagonal/tilted on screen. No exceptions. Example:
+    ```python
+    title = Text("My Title", font_size=42).to_edge(UP)
+    title.fix_in_frame()   # REQUIRED — otherwise title tilts with camera
+    self.play(FadeIn(title))
+    ```
+    Every single text label, equation, title, annotation — call `.fix_in_frame()` before any `self.play()` that uses it.
 
 ## Colors
 ```

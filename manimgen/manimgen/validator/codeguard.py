@@ -72,6 +72,12 @@ _BANNED_PATTERNS: list[tuple[str, str]] = [
         "reorient() uses theta_degrees= and phi_degrees= (not theta_deg/phi_deg). "
         "Or call positionally: self.frame.reorient(theta_val, phi_val).",
     ),
+    (
+        r"\.get_parts_by_tex_expression\s*\(",
+        "get_parts_by_tex_expression() does not exist on Tex in ManimGL. "
+        "To highlight a sub-expression, use a separate Tex() object positioned with .move_to() "
+        "or .next_to(), or use get_part_by_tex(r'\\symbol') if the symbol is a single token.",
+    ),
 ]
 
 _BANNED_KWARGS = [
@@ -212,6 +218,10 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
     fixed, numberline_applied = _strip_label_kwarg_from_numberline(fixed)
     if numberline_applied:
         applied.append(numberline_applied)
+
+    fixed, yaxis_applied = _fix_y_axis_include_numbers(fixed)
+    if yaxis_applied:
+        applied.append(yaxis_applied)
 
     new_fixed, count = re.subn(
         r"self\.wait\(\s*(?:-\s*[\d.]+|0+\.0+|(?<!\d)0(?![\d.]))\s*\)",
@@ -812,6 +822,22 @@ def _check_layout_smells(code: str) -> list[str]:
                 "axis_config={\"decimal_number_config\": {\"font_size\": 24}}."
             )
     return warnings
+
+
+def _fix_y_axis_include_numbers(code: str) -> tuple[str, str | None]:
+    """Force y_axis_config include_numbers to False.
+
+    ManimGL rotates y-axis number labels 90° and stacks them when
+    include_numbers=True, making them crash into each other and become
+    unreadable. Always disable and use manual Text labels instead.
+    """
+    pattern = re.compile(
+        r'(y_axis_config\s*=\s*\{[^}]*)"include_numbers"\s*:\s*True([^}]*\})'
+    )
+    new, count = re.subn(pattern, r'\1"include_numbers": False\2', code)
+    if count:
+        return new, f'forced y_axis include_numbers=False ({count})'
+    return code, None
 
 
 def precheck_and_autofix(code: str) -> str:
