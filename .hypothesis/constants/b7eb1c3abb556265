@@ -1,0 +1,4 @@
+# file: /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/manimgen/renderer/audio_slicer.py
+# hypothesis_version: 6.151.12
+
+[0.0, 0.5, '-ac', '-ar', '-avoid_negative_ts', '-c:a', '-i', '-ss', '-t', '-version', '-y', '1', '48000', 'aac', 'ffmpeg', 'make_zero']

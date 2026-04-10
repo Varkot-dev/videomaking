@@ -1,0 +1,4 @@
+# file: /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/manimgen/renderer/assembler.py
+# hypothesis_version: 6.151.12
+
+[0.0, 0.1, 0.3, '-', '-ar', '-c:a', '-c:v', '-f', '-filter_complex', '-i', '-map', '-of', '-preset', '-select_streams', '-shortest', '-show_entries', '-t', '-v', '-vf', '-y', '/', '48000', ':', '[a]', '[v]', '_', '_cue', '_cue00\\.mp4$', 'a:0', 'aac', 'error', 'ffmpeg', 'ffprobe', 'format=duration', 'lavfi', 'libx264', 'stream=codec_type', 'veryfast', 'x']

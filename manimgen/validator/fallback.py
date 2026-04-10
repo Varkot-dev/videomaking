@@ -1,8 +1,10 @@
+import logging
 import os
 import subprocess
 from manimgen.validator.env import get_render_env
 from manimgen import paths
 
+logger = logging.getLogger(__name__)
 
 FALLBACK_TEMPLATE = '''from manimlib import *
 
@@ -71,8 +73,11 @@ def fallback_scene(section: dict) -> str | None:
             return _find_rendered_video(class_name)
 
         # deterministic fallback has no second strategy; fail fast
+        logger.warning(
+            "[fallback] manimgl exited %d for %s", result.returncode, class_name
+        )
     except subprocess.TimeoutExpired:
-        pass
+        logger.warning("[fallback] %s timed out after 180s", class_name)
 
     return None
 

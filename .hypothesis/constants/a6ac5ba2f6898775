@@ -1,0 +1,4 @@
+# file: /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/manimgen/validator/runner.py
+# hypothesis_version: 6.151.12
+
+[240, 360, '#1C1C1C', '%Y%m%d_%H%M%S', '-c', '-w', '.mp4', 'ThreeDScene', 'applied_fixes', 'layout_warnings', 'manimgl', 'media/videos', 'ok', 'stderr', 'videos', 'w']

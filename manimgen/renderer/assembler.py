@@ -83,17 +83,17 @@ def assemble_video(video_paths: list[str], title: str) -> str:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _normalise_all(paths: list[str], work_dir: str) -> list[str]:
+def _normalise_all(clip_paths: list[str], work_dir: str) -> list[str]:
     """Re-encode all clips to 1920x1080 30fps yuv420p aac."""
     norm_paths = []
-    for i, path in enumerate(paths):
+    for i, path in enumerate(clip_paths):
         norm = os.path.join(work_dir, f"_norm_{i:03d}.mp4")
         if _has_audio_stream(path):
             cmd = [
                 "ffmpeg", "-y",
                 "-i", path,
                 "-vf", _vf_scale(),
-                "-c:v", "libx264", "-preset", "veryfast",
+                "-c:v", "libx264", "-preset", "slow", "-crf", "17",
                 "-c:a", "aac", "-ar", "48000",
                 norm,
             ]
@@ -106,12 +106,12 @@ def _normalise_all(paths: list[str], work_dir: str) -> list[str]:
                 "-i", path,
                 "-f", "lavfi", "-t", str(dur), "-i", "anullsrc=r=48000:cl=stereo",
                 "-vf", _vf_scale(),
-                "-c:v", "libx264", "-preset", "veryfast",
+                "-c:v", "libx264", "-preset", "slow", "-crf", "17",
                 "-c:a", "aac", "-ar", "48000",
                 "-shortest",
                 norm,
             ]
-        subprocess.run(cmd, check=True, capture_output=True)
+        subprocess.run(cmd, check=True, capture_output=True, timeout=300)
         norm_paths.append(norm)
     return norm_paths
 
@@ -207,11 +207,13 @@ def _hard_concat(paths: list[str], output_path: str) -> None:
             *inputs,
             "-filter_complex", filter_str,
             "-map", "[v]", "-map", "[a]",
-            "-c:v", "libx264", "-c:a", "aac", "-ar", "48000",
+            "-c:v", "libx264", "-preset", "slow", "-crf", "17",
+            "-c:a", "aac", "-ar", "48000",
             output_path,
         ],
         check=True,
         capture_output=True,
+        timeout=300,
     )
 
 
@@ -223,7 +225,7 @@ def _video_duration(path: str) -> float:
             "-of", "default=noprint_wrappers=1:nokey=1",
             path,
         ],
-        check=True, capture_output=True, text=True,
+        check=True, capture_output=True, text=True, timeout=30,
     )
     return max(0.1, float(result.stdout.strip()))
 
@@ -246,9 +248,14 @@ def _has_audio_stream(path: str) -> bool:
         if proc.returncode != 0:
             return True
         return out.strip() != ""
-    except Exception:
-        # If probing fails, keep existing behavior and assume audio is present.
-        # This avoids crashing normalization on transient probe failures.
+    except Exception as exc:
+        # If probing fails, assume audio is present to use the safer encode path.
+        # Log so transient probe failures are observable.
+        import logging
+        logging.getLogger(__name__).warning(
+            "[assembler] Audio stream probe failed for %s: %s — assuming audio present",
+            os.path.basename(path), exc,
+        )
         return True
 
 
@@ -266,9 +273,11 @@ def _xfade_pair(a: str, b: str, out: str) -> None:
                 f"[0:a][1:a]acrossfade=d={_XFADE_DURATION}[a]"
             ),
             "-map", "[v]", "-map", "[a]",
-            "-c:v", "libx264", "-c:a", "aac", "-ar", "48000",
+            "-c:v", "libx264", "-preset", "slow", "-crf", "17",
+            "-c:a", "aac", "-ar", "48000",
             out,
         ],
         check=True,
         capture_output=True,
+        timeout=300,
     )

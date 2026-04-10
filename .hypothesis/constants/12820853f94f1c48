@@ -1,0 +1,4 @@
+# file: /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/manimgen/input/pdf_parser.py
+# hypothesis_version: 6.151.12
+
+[120, 150, 200, 500, '(?m)^\\s*\\d{1,4}\\s*$', '(none)', ',', '-\\n(\\w)', '.', ':', ';', '[ \\t]+', '\\1', '\\n{3,}', '^(\\d+\\.)+\\s+\\S', '__main__', 'chunks', 'extracted_pages', 'images', 'png', 'raw_text', 'utf-8']
