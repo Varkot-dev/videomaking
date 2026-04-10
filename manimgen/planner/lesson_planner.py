@@ -22,6 +22,12 @@ def _load_pdf_system_prompt() -> str:
         return f.read()
 
 
+def _load_researcher_system_prompt() -> str:
+    here = os.path.dirname(__file__)
+    with open(os.path.join(here, "prompts", "researcher_system.md")) as f:
+        return f.read()
+
+
 def _cap_sections(plan: dict, limit: int) -> dict:
     sections = plan.get("sections", [])
     if len(sections) > limit:
@@ -97,9 +103,105 @@ def _safe_json_loads(raw: str) -> dict:
         return json.loads(sanitized)
 
 
+def research_topic(topic: str) -> dict:
+    """Call LLM with researcher prompt to build a structured knowledge brief.
+
+    Returns a dict with keys: topic, prerequisites, core_concepts, key_formulas,
+    worked_example, failure_modes, real_world_connections, section_suggestions.
+    """
+    system = _load_researcher_system_prompt()
+    raw = chat(system=system, user=f"Research this topic for an educational video: {topic}")
+    try:
+        brief = _safe_json_loads(_strip_fencing(raw))
+        logger.info("[planner] Research brief: %d core concepts, %d formulas",
+                    len(brief.get("core_concepts", [])),
+                    len(brief.get("key_formulas", [])))
+        return brief
+    except Exception as e:
+        logger.warning("[planner] Failed to parse research brief: %s — continuing without research", e)
+        return {}
+
+
+def _format_research_brief(brief: dict) -> str:
+    """Format the research brief as source material for the planner prompt."""
+    if not brief:
+        return ""
+
+    lines = ["--- RESEARCH BRIEF ---"]
+
+    prerequisites = brief.get("prerequisites", [])
+    if prerequisites:
+        lines.append(f"Prerequisites: {', '.join(prerequisites)}")
+
+    core_concepts = brief.get("core_concepts", [])
+    if core_concepts:
+        lines.append("\nCore concepts:")
+        for c in core_concepts:
+            name = c.get("name", "")
+            if not name:
+                continue
+            lines.append(f"  • {name}: {c.get('explanation', '')}")
+            if c.get("common_misconception"):
+                lines.append(f"    Misconception: {c['common_misconception']}")
+            if c.get("visual_opportunity"):
+                lines.append(f"    Visual: {c['visual_opportunity']}")
+
+    key_formulas = brief.get("key_formulas", [])
+    if key_formulas:
+        lines.append("\nKey formulas:")
+        for f in key_formulas:
+            name = f.get("name", "")
+            if not name:
+                continue
+            lines.append(f"  • {name}: {f.get('formula', '')}")
+            lines.append(f"    {f.get('explanation', '')}")
+
+    worked_example = brief.get("worked_example", {})
+    if worked_example:
+        lines.append(f"\nWorked example: {worked_example.get('description', '')}")
+        for step in worked_example.get("steps", []):
+            lines.append(f"  {step}")
+
+    failure_modes = brief.get("failure_modes", [])
+    if failure_modes:
+        lines.append("\nFailure modes / edge cases:")
+        for fm in failure_modes:
+            name = fm.get("name", "")
+            if not name:
+                continue
+            lines.append(f"  • {name}: {fm.get('description', '')}")
+            if fm.get("visual_opportunity"):
+                lines.append(f"    Visual: {fm['visual_opportunity']}")
+
+    real_world = brief.get("real_world_connections", [])
+    if real_world:
+        lines.append("\nReal-world connections: " + "; ".join(real_world))
+
+    section_suggestions = brief.get("section_suggestions", [])
+    if section_suggestions:
+        lines.append("\nSuggested section flow:")
+        for i, s in enumerate(section_suggestions, 1):
+            lines.append(f"  {i}. {s}")
+
+    lines.append("--- END RESEARCH BRIEF ---")
+    return "\n".join(lines)
+
+
 def plan_lesson(topic: str) -> dict:
+    print(f"[planner] Researching topic: {topic}")
+    brief = research_topic(topic)
+    research_material = _format_research_brief(brief)
+
     system = _load_system_prompt()
-    raw = chat(system=system, user=f"Create a visual storyboard for: {topic}")
+    if research_material:
+        user_message = (
+            f"Create a visual storyboard for: {topic}\n\n"
+            f"{research_material}"
+        )
+    else:
+        user_message = f"Create a visual storyboard for: {topic}"
+
+    raw = chat(system=system, user=user_message)
     plan = _cap_sections(_safe_json_loads(_strip_fencing(raw)), _MAX_SECTIONS_TOPIC)
     return _extract_cues(plan)
 

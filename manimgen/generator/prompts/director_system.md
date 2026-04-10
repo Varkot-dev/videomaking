@@ -101,6 +101,27 @@ When axes + title both present: `axes.center().shift(DOWN * 0.8)` — always, wi
 | `width=W, height=H` in Axes | `x_length=W, y_length=H` |
 | `TransformMatchingTex(a, b)` | `TransformMatchingShapes(a, b)` |
 
+### self.frame — complete API (ThreeDScene only)
+`self.frame` is a `CameraFrame`. These are the ONLY valid methods. Do not invent others.
+
+```python
+self.frame.reorient(theta_deg, phi_deg)                    # set camera angle
+self.frame.animate.reorient(theta_deg, phi_deg)            # animate camera angle
+self.frame.add_updater(lambda m, dt: m.increment_theta(x)) # continuous orbit
+self.frame.add_ambient_rotation(angular_speed=0.2)         # auto-spin
+self.frame.clear_updaters()                                # stop rotation
+self.frame.animate.scale(factor)                           # zoom
+self.frame.animate.move_to(point)                          # pan
+```
+
+Light source — accessed via `self.camera`, NOT `self.frame`:
+```python
+light = self.camera.light_source          # Point object
+self.play(light.animate.move_to(3 * IN)) # animate light position
+# NEVER: self.frame.set_light_source_position(...)  ← does not exist
+# NEVER: self.frame.set_light(...)                  ← does not exist
+```
+
 ### Mobjects vs Animations — the most common crash source
 
 `self.play()` only accepts **animations**, never raw Mobjects. Every shape you create is a Mobject. To display it, wrap it in an animation:

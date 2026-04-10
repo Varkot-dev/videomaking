@@ -10,7 +10,7 @@ Uses an audio-first CUE pipeline where spoken word timestamps drive animation du
 **Stack:** Python 3.13, ManimGL (3b1b fork), Gemini 2.5 Flash, FFmpeg 8.1, LaTeX, edge-tts, Flask (editor)
 
 **Repo:** `https://github.com/Varkot-dev/videomaking.git` — branch `main`
-**314 tests, all passing** (`python3 -m pytest tests/ --ignore=tests/test_scene_generator.py --ignore=tests/test_planner.py --ignore=tests/test_pipeline_e2e.py -v`)
+**361 tests, all passing** (`python3 -m pytest tests/ --ignore=tests/test_scene_generator.py --ignore=tests/test_planner.py --ignore=tests/test_pipeline_e2e.py -v`)
 
 ---
 
@@ -415,46 +415,64 @@ All four high-priority patterns that caused 60% fallback rate in "bubble sort" r
 
 Director prompt (`director_system.md`), retry prompt (`retry_system.md`), and `scene_generator.py` hardcoded rule also corrected. 5 new example scenes added to `examples/` covering sweep_highlight, stagger_reveal, equation_morph, brace_annotation, fade_reveal. 337 tests pass.
 
-### HIGH PRIORITY — VGroup swap pattern causes 40% fallback rate (2 of 5 sections)
-Confirmed from "bubble sort" smoke test on 2026-04-08 (branch main, post-fix). Sections 03 and 04 still fall back.
+### Stale render cache path mismatch — FIXED 2026-04-09 (branch feature/pipeline-reliability)
 
-**Root cause:** When the topic involves an algorithm that physically swaps elements (bubble sort, selection sort, insertion sort), the Director generates animated swap code using VGroup item assignment like:
-```python
-boxes[i], boxes[i+1] = boxes[i+1], boxes[i]    # ← CRASH: VGroup.__setitem__ not supported
-labels[j], labels[j + 1] = labels[j + 1], labels[j]  # ← same crash
+`_render_is_fresh()` was called with `_rendered_section_path(section)` — a hardcoded guess like `"videos/Section01Scene.mp4"`. But `_find_rendered_video(class_name)` returns the actual ManimGL output path (e.g. `"media/videos/480p15/Section01Scene.mp4"`). The sidecar was written next to the real video, but the freshness check looked at the wrong path, so renders were never reused.
+
+**Fix (cli.py):** Before the if/else block, call `section_class_name(section)` to get `class_name`, then `_find_rendered_video(class_name)` to find the actual video. Only call `_render_is_fresh(found_video, ...)` on that real path. If `found_video` is None, fall through to codegen as before.
+
+### VGroup swap pattern — FIXED 2026-04-09 (branch feature/swap-timing-fixes)
+
+All 5 sections of the "bubble sort" smoke run now render without fallback. Root causes found and closed:
+
+1. **`self.play(scan_rect.become(...))` crash** — `become()` returns `self` (a Mobject), not an Animation. Added `_fix_become_inside_play()` in `codeguard.py` that rewrites both single-line and multiline `self.play(obj.become(...))` to the correct two-step form: `obj.become(...); self.play(ShowCreation(obj))`. Fixed in both prompts.
+2. **`get_tex_string()` error message** — improved to tell the LLM exactly what to do: "store in a plain Python list (`current_values = [...]`) and compare `current_values[i] > current_values[j]`". Added to retry prompt.
+3. **`set_fill_color()` → `set_fill()`** — auto-fix + banned pattern + prompts updated.
+4. **`text.animate.set_text()`** — banned pattern + prompts (Text has no `set_text` in ManimGL).
+5. **`max_retries: 3` in config.yaml** — 1 retry wasn't enough for complex scenes; bumped to 3.
+6. **`examples/array_swap_scene.py`** — added, tagged `techniques: array_swap`. Shows correct parallel list swap pattern. Director references it automatically via `_index_examples()`.
+7. **`sweep_highlight` prompt corrected** — both `director_system.md` and `retry_system.md` had the wrong "RIGHT" example using `self.play(scan_rect.become(...))`. Now show the correct two-step form.
+8. **361 tests pass** on branch `feature/swap-timing-fixes`.
+
+---
+
+## Next steps (prioritized as of 2026-04-09)
+
+### 1. Merge feature/swap-timing-fixes → main
+Branch `feature/swap-timing-fixes` is ready. All 361 tests pass. Smoke run confirmed 0 fallbacks on "bubble sort". Merge when ready.
+
+### 2. A/V timing mismatch (freeze-frame tails on many cues)
+Still the most visible quality issue in the rendered video. The muxer pads with a freeze-frame when video ends before audio, which means cues often have 1–3 seconds of frozen still at the end.
+
+**Root cause:** Director gets timing arithmetic wrong when animations are inside loops — it subtracts one iteration's `run_time` instead of `n * run_time`. The `max(0.01, ...)` guard in the prompt catches negative waits but not under-counted loops.
+
+**Fix plan (in priority order):**
+- **codeguard auto-fix**: detect `self.wait(` with a literal negative value (already done — clamps to 0.01). Consider also warning when `self.wait(` appears after a loop with no accumulator variable.
+- **Director prompt**: the "Loop timing" section already shows `anim_time` accumulation but the LLM ignores it under pressure. Make the rule harder to miss — move it to the top of the Cue timing section and add a second example with a swap loop specifically.
+- **Muxer**: log `WARNING` at diff > 1.0s (currently only logs at > 0.5s). Already has a second warning at > 1.5s added this session.
+
+**Files:** `generator/prompts/director_system.md`, `renderer/muxer.py`
+
+### 3. Layout checker improvements (visual defects reach final output)
+Two issues remain from the 2026-04-08 partial fix:
+
+- **Multi-frame sampling**: `layout_checker.py` samples only `t=1.0s`. Mid-animation defects (overlapping boxes during swaps, text running off-screen mid-transition) are invisible. Fix: use `ffprobe` to get video duration, sample at 25%/50%/75% of duration, send all frames in one `chat()` call.
+- **Structured feedback format**: `layout_checker_system.md` returns prose ("the blue rectangle is too wide"). The retry loop needs machine-readable `ISSUE | CAUSE | FIX` lines it can act on. Rewrite the prompt to return that format.
+
+**Files:** `validator/layout_checker.py`, `validator/prompts/layout_checker_system.md`, new `tests/test_layout_checker.py`
+
+### 4. Branch housekeeping
+Several old feature branches exist. After merging `feature/swap-timing-fixes`, start the next branch from `main`:
+```bash
+git checkout main
+git pull
+git checkout -b feature/<next-topic>
 ```
-The LLM knows it needs to track which physical box is at which position after swaps, and reaches for Python's natural tuple-swap idiom — but VGroup doesn't support `__setitem__`.
 
-**Why codeguard can't auto-fix it:** The swap `boxes[i], boxes[i+1] = boxes[i+1], boxes[i]` is valid Python syntax (tuple unpacking), but semantically wrong for VGroup. There's no safe mechanical transformation — the correct fix is architectural: use a **parallel Python list** (`box_list = list(boxes)`) for index tracking, and only use VGroup for rendering.
+### 5. Try a second topic end-to-end
+Now that bubble sort renders cleanly, test with a non-swap topic to confirm the fixes didn't break anything for simpler scenes. Suggested: `manimgen "binary search"` or `manimgen "gradient descent"`.
 
-**Why the retry LLM also fails:** The retry budget is 1 LLM call. The LLM receives the precheck error message and the broken code, but rewriting a 100+ line scene to restructure the entire swap loop is beyond what a repair call reliably does — especially since the pattern recurs several times.
-
-**Architectural options for next session:**
-
-**Option A — Example scene (highest leverage, zero pipeline changes)**
-Add `examples/bubble_sort_swap_scene.py` tagged `techniques: array_swap`. Show the correct pattern:
-```python
-box_list = list(boxes)   # parallel Python list for index tracking
-# ... swap animation ...
-box_list[i], box_list[i+1] = box_list[i+1], box_list[i]  # swap the list references
-# boxes VGroup is rebuilt or not used for index access after swaps
-```
-`_index_examples()` picks it up automatically when any cue visual mentions "swap", "sort", "exchange".
-
-**Option B — Planner-level constraint**
-Add a rule to `planner_system.md`: when generating visuals for swap-based algorithms, always describe the visual as "two boxes move to each other's positions" (pure animation) rather than implying programmatic index tracking. This avoids the swap-reference problem by framing it as a pure `.animate.move_to()` problem — no need to track which box is logically at which index.
-
-**Option C — codeguard pattern + auto-fix**
-Detect `\w+\[(\w+)\],\s*\w+\[(\w+)\]\s*=` (tuple-swap on subscript) and rewrite to insert `_list = list(\w+)` before the swap and update references. High complexity, easy to get wrong.
-
-**Recommendation:** A + B together. Example scene teaches the correct visual pattern. Planner constraint prevents the Director from needing index tracking at all. Together they close this class of failure for any algorithm with swaps.
-
-**Log artifacts** (2026-04-08 run):
-- `output/logs/Section03Scene_attempt1.py` — 115 lines, swap at line 77: `boxes[i], boxes[i+1] = boxes[i+1], boxes[i]`
-- `output/logs/Section04Scene_attempt1.py` — 184 lines, swap at line 131: `labels[j], labels[j + 1] = labels[j + 1], labels[j]`
-- `output/logs/Section03Scene_20260408_162749.log` — precheck error: VGroup item assignment
-- `output/logs/Section04Scene_20260408_162901.log` — precheck error: VGroup item assignment
-- Section 05 **FIXED** — `\text{}` wrapper stripped by new codeguard fix, 0 issues after
+---
 
 ### HIGH PRIORITY — A/V timing mismatch (muxer duration warnings)
 Observed in 2026-04-08 smoke test run output:

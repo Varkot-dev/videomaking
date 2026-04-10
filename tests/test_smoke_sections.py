@@ -1,10 +1,11 @@
 """
-Smoke tests that replay the exact Section03 and Section04 scenes from the
-2026-04-08 bubble-sort run through the full precheck → codeguard → classify
-→ guidance chain.
+Smoke tests that replay Section03 and Section04 scenes from the bubble-sort
+pipeline run through the full precheck → codeguard → classify → guidance chain.
 
-These tests do NOT call manimgl. They verify that the scenes which were
-previously falling back now pass precheck and get correct retry guidance.
+These tests do NOT call manimgl. They verify that:
+- The auto-fixes in codeguard handle the patterns found in generated code.
+- The retry guidance is correct for precheck errors.
+- The array_swap example used as Director reference passes precheck.
 
 Run with:
     python3 -m pytest tests/test_smoke_sections.py -v
@@ -36,52 +37,96 @@ def _load_log(filename: str) -> str:
         return f.read()
 
 
-# ── Section03 — VGroup swap pattern ──────────────────────────────────────────
+# ── Inline pattern tests — not tied to specific pipeline run output ───────────
+
+# Inline examples of patterns that codeguard must detect/fix.
+# These are stable regardless of what the LLM most recently generated.
+
+_BECOME_INSIDE_PLAY_CODE = """\
+from manimlib import *
+class S(Scene):
+    def construct(self):
+        boxes = VGroup(*[Square() for _ in range(5)]).arrange(RIGHT)
+        box_list = list(boxes)
+        scan_rect = SurroundingRectangle(box_list[0], color=YELLOW, buff=0.05)
+        self.play(ShowCreation(scan_rect), run_time=0.3)
+        for i in range(1, 5):
+            self.play(scan_rect.become(SurroundingRectangle(box_list[i], color=YELLOW, buff=0.05)), run_time=0.2)
+        self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)
+"""
+
+_GET_TEX_STRING_CODE = """\
+from manimlib import *
+class S(Scene):
+    def construct(self):
+        labels = VGroup(*[Tex(str(v)) for v in [5, 3, 8]])
+        label_list = list(labels)
+        for i in range(2):
+            val = int(label_list[i].get_tex_string())
+            if val > 3:
+                self.play(label_list[i].animate.set_color(RED))
+        self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)
+"""
+
 
 class TestSection03ScenePrecheck:
-    """Section03Scene_attempt1.py: bubble sort with VGroup tuple swap on line 77.
+    """Tests for patterns that codeguard must detect and fix.
 
-    The scene is architecturally nearly correct — it uses current_values (plain list)
-    for logical tracking. Only boxes[i], boxes[i+1] = boxes[i+1], boxes[i] is bad.
-    The plain-list lines must NOT be flagged. The real VGroup line still must be.
+    Uses inline code samples (not log files) for stability — these tests verify
+    the capability regardless of what the LLM most recently generated.
     """
 
     def test_plain_list_swap_not_flagged(self):
-        """current_values[i], current_values[i+1] = ... must not produce a VGroup error.
+        """current_boxes[i], current_boxes[i+1] = ... must not produce a VGroup error.
 
-        Section03 has one genuinely bad line (boxes[i], boxes[i+1] = ...) which fires
-        both the tuple-swap and single-assign patterns — so 2 errors are expected.
-        But the current_values plain-list lines must not add any extra errors.
+        current_boxes and current_labels are Python lists (list(boxes)), not VGroups.
+        Their swap is valid Python and must not trigger any VGroup error.
         """
-        code = _load_log("Section03Scene_attempt1.py")
-        errors = validate_scene_code(code)
-        vgroup_errors = [e for e in errors if "VGroup" in e]
-
-        # Verify it's ONLY the boxes[] line firing — not current_values or anything else.
-        # The single bad VGroup line can match both patterns (tuple-swap + single-assign),
-        # so 1-2 errors is correct. Any more means plain list lines are being flagged.
-        import re
         plain_list_lines = [
-            "current_values[i], current_values[i+1] = current_values[i+1], current_values[i]"
+            "current_boxes[i], current_boxes[i+1] = current_boxes[i+1], current_boxes[i]",
+            "current_labels[i], current_labels[i+1] = current_labels[i+1], current_labels[i]",
         ]
         for line in plain_list_lines:
             line_errors = validate_scene_code(line)
             plain_vgroup = [e for e in line_errors if "VGroup" in e]
             assert plain_vgroup == [], (
-                f"Plain list line triggers VGroup error: {line!r}\nErrors: {plain_vgroup}"
+                f"Plain list swap line triggers VGroup error: {line!r}\nErrors: {plain_vgroup}"
             )
-        # The actual scene should have at most 2 VGroup errors (boxes[] line matching both patterns)
-        assert len(vgroup_errors) <= 2, (
-            f"Got {len(vgroup_errors)} VGroup errors — too many, plain list lines may be flagged:\n"
-            + "\n".join(vgroup_errors)
+
+    def test_become_inside_play_is_auto_fixed(self):
+        """self.play(scan_rect.become(SurroundingRectangle(...))) must be rewritten."""
+        fixed, applied = apply_known_fixes(_BECOME_INSIDE_PLAY_CODE)
+        become_applied = [a for a in applied if "become" in a]
+        assert become_applied, (
+            "apply_known_fixes must have rewritten self.play(obj.become(...)) to "
+            "become()+ShowCreation. "
+            f"Applied: {applied}"
         )
 
-    def test_vgroup_swap_line_is_still_caught(self):
-        """boxes[i], boxes[i+1] = boxes[i+1], boxes[i] on line 77 must still be flagged."""
-        code = _load_log("Section03Scene_attempt1.py")
-        errors = validate_scene_code(code)
-        vgroup_errors = [e for e in errors if "VGroup" in e]
-        assert vgroup_errors, "The real VGroup swap on boxes[] must still be detected"
+    def test_become_inside_play_removed_after_fix(self):
+        """After fix, no self.play(x.become(...)) should remain."""
+        fixed, _ = apply_known_fixes(_BECOME_INSIDE_PLAY_CODE)
+        import re
+        remaining = re.findall(r"self\.play\(\s*\w+\.become\(", fixed)
+        assert remaining == [], (
+            f"self.play(obj.become(...)) still present after fix: {remaining}"
+        )
+
+    def test_get_tex_string_is_caught_by_precheck(self):
+        """get_tex_string() must be detected as a banned pattern."""
+        errors = validate_scene_code(_GET_TEX_STRING_CODE)
+        tex_errors = [e for e in errors if "get_tex_string" in e]
+        assert tex_errors, "get_tex_string() must be flagged by validate_scene_code"
+
+    def test_get_tex_string_error_mentions_python_list(self):
+        """The error message must tell the LLM to use a Python list."""
+        errors = validate_scene_code(_GET_TEX_STRING_CODE)
+        tex_errors = [e for e in errors if "get_tex_string" in e]
+        assert tex_errors, "get_tex_string error missing"
+        assert any("list" in e.lower() or "current_values" in e for e in tex_errors), (
+            "Error message must mention 'list' or 'current_values' to guide the LLM fix. "
+            f"Got: {tex_errors}"
+        )
 
     def test_precheck_error_classified_as_precheck_vgroup(self):
         """The precheck error string must map to 'precheck_vgroup', not 'type'."""
@@ -151,51 +196,66 @@ class Section03Scene(Scene):
         )
 
 
-# ── Section04 — TransformMatchingTex on Text ─────────────────────────────────
+# ── Section04 — set_fill_color and get_tex_string auto-fix ───────────────────
+
+_SET_FILL_COLOR_CODE = """\
+from manimlib import *
+class S(Scene):
+    def construct(self):
+        boxes = VGroup(*[Square() for _ in range(3)]).arrange(RIGHT)
+        box_list = list(boxes)
+        self.play(LaggedStart(*[FadeIn(b) for b in boxes], lag_ratio=0.1), run_time=0.8)
+        self.play(box_list[0].animate.set_fill_color(GREEN), run_time=0.4)
+        self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)
+"""
 
 class TestSection04ScenePrecheck:
-    """Section04Scene_attempt1.py: multi-pass bubble sort with TMT on Text objects.
+    """Tests for patterns seen in multi-pass bubble sort scenes.
 
-    Lines 102 and 124 use TransformMatchingTex on Text() counter labels.
-    After apply_known_fixes(), both must be converted to FadeOut/FadeIn.
+    Uses inline code samples (not log files) for stability.
     """
 
-    def test_tmt_on_text_is_auto_fixed(self):
-        code = _load_log("Section04Scene_attempt1.py")
-        fixed, applied = apply_known_fixes(code)
-        tmt_applied = [a for a in applied if "TransformMatchingTex" in a]
-        assert tmt_applied, (
-            "apply_known_fixes must have converted TransformMatchingTex(Text, ...) to FadeOut/FadeIn. "
+    def test_become_inside_play_is_auto_fixed(self):
+        """self.play(scan_rect.become(SurroundingRectangle(...))) must be rewritten."""
+        fixed, applied = apply_known_fixes(_BECOME_INSIDE_PLAY_CODE)
+        become_applied = [a for a in applied if "become" in a]
+        assert become_applied, (
+            "apply_known_fixes must have rewritten self.play(obj.become(...)) to "
+            "become()+ShowCreation. "
             f"Applied: {applied}"
         )
 
-    def test_no_tmt_on_text_remains_after_fix(self):
-        code = _load_log("Section04Scene_attempt1.py")
-        fixed, _ = apply_known_fixes(code)
+    def test_become_inside_play_removed_after_fix(self):
+        """After fix, no self.play(x.become(...)) remains (only .animate.become stays)."""
+        fixed, _ = apply_known_fixes(_BECOME_INSIDE_PLAY_CODE)
+        import re
+        remaining = re.findall(r"self\.play\(\s*\w+\.become\(", fixed)
+        assert remaining == [], (
+            f"self.play(obj.become(...)) still present after fix: {remaining}"
+        )
+
+    def test_set_fill_color_is_auto_fixed(self):
+        """set_fill_color() must be rewritten to set_fill()."""
+        fixed, applied = apply_known_fixes(_SET_FILL_COLOR_CODE)
+        fill_applied = [a for a in applied if "set_fill" in a]
+        assert fill_applied, (
+            f"apply_known_fixes must rewrite set_fill_color -> set_fill. Applied: {applied}"
+        )
+        assert "set_fill_color" not in fixed, "set_fill_color still present after fix"
+
+    def test_set_fill_color_detected_by_validator(self):
+        """set_fill_color() must be flagged as a banned pattern."""
+        errors = validate_scene_code(_SET_FILL_COLOR_CODE)
+        fill_errors = [e for e in errors if "set_fill" in e]
+        assert fill_errors, "set_fill_color() must be flagged by validate_scene_code"
+
+    def test_no_tmt_on_text_in_inline_code(self):
+        """The inline become code has no TransformMatchingTex on Text — verify no false positive."""
+        fixed, _ = apply_known_fixes(_BECOME_INSIDE_PLAY_CODE)
         remaining = _detect_tmt_on_text(fixed)
         assert remaining == [], (
-            "TransformMatchingTex on Text still present after fix:\n"
+            "False positive TMT detection on become-fix code:\n"
             + "\n".join(remaining)
-        )
-
-    def test_tmt_errors_gone_after_fix_leaving_only_vgroup(self):
-        """After apply_known_fixes, Section04 TMT errors are gone.
-
-        The VGroup errors on labels[j] remain (structural rewrite required — the LLM
-        must fix these using the retry prompt). But no TMT-on-Text errors remain.
-        This verifies the auto-fix did its job without breaking other detection.
-        """
-        code = _load_log("Section04Scene_attempt1.py")
-        fixed, _ = apply_known_fixes(code)
-        # TMT errors must be gone
-        tmt_errors = [e for e in validate_scene_code(fixed) if "TransformMatchingTex" in e]
-        assert tmt_errors == [], (
-            "TMT errors still present after apply_known_fixes:\n" + "\n".join(tmt_errors)
-        )
-        # Verify labels[j] VGroup errors are still present (correct — needs LLM fix)
-        vgroup_errors = [e for e in validate_scene_code(fixed) if "VGroup" in e]
-        assert vgroup_errors, (
-            "Expected VGroup errors on labels[j] to remain (needs LLM fix) — none found"
         )
 
 

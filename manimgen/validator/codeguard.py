@@ -19,6 +19,19 @@ _BANNED_PATTERNS: list[tuple[str, str]] = [
     (r"\bscale_factor\s*=", "Remove `scale_factor`; FadeIn/FadeOut in ManimGL does not support it."),
     (r"\bCircumscribe\s*\(", "Use `FlashAround(...)` in ManimGL, not `Circumscribe(...)`."),
     (
+        r"self\.frame\.\s*set_light",
+        "self.frame has no set_light method. Light is on self.camera: "
+        "`light = self.camera.light_source; self.play(light.animate.move_to(pos))`.",
+    ),
+    (
+        r"self\.frame\.\s*set_euler_angles",
+        "Use self.frame.reorient(theta_deg, phi_deg) — not set_euler_angles().",
+    ),
+    (
+        r"add_fixed_in_frame_mobjects\s*\(",
+        "add_fixed_in_frame_mobjects() does not exist. Use label.fix_in_frame() on each mobject.",
+    ),
+    (
         r"self\.play\(\s*(?:Surrounding|Background)Rectangle\s*\(",
         "Wrap SurroundingRectangle/BackgroundRectangle in ShowCreation(): "
         "self.play(ShowCreation(SurroundingRectangle(...))).",

@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -9,7 +10,7 @@ import yaml
 from manimgen.input.parser import parse_input
 from manimgen.planner.lesson_planner import plan_lesson, plan_lesson_from_pdf
 from manimgen.generator.scene_generator import generate_scenes
-from manimgen.validator.runner import run_scene
+from manimgen.validator.runner import run_scene, _find_rendered_video
 from manimgen.validator.retry import retry_scene
 from manimgen.validator.fallback import fallback_scene
 from manimgen.renderer.assembler import assemble_video
@@ -68,10 +69,48 @@ def _all_cues_muxed(section: dict, idx: int, n_cues: int) -> bool:
     return all(os.path.exists(_muxed_path_for(section, idx, i)) for i in range(n_cues))
 
 
+def _topic_hash(topic_or_pdf: str) -> str:
+    """Stable 8-char hash of the input (topic string or pdf path)."""
+    return hashlib.sha256(topic_or_pdf.encode()).hexdigest()[:8]
+
+
 def _rendered_section_path(section: dict) -> str:
     """Path to the full (pre-cut) rendered section video from ManimGL."""
     from manimgen.utils import section_class_name
     return os.path.join("videos", f"{section_class_name(section)}.mp4")
+
+
+def _sidecar_hash_path(video_path: str) -> str:
+    """Sidecar file that stores the topic hash next to a rendered video."""
+    return video_path + ".hash"
+
+
+def _render_is_fresh(video_path: str, topic_hash: str) -> bool:
+    """Return True only if the video exists AND was rendered for this topic."""
+    if not os.path.exists(video_path):
+        return False
+    sidecar = _sidecar_hash_path(video_path)
+    if not os.path.exists(sidecar):
+        # Legacy render with no sidecar — treat as stale to be safe
+        logger.warning(
+            "[manimgen] No .hash sidecar for %s — treating as stale render",
+            os.path.basename(video_path),
+        )
+        return False
+    with open(sidecar) as f:
+        stored = f.read().strip()
+    if stored != topic_hash:
+        logger.warning(
+            "[manimgen] Stale render detected: %s was built for topic hash %s, current is %s — re-rendering",
+            os.path.basename(video_path), stored, topic_hash,
+        )
+        return False
+    return True
+
+
+def _write_hash_sidecar(video_path: str, topic_hash: str) -> None:
+    with open(_sidecar_hash_path(video_path), "w") as f:
+        f.write(topic_hash)
 
 
 def main():
@@ -91,9 +130,15 @@ def main():
         print(f"[manimgen] Resuming from cached plan: {_PLAN_CACHE}")
         with open(_PLAN_CACHE) as f:
             lesson_plan = json.load(f)
+        # Recover topic hash from cached plan (stored during original run)
+        current_topic_hash = lesson_plan.get("_topic_hash", "")
+        if not current_topic_hash:
+            logger.warning("[manimgen] Cached plan has no _topic_hash — all renders will be treated as stale")
     elif args.pdf:
         print(f"[manimgen] PDF input: {args.pdf}")
+        current_topic_hash = _topic_hash(os.path.abspath(args.pdf))
         lesson_plan = plan_lesson_from_pdf(args.pdf)
+        lesson_plan["_topic_hash"] = current_topic_hash
         os.makedirs(os.path.dirname(_PLAN_CACHE), exist_ok=True)
         with open(_PLAN_CACHE, "w") as f:
             json.dump(lesson_plan, f, indent=2)
@@ -101,7 +146,9 @@ def main():
     else:
         print(f"[manimgen] Input: {args.topic}")
         topic = parse_input(args.topic)
+        current_topic_hash = _topic_hash(topic)
         lesson_plan = plan_lesson(topic)
+        lesson_plan["_topic_hash"] = current_topic_hash
         os.makedirs(os.path.dirname(_PLAN_CACHE), exist_ok=True)
         with open(_PLAN_CACHE, "w") as f:
             json.dump(lesson_plan, f, indent=2)
@@ -148,10 +195,12 @@ def main():
         # --- Generate ONE scene for the whole section ---
         cue_durations = [seg.duration for seg in segments] if segments else None
 
-        existing_video = _rendered_section_path(section)
-        if os.path.exists(existing_video):
-            print(f"[manimgen] Render exists, skipping codegen: {existing_video}")
-            video_path = existing_video
+        from manimgen.utils import section_class_name
+        class_name = section_class_name(section)
+        found_video = _find_rendered_video(class_name)
+        if found_video and _render_is_fresh(found_video, current_topic_hash):
+            print(f"[manimgen] Render exists and is fresh, skipping codegen: {found_video}")
+            video_path = found_video
             success = True
         else:
             code, class_name, scene_path = generate_scenes(
@@ -165,6 +214,9 @@ def main():
                 print(f"[manimgen] All retries failed, using fallback")
                 video_path = fallback_scene(section)
                 success = bool(video_path)
+            # Write hash sidecar after any successful render (including fallback)
+            if success and video_path and os.path.exists(video_path):
+                _write_hash_sidecar(video_path, current_topic_hash)
 
         if not video_path:
             print(f"[manimgen] No video for section {idx}, skipping")

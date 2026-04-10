@@ -18,7 +18,7 @@ rendering:
   quality: hd           # hd = 1080p | m = 480p | l = 720p
   resolution: "1920x1080"
   fps: 30
-  max_retries: 1        # LLM retry calls per scene (increase for production)
+  max_retries: 3        # LLM retry calls per scene (increase for production)
 
 tts:
   engine: edge-tts  # edge-tts | elevenlabs | openai

@@ -6,9 +6,8 @@ class ArraySwapScene(Scene):
     techniques: array_swap
     Demonstrates animating element swaps (bubble sort, selection sort, insertion sort).
 
-    CRITICAL PATTERN — VGroup does NOT support item assignment:
-        boxes[i], boxes[j] = boxes[j], boxes[i]   ← CRASH: TypeError
-        labels[i] = new_label                      ← CRASH: TypeError
+    CRITICAL PATTERN — VGroup does NOT support item assignment.
+    Swapping indices directly on a VGroup crashes with TypeError at runtime.
 
     CORRECT APPROACH — use a parallel Python list for index tracking:
         box_list = list(boxes)                     # mutable Python list
