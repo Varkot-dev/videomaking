@@ -89,6 +89,12 @@ The `visual` field MUST start with `Technique: <name>`. Choose from this exact l
 | `code_reveal` | pseudocode or algorithm steps appearing line by line | VGroup of Text lines with LaggedStart |
 | `3d_surface` | 3D function plots, rotating geometry, surfaces in ℝ³ — when topic requires visualizing z=f(x,y) or parametric curves | ThreeDScene with ParametricSurface + ThreeDAxes |
 | `camera_rotation` | continuously spinning a 3D object to show all faces, rotating 3D geometry — pairs with 3d_surface | ThreeDScene + self.frame.add_ambient_rotation() |
+| `camera_flythrough` | camera travels through a sequence of viewpoints around a 3D scene — "look from another angle", "rotating around", "different perspectives" | ThreeDScene + sequence of self.frame.animate.reorient(theta, phi) calls |
+| `dot_product_3d` | geometric dot product: two 3D vectors, angle between them, projection of one onto the other | ThreeDScene + Line from origin, DashedLine projection, orbiting camera |
+| `cross_section_3d` | slicing a 3D surface at varying heights — "cross-section", "level curves", "contour lines", "what you get if you cut through" | ThreeDScene + ParametricSurface + always_redraw cutting plane driven by ValueTracker |
+| `value_tracker_tracer` | a dot traces a curve continuously as a parameter sweeps — "as x increases", "following the derivative", "sweeping left to right" | Axes + always_redraw Dot on curve driven by ValueTracker.animate.set_value() |
+| `lagged_path` | multiple elements fly in from off-screen along arc paths and land at target positions — "assembling", "converging", "particles arriving", "nodes connecting" | ArcBetweenPoints + MoveAlongPath inside LaggedStart |
+| `apply_matrix` | linear transformation shown on a coordinate grid — same as grid_transform, prefer this name when narration explicitly says "apply matrix" or shows a matrix equation | NumberPlane + grid.animate.apply_matrix([[a,b],[c,d]]) |
 
 **Diversity rules:**
 - No two consecutive cues in the same section may use the same technique

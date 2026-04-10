@@ -113,18 +113,51 @@ class Foo(Scene):
         warnings = _check_loop_timing_smells(code)
         assert len(warnings) == 2
 
-    def test_total_time_accumulator_also_accepted(self):
-        """total_time += pattern should suppress the warning too."""
+    def test_any_accumulator_var_name_suppresses_warning(self):
+        """Any variable name used with += in the loop and referenced in wait() is accepted."""
+        for varname in ("total_time", "elapsed", "dur", "t", "accumulated"):
+            code = f"""\
+from manimlib import *
+
+class Foo(Scene):
+    def construct(self):
+        {varname} = 0.0
+        for i in range(5):
+            self.play(Dot().animate.shift(RIGHT), run_time=0.2)
+            {varname} += 0.2
+        self.wait(max(0.01, 5.0 - {varname}))
+"""
+            warnings = _check_loop_timing_smells(code)
+            assert warnings == [], f"False warning for accumulator named '{varname}': {warnings}"
+
+    def test_no_warning_when_self_play_between_loop_and_wait(self):
+        """Intervening self.play() after loop means timing is handled — no warning."""
         code = """\
 from manimlib import *
 
 class Foo(Scene):
     def construct(self):
-        total_time = 0.0
-        for i in range(5):
-            self.play(Dot().animate.shift(RIGHT), run_time=0.2)
-            total_time += 0.2
-        self.wait(max(0.01, 5.0 - total_time))
+        for i in range(4):
+            self.play(Dot().animate.shift(RIGHT), run_time=0.3)
+        self.play(FadeIn(Text("done")), run_time=0.5)
+        self.wait(2.0)
 """
         warnings = _check_loop_timing_smells(code)
         assert warnings == []
+
+    def test_warns_when_accumulator_exists_but_not_referenced_in_wait(self):
+        """Loop has += accumulator but it's not used in the wait() — timing still wrong."""
+        code = """\
+from manimlib import *
+
+class Foo(Scene):
+    def construct(self):
+        elapsed = 0.0
+        for i in range(4):
+            self.play(Dot().animate.shift(RIGHT), run_time=0.3)
+            elapsed += 0.3
+        self.wait(2.8)
+"""
+        warnings = _check_loop_timing_smells(code)
+        assert len(warnings) == 1
+        assert "Loop timing" in warnings[0]

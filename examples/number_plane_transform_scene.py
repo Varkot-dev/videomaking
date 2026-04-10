@@ -3,7 +3,7 @@ from manimlib import *
 
 class NumberPlaneTransformScene(Scene):
     """
-    techniques: grid_transform
+    techniques: grid_transform, apply_matrix
     Pattern: NumberPlane grid warping — linear matrix transform or complex map.
 
     Key techniques demonstrated:

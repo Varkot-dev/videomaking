@@ -59,14 +59,17 @@ If any animations are inside a loop, compute the total animation time in a varia
 
 ```python
 # WRONG — hardcoded wait only subtracts one iteration
+anim_time = 0.0
 for i in range(n - 1):
-    self.play(scan_rect.become(SurroundingRectangle(boxes[i], color=YELLOW, buff=0.05)), run_time=0.2)
+    scan_rect.become(SurroundingRectangle(boxes[i], color=YELLOW, buff=0.05))
+    self.play(ShowCreation(scan_rect), run_time=0.2)
 self.wait(4.0 - 0.2)   # ← wrong: only subtracts one iteration, not all n-1
 
 # RIGHT — accumulate then subtract
 anim_time = 0.0
 for i in range(n - 1):
-    self.play(scan_rect.become(SurroundingRectangle(boxes[i], color=YELLOW, buff=0.05)), run_time=0.2)
+    scan_rect.become(SurroundingRectangle(boxes[i], color=YELLOW, buff=0.05))
+    self.play(ShowCreation(scan_rect), run_time=0.2)
     anim_time += 0.2
 self.wait(max(0.01, 4.0 - anim_time))
 ```
@@ -194,11 +197,15 @@ self.wait(seconds)
 scan_rect = SurroundingRectangle(boxes[0], color=YELLOW, buff=0.05)
 self.play(scan_rect.animate.move_to(boxes[1]))  # still same size as boxes[0]
 
-# RIGHT — become() resizes and repositions in one call
+# WRONG — become() returns self (a Mobject), not an Animation — CRASH
+self.play(scan_rect.become(SurroundingRectangle(boxes[i], color=YELLOW, buff=0.05)))
+
+# RIGHT — call become() before self.play(), then animate with FadeIn or ShowCreation
 scan_rect = SurroundingRectangle(boxes[0], color=YELLOW, buff=0.05)
 self.play(ShowCreation(scan_rect), run_time=0.3)
 for i in range(1, len(boxes)):
-    self.play(scan_rect.become(SurroundingRectangle(boxes[i], color=YELLOW, buff=0.05)), run_time=0.2)
+    scan_rect.become(SurroundingRectangle(boxes[i], color=YELLOW, buff=0.05))
+    self.play(ShowCreation(scan_rect), run_time=0.2)
 ```
 
 ### Array swap — correct pattern for exchange animations (bubble sort, selection sort, etc.)
@@ -264,9 +271,12 @@ font_size= on Tex()                   → valid and correct — Tex(r"x^2", font
 x_length=, y_length= in Axes         → use width=, height=
 obj.animate with FadeIn/Out           → split into separate self.play() calls
 obj._mobjects                         → use obj.submobjects
-obj.get_tex_string()                  → NEVER read values back from mobjects; store in Python variables
+obj.get_tex_string()                  → NEVER read values back from mobjects; store values in a plain Python list (e.g. current_values = [5, 3, 8, 1]) and compare current_values[i] > current_values[j]
+obj.set_fill_color(RED)               → use obj.set_fill(RED) or obj.set_fill(RED, opacity=1)
+text_obj.animate.set_text("new")      → Text has no set_text(). Create new_label = Text("new"); self.play(FadeOut(old_label), FadeIn(new_label))
 Transform(text_a, text_b)             → crashes if glyphs differ; use FadeOut(a) then FadeIn(b)
-scan_rect.animate.move_to(x)          → only moves, never resizes; use scan_rect.become(SurroundingRectangle(x, ...))
+scan_rect.animate.move_to(x)          → only moves, never resizes; call scan_rect.become(SurroundingRectangle(x, ...)) BEFORE self.play, then self.play(ShowCreation(scan_rect))
+self.play(obj.become(SurroundingRectangle(...)))  → CRASH — become() returns self (a Mobject), not an Animation; call become() first, then self.play(ShowCreation(obj))
 boxes[i], boxes[j] = boxes[j], boxes[i]  → CRASH: VGroup does not support item assignment; use a parallel Python list: box_list = list(boxes), then swap box_list[i], box_list[j]
 ```
 
@@ -293,6 +303,59 @@ The verified reference scenes at the bottom of this prompt show each technique i
 | `code_reveal` | pseudocode or algorithm steps line by line |
 | `3d_surface` | 3D function plots, parametric surfaces — requires ThreeDScene |
 | `camera_rotation` | rotating geometry, spinning 3D objects — requires ThreeDScene |
+| `camera_flythrough` | camera visits a sequence of viewpoints around a 3D scene — requires ThreeDScene |
+| `dot_product_3d` | two 3D vectors + projection + orbiting camera — requires ThreeDScene |
+| `cross_section_3d` | surface + moving cutting plane driven by ValueTracker — requires ThreeDScene |
+| `value_tracker_tracer` | dot traces a curve as parameter sweeps via always_redraw |
+| `lagged_path` | elements fly from off-screen along arcs to final positions via MoveAlongPath + LaggedStart |
+| `apply_matrix` | NumberPlane + grid.animate.apply_matrix — same as grid_transform |
+
+### Camera flythrough — sequence of reorient() calls
+```python
+# ThreeDScene only
+self.frame.reorient(-40, 70)           # starting angle (theta_deg, phi_deg)
+self.play(ShowCreation(surface), run_time=2.0)
+self.play(self.frame.animate.reorient(-10, 50), run_time=2.0)   # fly to angle 2
+self.play(self.frame.animate.reorient(60, 75), run_time=2.5)    # fly to angle 3
+label.fix_in_frame()                   # pin 2D text to screen so it doesn't warp
+```
+
+### Progressive 3D build — add objects one at a time
+```python
+# ThreeDScene only
+self.frame.reorient(-30, 70)
+self.play(ShowCreation(axes), run_time=1.0)
+self.play(FadeIn(surface), run_time=1.5)      # surface appears
+self.play(FadeIn(mesh), run_time=0.8)         # mesh overlaid on top
+self.play(FadeIn(inner_sphere), run_time=0.8) # inner object last
+```
+
+### ValueTracker tracer — live dot along a curve
+```python
+t = ValueTracker(0.0)
+dot = always_redraw(lambda: Dot(
+    axes.input_to_graph_point(t.get_value(), curve), color=RED, radius=0.10,
+))
+v_line = always_redraw(lambda: DashedLine(
+    axes.c2p(t.get_value(), 0),
+    axes.input_to_graph_point(t.get_value(), curve),
+    dash_length=0.1, color=YELLOW, stroke_width=1.5,
+))
+coord_label = always_redraw(lambda: Text(
+    f"x = {t.get_value():.2f}", font_size=24,
+).next_to(dot, UP, buff=0.2))
+self.add(v_line, dot, coord_label)
+self.play(t.animate.set_value(end), run_time=4.0, rate_func=linear)
+```
+
+### Lagged path — elements converge from off-screen
+```python
+arcs = [ArcBetweenPoints(start_pos[i], target_pos[i], angle=PI / 3.5) for i in range(n)]
+self.play(
+    LaggedStart(*[MoveAlongPath(dots[i], arcs[i]) for i in range(n)], lag_ratio=0.12),
+    run_time=3.0,
+)
+```
 
 ## Quality rules
 

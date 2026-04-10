@@ -583,29 +583,33 @@ def _check_next_to_stacking(lines: list[str], warnings: list[str]) -> None:
 
 
 def _check_loop_timing_smells(code: str) -> list[str]:
-    """Warn when self.wait() follows a for/while loop body that has no accumulator variable.
+    """Warn when self.wait() follows a for/while loop body with no timing accumulator.
 
     Pattern that causes A/V mismatch: the Director computes total loop run_time as
     `n * per_iter_time` but only subtracts `per_iter_time` in the wait. The correct
-    pattern is to accumulate `anim_time += per_iter_time` inside the loop and then
-    use `self.wait(max(0.01, cue_dur - anim_time))`.
+    pattern is to accumulate loop run_times into any variable inside the loop body,
+    then reference that variable in the subsequent self.wait() call.
 
-    Heuristic:
-      1. Find every for/while block.
-      2. If that block contains a self.play(..., run_time=...) call,
-         and does NOT contain an anim_time += or total_time += accumulator pattern,
-         and is immediately followed by a self.wait() call (within 4 lines after
-         the block ends),
+    Heuristic (semantic, not name-based):
+      1. Find every for/while block containing a self.play(..., run_time=...) call.
+      2. Collect any variable names accumulated with += inside the loop body.
+      3. Scan ahead for the next statement after the loop — stopping at any self.play().
+         If the next statement is a self.wait() and none of the accumulated variables
+         appear inside that wait's argument, the timing is unaccounted for.
       → emit a structured warning.
+
+    This avoids two failure modes:
+      - False positive: self.play() between loop and wait means timing IS accounted for.
+      - False negative: accumulator named anything other than a hardcoded list.
     """
     warnings: list[str] = []
     lines = code.splitlines()
 
-    # Locate for/while loop start lines
     loop_header_re = re.compile(r"^(\s*)(for |while )")
-    accumulator_re = re.compile(r"\banim_time\s*\+=|\btotal_time\s*\+=|\bloop_time\s*\+=|\brun_total\s*\+=")
     play_with_runtime_re = re.compile(r"self\.play\(.*run_time\s*=")
+    augmented_assign_re = re.compile(r"\b(\w+)\s*\+=")
     wait_re = re.compile(r"self\.wait\s*\(")
+    play_re = re.compile(r"self\.play\s*\(")
 
     i = 0
     while i < len(lines):
@@ -615,44 +619,57 @@ def _check_loop_timing_smells(code: str) -> list[str]:
             continue
 
         loop_indent = header_m.group(1)
-        loop_body_indent = loop_indent + "    "
-        loop_start = i
-        loop_end = i  # will advance past the loop body
+        header_indent_len = len(loop_indent)
 
-        # Collect loop body lines: those indented deeper than the loop header
+        # Collect loop body: lines indented deeper than the loop header
         j = i + 1
         while j < len(lines):
-            stripped = lines[j]
-            if stripped.strip() == "":
+            if lines[j].strip() == "":
                 j += 1
                 continue
-            # A line at same or lesser indent that is non-empty ends the loop
-            line_indent = len(stripped) - len(stripped.lstrip())
-            header_indent = len(loop_indent)
-            if line_indent <= header_indent:
+            if len(lines[j]) - len(lines[j].lstrip()) <= header_indent_len:
                 break
             j += 1
-        loop_end = j  # first line after loop body
+        loop_end = j
 
-        body_lines = lines[loop_start + 1:loop_end]
-        body_text = "\n".join(body_lines)
+        body_text = "\n".join(lines[i + 1:loop_end])
 
-        has_play_runtime = bool(play_with_runtime_re.search(body_text))
-        has_accumulator = bool(accumulator_re.search(body_text))
+        if not play_with_runtime_re.search(body_text):
+            i = loop_end if loop_end > i else i + 1
+            continue
 
-        if has_play_runtime and not has_accumulator:
-            # Check the next few lines for a self.wait()
-            look_ahead = lines[loop_end:loop_end + 4]
-            for la_line in look_ahead:
-                if wait_re.search(la_line):
-                    line_num = loop_end + 1  # 1-indexed
+        # Variables accumulated with += anywhere inside the loop body
+        accumulated_vars: set[str] = set(augmented_assign_re.findall(body_text))
+
+        # Scan ahead: find the next non-empty, non-comment statement after loop_end.
+        # Stop immediately if we hit a self.play() — timing is handled there.
+        k = loop_end
+        while k < len(lines):
+            la = lines[k].strip()
+            if not la or la.startswith("#"):
+                k += 1
+                continue
+            if play_re.search(la):
+                # Intervening play() — cannot conclude timing is wrong
+                break
+            if wait_re.search(la):
+                # wait() found — check if any accumulated var appears as a whole
+                # identifier in the wait argument (word-boundary match, not substring).
+                timing_accounted = any(
+                    re.search(rf"\b{re.escape(v)}\b", la)
+                    for v in accumulated_vars
+                )
+                if not timing_accounted:
+                    line_num = k + 1  # 1-indexed
                     warnings.append(
                         f"Loop timing: self.wait() after loop at line ~{line_num} — "
-                        "accumulate run_times inside the loop: "
-                        "`anim_time += <run_time>`, then use "
+                        "accumulate run_times inside the loop into any variable "
+                        "(e.g. `anim_time += <run_time>`), then use "
                         "`self.wait(max(0.01, cue_dur - anim_time))`."
                     )
-                    break
+                break
+            # Any other statement (assignment, etc.) — keep scanning
+            k += 1
 
         i = loop_end if loop_end > i else i + 1
 
