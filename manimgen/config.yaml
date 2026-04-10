@@ -1,0 +1,33 @@
+# API keys — set via environment variables, not hardcoded here
+anthropic_api_key: ""   # ANTHROPIC_API_KEY — used in production only
+gemini_api_key: ""      # GEMINI_API_KEY — used during development/testing
+
+# Which LLM to use: "anthropic" | "gemini"
+llm_provider: "gemini"
+
+# Model selection — override here without touching code
+llm:
+  gemini_model: "gemini-2.5-flash"
+  anthropic_model: "claude-sonnet-4-6"
+  max_tokens: 4096        # Only used by Anthropic provider
+
+output:
+  scenes_dir: manimgen/output/scenes
+  videos_dir: manimgen/output/videos
+  logs_dir: manimgen/output/logs
+  audio_dir: manimgen/output/audio
+  muxed_dir: manimgen/output/muxed
+  exports_dir: manimgen/output/videos/exports
+  plan_cache: manimgen/output/plan.json
+
+rendering:
+  quality: hd           # hd = 1080p | m = 480p | l = 720p
+  resolution: "1920x1080"
+  fps: 60
+  max_retries: 3        # LLM retry calls per scene (increase for production)
+
+tts:
+  engine: edge-tts  # edge-tts | elevenlabs | openai
+  voice: en-US-AndrewMultilingualNeural
+  enabled: true
+  speed: "+5%"

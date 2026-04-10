@@ -1,0 +1,11 @@
+manimgl==1.7.2
+anthropic
+google-genai
+python-dotenv
+pyyaml
+edge-tts
+pypdf
+pymupdf
+flask
+setuptools<70.0.0
+audioop-lts
