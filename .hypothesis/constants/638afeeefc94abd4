@@ -1,0 +1,4 @@
+# file: /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/manimgen/renderer/cutter.py
+# hypothesis_version: 6.151.12
+
+[0.0, -500, '-an', '-c:v', '-crf', '-i', '-pix_fmt', '-preset', '-ss', '-t', '-y', '18', 'fast', 'ffmpeg', 'libx264', 'yuv420p']

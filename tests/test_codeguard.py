@@ -572,3 +572,88 @@ class TestStripLabelFromNumberLine:
         assert "x_range" in fixed
         assert "include_tip" in fixed
         assert "label=" not in fixed
+
+
+# ── Horizontal chain overflow detection ────────────────────────────────────
+
+class TestHorizontalChainOverflow:
+
+    def test_three_right_chain_detected(self):
+        """3+ objects chained with .next_to(prev, RIGHT) should warn."""
+        from manimgen.validator.codeguard import _check_layout_smells
+        code = (
+            'step1 = Tex(r"a").next_to(rule, DOWN)\n'
+            'step2 = Tex(r"b").next_to(step1, RIGHT, buff=0.2)\n'
+            'step3 = Tex(r"c").next_to(step2, RIGHT, buff=0.2)\n'
+            'self.play(FadeOut(step3))\n'
+        )
+        warnings = _check_layout_smells(code)
+        assert any("Horizontal chain" in w for w in warnings), (
+            f"Expected horizontal chain warning, got: {warnings}"
+        )
+
+    def test_two_right_not_flagged(self):
+        """2 .next_to(RIGHT) is borderline but not flagged (chain length < 3)."""
+        from manimgen.validator.codeguard import _check_layout_smells
+        code = (
+            'step1 = Tex(r"a").next_to(rule, DOWN)\n'
+            'step2 = Tex(r"b").next_to(step1, RIGHT, buff=0.2)\n'
+            'self.play(FadeOut(step2))\n'
+        )
+        warnings = _check_layout_smells(code)
+        assert not any("Horizontal chain" in w for w in warnings)
+
+    def test_vertical_chain_not_flagged(self):
+        """All .next_to(prev, DOWN) should not trigger horizontal warning."""
+        from manimgen.validator.codeguard import _check_layout_smells
+        code = (
+            'step1 = Tex(r"a").next_to(rule, DOWN)\n'
+            'step2 = Tex(r"b").next_to(step1, DOWN)\n'
+            'step3 = Tex(r"c").next_to(step2, DOWN)\n'
+            'self.play(FadeOut(step3))\n'
+        )
+        warnings = _check_layout_smells(code)
+        assert not any("Horizontal chain" in w for w in warnings)
+
+    def test_next_to_parabola_right_detected(self):
+        """Placing content RIGHT of parabola/axes should warn."""
+        from manimgen.validator.codeguard import _check_layout_smells
+        code = (
+            'table = VGroup().next_to(parabola, RIGHT, buff=1.0)\n'
+            'self.play(FadeOut(table))\n'
+        )
+        warnings = _check_layout_smells(code)
+        assert any("overflow" in w.lower() or "right screen edge" in w.lower() for w in warnings), (
+            f"Expected right-of-axes overflow warning, got: {warnings}"
+        )
+
+    def test_next_to_axes_right_detected(self):
+        """Placing content RIGHT of axes should warn."""
+        from manimgen.validator.codeguard import _check_layout_smells
+        code = (
+            'label = Text("info").next_to(axes, RIGHT, buff=0.5)\n'
+            'self.play(FadeOut(label))\n'
+        )
+        warnings = _check_layout_smells(code)
+        assert any("overflow" in w.lower() or "right screen edge" in w.lower() for w in warnings)
+
+    def test_next_to_axes_down_not_flagged(self):
+        """Placing content below axes is fine."""
+        from manimgen.validator.codeguard import _check_layout_smells
+        code = (
+            'label = Text("info").next_to(axes, DOWN, buff=0.5)\n'
+            'self.play(FadeOut(label))\n'
+        )
+        warnings = _check_layout_smells(code)
+        assert not any("right screen edge" in w.lower() for w in warnings)
+
+    def test_section_05_triggers_warning(self):
+        """The actual section_05.py from the failed render should trigger warnings."""
+        from manimgen.validator.codeguard import _check_layout_smells
+        # Simplified extract from the real section_05.py
+        code = (
+            'table_headers = VGroup().next_to(parabola, RIGHT, buff=1.0)\n'
+            'self.play(FadeOut(table_headers))\n'
+        )
+        warnings = _check_layout_smells(code)
+        assert any("right screen edge" in w.lower() or "overflow" in w.lower() for w in warnings)

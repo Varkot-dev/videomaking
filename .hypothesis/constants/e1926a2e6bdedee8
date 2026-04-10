@@ -1,0 +1,4 @@
+# file: /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/manimgen/validator/layout_checker.py
+# hypothesis_version: 6.151.12
+
+[0.25, 0.5, 0.75, 1.0, '-frames:v', '-i', '-of', '-q:v', '-show_entries', '-ss', '-v', '-y', '.png', '1', '2', 'OK', 'error', 'ffmpeg', 'ffprobe', 'format=duration', 'frames', 'issues', 'ok', 'prompts', 'rb', 'skipped', 'utf-8']

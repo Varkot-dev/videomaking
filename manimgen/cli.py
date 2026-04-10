@@ -181,7 +181,7 @@ def _run_section(
                         f.write(code)
         success, video_path = run_scene(scene_path, class_name)
         if not success:
-            success, video_path = retry_scene(section, code, class_name, scene_path)
+            success, video_path = retry_scene(section, code, class_name, scene_path, cue_durations=cue_durations)
         if not success:
             log.info("[manimgen] All retries failed, using fallback")
             video_path = fallback_scene(section)
