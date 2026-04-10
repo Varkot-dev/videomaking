@@ -10,3 +10,7 @@ manimgen/output/
 latex_cache/
 videos/
 *.pdf
+.hypothesis/
+.DS_Store
+downloads/
+test_clips/
