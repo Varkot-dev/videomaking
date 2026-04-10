@@ -506,3 +506,69 @@ class TestFontSizeOnTexNotDoubleScaled:
         fixed, applied = apply_error_aware_fixes(code, stderr)
         assert "bogus_param" not in fixed
         assert any("bogus_param" in a for a in applied)
+
+
+# ── set_camera_orientation → self.frame.reorient ──────────────────────────────
+
+class TestFixSetCameraOrientation:
+
+    def test_basic_phi_theta_with_degrees(self):
+        code = "self.set_camera_orientation(phi=60 * DEGREES, theta=-45 * DEGREES)"
+        fixed, applied = apply_known_fixes(code)
+        assert "self.set_camera_orientation(" not in fixed
+        assert "self.frame.reorient(-45, 60)" in fixed
+        assert any("set_camera_orientation" in a for a in applied)
+
+    def test_theta_before_phi(self):
+        code = "self.set_camera_orientation(theta=-30 * DEGREES, phi=70 * DEGREES)"
+        fixed, applied = apply_known_fixes(code)
+        assert "self.frame.reorient(-30, 70)" in fixed
+
+    def test_no_degrees_suffix(self):
+        code = "self.set_camera_orientation(phi=60, theta=-45)"
+        fixed, applied = apply_known_fixes(code)
+        assert "self.frame.reorient(-45, 60)" in fixed
+
+    def test_unparseable_becomes_pass(self):
+        code = "self.set_camera_orientation(some_other_args)"
+        fixed, applied = apply_known_fixes(code)
+        assert "self.set_camera_orientation(" not in fixed
+        assert "pass" in fixed
+
+    def test_banned_pattern_detected(self):
+        errors = validate_scene_code("self.set_camera_orientation(phi=60*DEGREES, theta=-45*DEGREES)")
+        assert any("set_camera_orientation" in e for e in errors)
+
+
+class TestFixReorientWrongKwargs:
+
+    def test_theta_deg_renamed(self):
+        code = "self.frame.reorient(theta_deg=-45, phi_deg=60)"
+        fixed, applied = apply_known_fixes(code)
+        assert "theta_degrees=-45" in fixed
+        assert "phi_degrees=60" in fixed
+        assert "theta_deg=" not in fixed
+        assert "phi_deg=" not in fixed
+        assert any("reorient kwarg" in a for a in applied)
+
+    def test_animate_reorient_also_fixed(self):
+        code = "self.play(self.frame.animate.reorient(theta_deg=0, phi_deg=90), run_time=1.5)"
+        fixed, applied = apply_known_fixes(code)
+        assert "theta_degrees=0" in fixed
+        assert "phi_degrees=90" in fixed
+
+
+class TestStripLabelFromNumberLine:
+
+    def test_label_kwarg_stripped(self):
+        code = 'ax = NumberLine(x_range=[-3, 3], label="x")'
+        fixed, applied = apply_known_fixes(code)
+        assert 'label=' not in fixed
+        assert any("NumberLine" in a for a in applied)
+
+    def test_valid_args_preserved(self):
+        code = 'ax = NumberLine(x_range=[-3, 3, 1], include_tip=True, label="x")'
+        fixed, applied = apply_known_fixes(code)
+        assert "x_range" in fixed
+        assert "include_tip" in fixed
+        assert "label=" not in fixed
