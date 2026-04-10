@@ -1,0 +1,4 @@
+# file: /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/manimgen/cli.py
+# hypothesis_version: 6.151.12
+
+['--pdf', '--resume', '..', '.hash', '.mp3', '?', 'FILE', 'Topic string', '__main__', '_timestamps.json', '_topic_hash', 'config.yaml', 'cue_word_indices', 'enabled', 'id', 'narration', 'sections', 'store_true', 'title', 'topic', 'tts', 'videos', 'w']

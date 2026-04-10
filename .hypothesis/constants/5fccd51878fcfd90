@@ -1,0 +1,4 @@
+# file: /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/manimgen/paths.py
+# hypothesis_version: 6.151.12
+
+['..', '1920x1080', 'audio', 'audio_dir', 'config.yaml', 'exports', 'exports_dir', 'fps', 'hd', 'logs', 'logs_dir', 'manimgen/output/logs', 'max_retries', 'muxed', 'muxed_dir', 'output', 'plan', 'plan_cache', 'quality', 'rendering', 'resolution', 'scenes', 'scenes_dir', 'videos', 'videos_dir']

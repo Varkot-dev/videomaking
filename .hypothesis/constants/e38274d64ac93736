@@ -1,0 +1,4 @@
+# file: /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/manimgen/validator/timing_verifier.py
+# hypothesis_version: 6.151.12
+
+[0.0, 0.01, 0.05, 0.5, 1.0, '#\\s*CUE\\s+(\\d+)', '[timing_verifier] %s', 'cues', 'if True:\n', 'max', 'ok', 'play', 'range', 'run_time', 'self', 'wait', 'warnings']

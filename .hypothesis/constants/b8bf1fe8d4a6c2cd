@@ -1,0 +1,4 @@
+# file: /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/manimgen/renderer/tts.py
+# hypothesis_version: 6.151.12
+
+[10000000, '+5%', '-of', '-show_entries', '-v', '..', 'WordBoundary', 'audio', 'config.yaml', 'data', 'duration', 'end', 'error', 'ffprobe', 'format', 'format=duration', 'json', 'offset', 'speed', 'start', 'text', 'tts', 'type', 'voice', 'w', 'wb', 'word']

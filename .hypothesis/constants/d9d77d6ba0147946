@@ -1,0 +1,4 @@
+# file: /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/manimgen/llm.py
+# hypothesis_version: 6.151.12
+
+[4096, '..', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'LLM_PROVIDER', 'anthropic', 'base64', 'claude-sonnet-4-6', 'config.yaml', 'content', 'data', 'gemini', 'gemini-2.5-flash', 'image', 'image/png', 'llm_provider', 'media_type', 'role', 'source', 'text', 'type', 'user']

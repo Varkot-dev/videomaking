@@ -1,0 +1,4 @@
+# file: /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/manimgen/renderer/muxer.py
+# hypothesis_version: 6.151.12
+
+[0.0, 0.5, '-c:a', '-c:v', '-filter_complex', '-i', '-map', '-of', '-show_entries', '-t', '-v', '-y', '0:v', '1:a', '[a]', '[v]', 'aac', 'copy', 'duration', 'error', 'ffmpeg', 'ffprobe', 'format', 'format=duration', 'json', 'libx264']
