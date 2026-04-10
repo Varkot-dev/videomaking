@@ -171,6 +171,14 @@ def _run_section(
         success = True
     else:
         code, class_name, scene_path = generate_scenes(section, cue_durations=cue_durations)
+        if cue_durations:
+            from manimgen.validator.timing_verifier import verify_timing, auto_fix_timing
+            result = verify_timing(code, cue_durations)
+            if not result.get("ok", True):
+                code, fixes = auto_fix_timing(code, cue_durations)
+                if fixes:
+                    with open(scene_path, "w") as f:
+                        f.write(code)
         success, video_path = run_scene(scene_path, class_name)
         if not success:
             success, video_path = retry_scene(section, code, class_name, scene_path)

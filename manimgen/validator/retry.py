@@ -102,14 +102,25 @@ def retry_scene(section: dict, original_code: str, class_name: str, scene_path: 
     for attempt in range(1, MAX_RETRIES + 1):
         result = _run_and_capture(scene_path, class_name)
         if result["success"]:
+            from manimgen.validator.frame_checker import check_frames
+            frame_result = check_frames(result["video_path"])
+            
             layout = check_layout(result["video_path"])
-            if layout["ok"] or layout["skipped"]:
+            
+            combined_issues = []
+            if not frame_result.ok:
+                combined_issues.extend(frame_result.issues_text.splitlines())
+            if not layout["ok"] and layout["issues"]:
+                combined_issues.extend(layout["issues"].splitlines())
+
+            if not combined_issues:
                 return True, result["video_path"]
 
             # Scene rendered but has visual defects. Feed structured feedback
             # back into the retry loop if budget allows.
+            issues_text = "\n".join(combined_issues)
             print(f"[retry] Attempt {attempt}/{MAX_RETRIES} rendered but has visual defects:")
-            for line in layout["issues"].splitlines():
+            for line in combined_issues:
                 print(f"[retry]   {line}")
 
             if llm_fix_calls_used >= MAX_LLM_FIX_CALLS:
@@ -117,7 +128,17 @@ def retry_scene(section: dict, original_code: str, class_name: str, scene_path: 
                 return True, result["video_path"]
 
             print("[retry] Requesting visual fix from LLM...")
-            code = _request_visual_fix(code, layout["issues"], system_prompt)
+            
+            # Extract only the FIX instruction for the code-fixing LLM
+            fix_only = []
+            for line in combined_issues:
+                if "FIX:" in line:
+                    parts = line.split("FIX:")
+                    fix_only.append("- " + parts[-1].strip())
+                else:
+                    fix_only.append("- " + line.strip())
+            
+            code = _request_visual_fix(code, "\n".join(fix_only), system_prompt)
             llm_fix_calls_used += 1
             with open(scene_path, "w") as f:
                 f.write(code)
