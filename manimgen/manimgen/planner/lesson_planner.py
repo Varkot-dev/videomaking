@@ -120,7 +120,6 @@ def _escape_bad_backslashes(s: str) -> str:
                 out.append(ch)          # keep valid escape as-is
             else:
                 out.append('\\\\')      # double-escape bare backslash
-            i += 1
         else:
             out.append(ch)
         i += 1

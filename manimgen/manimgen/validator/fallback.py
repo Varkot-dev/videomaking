@@ -62,7 +62,7 @@ def fallback_scene(section: dict) -> str | None:
 
     try:
         result = subprocess.run(
-            ["manimgl", scene_path, class_name, "-w", paths.render_quality_flag(), "-c", "#1C1C1C"],
+            ["manimgl", scene_path, class_name, "-w", paths.render_quality_flag(), "--fps", str(paths.render_fps()), "-c", "#1C1C1C"],
             capture_output=True,
             text=True,
             timeout=180,

@@ -21,7 +21,7 @@ _DEFAULTS = {
 _RENDER_DEFAULTS = {
     "quality":     "hd",
     "resolution":  "1920x1080",
-    "fps":         30,
+    "fps":         60,
     "max_retries": 1,
 }
 
