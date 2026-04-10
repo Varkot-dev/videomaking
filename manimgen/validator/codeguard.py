@@ -61,6 +61,17 @@ _BANNED_PATTERNS: list[tuple[str, str]] = [
         "Use a parallel Python list: box_list = list(boxes). "
         "Never assign into the VGroup directly.",
     ),
+    (
+        r"\bself\.set_camera_orientation\s*\(",
+        "set_camera_orientation() is ManimCommunity — it does not exist in ManimGL. "
+        "Use self.frame.reorient(theta_degrees, phi_degrees) inside a ThreeDScene, "
+        "or remove the call entirely for 2D scenes.",
+    ),
+    (
+        r"\.reorient\(\s*(?:theta_deg|phi_deg)\s*=",
+        "reorient() uses theta_degrees= and phi_degrees= (not theta_deg/phi_deg). "
+        "Or call positionally: self.frame.reorient(theta_val, phi_val).",
+    ),
 ]
 
 _BANNED_KWARGS = [
@@ -189,6 +200,18 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
     fixed, become_applied = _fix_become_inside_play(fixed)
     if become_applied:
         applied.append(become_applied)
+
+    fixed, cam_applied = _fix_set_camera_orientation(fixed)
+    if cam_applied:
+        applied.append(cam_applied)
+
+    fixed, reorient_applied = _fix_reorient_wrong_kwargs(fixed)
+    if reorient_applied:
+        applied.append(reorient_applied)
+
+    fixed, numberline_applied = _strip_label_kwarg_from_numberline(fixed)
+    if numberline_applied:
+        applied.append(numberline_applied)
 
     new_fixed, count = re.subn(
         r"self\.wait\(\s*(?:-\s*[\d.]+|0+\.0+|(?<!\d)0(?![\d.]))\s*\)",
@@ -463,6 +486,67 @@ def _fix_become_inside_play(code: str) -> tuple[str, str | None]:
 
     if count:
         return "".join(result_parts), f"self.play(obj.become(...)) -> become()+ShowCreation ({count})"
+    return code, None
+
+
+def _fix_set_camera_orientation(code: str) -> tuple[str, str | None]:
+    """Rewrite ManimCommunity set_camera_orientation() → self.frame.reorient().
+
+    Handles the most common form:
+        self.set_camera_orientation(phi=60 * DEGREES, theta=-45 * DEGREES)
+      → self.frame.reorient(-45, 60)
+
+    phi and theta may appear in either order and with optional `* DEGREES` suffix.
+    Values without `* DEGREES` are passed through as-is (assumed already in degrees).
+
+    If the call cannot be parsed cleanly, the entire line is removed to prevent
+    AttributeError crashes — the retry LLM will receive the banned-pattern message.
+    """
+    outer = re.compile(r"self\.set_camera_orientation\(([^)]*)\)")
+
+    def _replacer(m: re.Match) -> str:
+        args = m.group(1)
+        phi_m = re.search(r"\bphi\s*=\s*(-?[\d.]+)\s*(?:\*\s*DEGREES)?", args)
+        theta_m = re.search(r"\btheta\s*=\s*(-?[\d.]+)\s*(?:\*\s*DEGREES)?", args)
+        if phi_m and theta_m:
+            phi_val = phi_m.group(1)
+            theta_val = theta_m.group(1)
+            return f"self.frame.reorient({theta_val}, {phi_val})"
+        return "pass  # removed unparseable set_camera_orientation call"
+
+    new, count = re.subn(outer, _replacer, code)
+    if count:
+        return new, f"set_camera_orientation -> self.frame.reorient ({count})"
+    return code, None
+
+
+def _fix_reorient_wrong_kwargs(code: str) -> tuple[str, str | None]:
+    """Fix wrong kwarg names on self.frame.reorient() calls.
+
+    The Director sometimes emits:
+        self.frame.reorient(theta_deg=-45, phi_deg=60)
+
+    The real param names are theta_degrees= and phi_degrees= (or positional).
+    """
+    applied = []
+    fixed = code
+
+    for wrong, right in [("theta_deg=", "theta_degrees="), ("phi_deg=", "phi_degrees=")]:
+        new, count = re.subn(re.escape(wrong), right, fixed)
+        if count:
+            applied.append(f"{wrong} -> {right} ({count})")
+            fixed = new
+
+    if applied:
+        return fixed, "fixed reorient kwarg names: " + ", ".join(applied)
+    return code, None
+
+
+def _strip_label_kwarg_from_numberline(code: str) -> tuple[str, str | None]:
+    """Strip label= kwarg from NumberLine() — not a valid ManimGL parameter."""
+    new, count = re.subn(r"(NumberLine\([^)]*?),?\s*label\s*=\s*[^,\)]+", r"\1", code)
+    if count:
+        return new, f"removed label= from NumberLine ({count})"
     return code, None
 
 
