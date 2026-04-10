@@ -151,8 +151,8 @@ def api_export():
             trimmed = VIDEOS_DIR / f"_tmp_{run_id}_{i}_{src.stem}.mp4"
             cmd = [
                 "ffmpeg", "-y",
-                "-ss", str(trim_start),
                 "-i", str(src.resolve()),
+                "-ss", str(trim_start),
                 "-t", str(max(0.1, trim_end_actual - trim_start)),
                 "-c:v", "libx264", "-c:a", "aac",
                 "-preset", "fast",

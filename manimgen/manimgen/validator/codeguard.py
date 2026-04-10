@@ -782,6 +782,45 @@ def _check_loop_timing_smells(code: str) -> list[str]:
     return warnings
 
 
+def _check_horizontal_chain_overflow(lines: list[str], warnings: list[str]) -> None:
+    """Warn when 3+ objects are chained horizontally with .next_to(..., RIGHT).
+
+    Horizontal chains like:
+        eq1.next_to(title, DOWN)
+        eq2.next_to(eq1, RIGHT)
+        eq3.next_to(eq2, RIGHT)
+    accumulate x-position and overflow past x=7. Equation derivation steps
+    should stack vertically (DOWN), not horizontally (RIGHT).
+    """
+    next_to_right_re = re.compile(r"\.next_to\(\s*(\w+)\s*,\s*RIGHT")
+    # Track chains: for each object, record what it is placed right-of
+    right_of: dict[str, str] = {}  # variable -> anchor
+    assignment_re = re.compile(r"(\w+)\s*=\s*.*\.next_to\(\s*(\w+)\s*,\s*RIGHT")
+
+    for line in lines:
+        m = assignment_re.search(line)
+        if m:
+            var_name, anchor = m.group(1), m.group(2)
+            right_of[var_name] = anchor
+
+    # Find chains of length >= 3
+    for var in right_of:
+        chain = [var]
+        current = var
+        while current in right_of:
+            current = right_of[current]
+            chain.append(current)
+        if len(chain) >= 3:
+            chain_str = " → ".join(reversed(chain))
+            warnings.append(
+                f"Horizontal chain detected ({chain_str}): {len(chain)} objects chained with "
+                ".next_to(..., RIGHT). This will overflow past the right screen edge (x > 7). "
+                "Stack equation derivation steps vertically with .next_to(prev, DOWN, buff=0.3) "
+                "instead of horizontally."
+            )
+            break  # one warning per scene is enough
+
+
 def _check_layout_smells(code: str) -> list[str]:
     """Heuristic warnings for overlap-prone layout patterns."""
     warnings: list[str] = []
@@ -805,6 +844,18 @@ def _check_layout_smells(code: str) -> list[str]:
         warnings.append("Scene has no FadeOut at all — add one at the very end of the last cue.")
     # Detect multiple .next_to() calls sharing the same anchor within 6 lines — likely overlap
     _check_next_to_stacking(lines, warnings)
+    # Detect horizontal chains that overflow past screen edge
+    _check_horizontal_chain_overflow(lines, warnings)
+    # Detect .next_to(right-aligned-obj, RIGHT) — pushing content off right edge
+    right_anchor_re = re.compile(
+        r"\.next_to\(\s*(parabola|axes|graph|curve|surface|table_headers)\s*,\s*RIGHT"
+    )
+    if right_anchor_re.search(code):
+        warnings.append(
+            "Content placed .next_to(axes/parabola/graph, RIGHT) will likely "
+            "overflow past the right screen edge. Place it below or to the left instead, "
+            "or use .to_edge(RIGHT) with a buff."
+        )
     # Axes tick font size: missing decimal_number_config causes oversized tick labels (default is 36)
     if re.search(r"\bAxes\s*\(", code):
         has_decimal_cfg = re.search(r"decimal_number_config", code)

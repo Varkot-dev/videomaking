@@ -112,3 +112,19 @@ label = Tex(r"\nabla J(\theta)", font_size=36)
 label.fix_in_frame()   # ADD THIS for every Text/Tex in ThreeDScene
 ```
 If you see diagonal or tilted text in a ThreeDScene, the fix is always `.fix_in_frame()`.
+
+**Horizontal overflow — equations cut off at right edge:** If multiple objects are chained with `.next_to(prev, RIGHT)`, each step pushes further right until content overflows past x=7. Fix: stack derivation steps vertically:
+```python
+# WRONG — horizontal chain overflows
+step1.next_to(rule, DOWN, buff=0.5)
+step2.next_to(step1, RIGHT, buff=0.2)    # ← RIGHT pushes off-screen
+step3.next_to(step2, RIGHT, buff=0.2)    # ← OFF SCREEN
+
+# RIGHT — stack vertically
+step1.next_to(rule, DOWN, buff=0.4).align_to(rule, LEFT)
+step2.next_to(step1, DOWN, buff=0.3).align_to(rule, LEFT)
+# Or combine into a single Tex:
+result = Tex(r"\theta_1 = 3 - 0.1 \cdot 6 = 2.4", font_size=36)
+result.next_to(rule, DOWN, buff=0.4).align_to(rule, LEFT)
+```
+Never place content `.next_to(axes, RIGHT)` or `.next_to(parabola, RIGHT)` — axes/graphs are already near the right edge. Place additional content below or to the left.

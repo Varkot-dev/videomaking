@@ -7,6 +7,7 @@ from manimgen.validator.runner import _find_rendered_video, _is_3d_scene
 from manimgen.validator.codeguard import precheck_and_autofix_file as precheck_and_autofix, apply_error_aware_fixes
 from manimgen.validator.env import get_render_env
 from manimgen.validator.layout_checker import check_layout
+from manimgen.validator.timing_verifier import verify_timing, auto_fix_timing
 from manimgen import paths
 
 MAX_RETRIES = paths.render_max_retries()
@@ -28,6 +29,7 @@ class SceneErrorType(str, enum.Enum):
     ATTRIBUTE       = "attribute"
     TYPE            = "type"
     RUNTIME         = "runtime"
+    TIMING          = "timing"
 
 
 def _classify_error(stderr: str) -> SceneErrorType:
@@ -62,6 +64,12 @@ _FIX_GUIDANCE: dict[SceneErrorType, str] = {
     SceneErrorType.ATTRIBUTE: "Fix the attribute error. Check the correct ManimGL method name and signature.",
     SceneErrorType.TYPE:      "Fix the type error. Check argument types and counts for the method.",
     SceneErrorType.RUNTIME:   "Simplify the scene logic. Reduce animations, check object creation order.",
+    SceneErrorType.TIMING: (
+        "Fix the animation timing. Each CUE block must have animations + self.wait() that "
+        "sum exactly to the cue duration. The most common bug: loop timing — subtract the "
+        "TOTAL loop run_time (n × per_iter), not just one iteration. Use an accumulator: "
+        "anim_time += run_time inside the loop, then self.wait(max(0.01, cue_dur - anim_time))."
+    ),
 }
 
 
@@ -86,7 +94,41 @@ def _truncate_for_prompt(text: str, max_chars: int) -> str:
     )
 
 
-def retry_scene(section: dict, original_code: str, class_name: str, scene_path: str) -> tuple[bool, str | None]:
+def _apply_timing_pass(
+    code: str,
+    scene_path: str,
+    cue_durations: list[float],
+) -> tuple[str, list[str]]:
+    """Run timing verification and auto-fix on the current code.
+
+    Returns (possibly_fixed_code, remaining_warnings).
+    The code is written back to scene_path if auto-fixes were applied.
+    """
+    result = verify_timing(code, cue_durations)
+    if result["ok"]:
+        return code, []
+
+    fixed, fixes_applied = auto_fix_timing(code, cue_durations)
+    if fixes_applied:
+        with open(scene_path, "w") as f:
+            f.write(fixed)
+        for fix in fixes_applied:
+            print(f"[retry] timing auto-fix: {fix}")
+        code = fixed
+
+    # Re-verify after auto-fix — some issues may persist (e.g. unresolvable
+    # loop counts, dynamic variables in run_time).
+    recheck = verify_timing(code, cue_durations)
+    return code, recheck.get("warnings", [])
+
+
+def retry_scene(
+    section: dict,
+    original_code: str,
+    class_name: str,
+    scene_path: str,
+    cue_durations: list[float] | None = None,
+) -> tuple[bool, str | None]:
     """
     Retry generating and running a scene up to MAX_RETRIES times.
     Each retry sends the original code + error back to the LLM for a fix.
@@ -128,7 +170,8 @@ def retry_scene(section: dict, original_code: str, class_name: str, scene_path: 
                 return True, result["video_path"]
 
             print("[retry] Requesting visual fix from LLM...")
-            code = _request_visual_fix(code, "\n".join(combined_issues), system_prompt)
+            defective_frames = layout.get("frames", [])
+            code = _request_visual_fix(code, "\n".join(combined_issues), system_prompt, defective_frames)
             llm_fix_calls_used += 1
             with open(scene_path, "w") as f:
                 f.write(code)
@@ -136,6 +179,9 @@ def retry_scene(section: dict, original_code: str, class_name: str, scene_path: 
             # Always reload — precheck may have applied auto-fixes in-place
             with open(scene_path) as f:
                 code = f.read()
+            # Timing pass — catch timing bugs in the LLM's visual fix
+            if cue_durations:
+                code, _ = _apply_timing_pass(code, scene_path, cue_durations)
             continue
 
         error_type = _classify_error(result["stderr"])
@@ -205,6 +251,18 @@ Original code:
         with open(scene_path) as f:
             code = f.read()
 
+        # Timing pass — auto-fix self.wait() values and inject remaining
+        # timing warnings into the next attempt's error context.
+        if cue_durations:
+            code, timing_warnings = _apply_timing_pass(code, scene_path, cue_durations)
+            if timing_warnings:
+                # Prepend timing warnings to the seen context so the next
+                # render attempt (if it fails for other reasons) carries
+                # awareness of the timing issues.
+                print(f"[retry] {len(timing_warnings)} timing warning(s) after auto-fix:")
+                for w in timing_warnings:
+                    print(f"[retry]   {w}")
+
     return False, None
 
 
@@ -245,9 +303,13 @@ def _load_retry_system_prompt() -> str:
     return system.strip() + "\n\n" + director
 
 
-def _request_visual_fix(code: str, issues: str, system_prompt: str) -> str:
-    """Ask the LLM to fix code based on structured visual feedback from layout_checker."""
+def _request_visual_fix(code: str, issues: str, system_prompt: str, frames: list[str]) -> str:
+    """Ask the LLM to fix code based on structured visual feedback and defective frames."""
+    from manimgen.utils import load_reference_frames
+    
     prompt_code = _truncate_for_prompt(code, RETRY_PROMPT_CODE_CHARS)
+    ref_frames = load_reference_frames()
+    
     fixed = chat(
         system=system_prompt,
         user=f"""This ManimGL scene rendered successfully but has visual defects detected by frame analysis.
@@ -259,6 +321,7 @@ Fix the code to resolve these visual defects. Return only the corrected Python �
 
 Original code:
 {prompt_code}""",
+        images=ref_frames + frames,
     )
     if fixed.startswith("```"):
         fixed = re.sub(r"^```\w*\n?", "", fixed)
