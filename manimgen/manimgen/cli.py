@@ -180,6 +180,12 @@ def _run_section(
                     with open(scene_path, "w") as f:
                         f.write(code)
         success, video_path = run_scene(scene_path, class_name)
+        if success and video_path:
+            from manimgen.validator.render_validator import validate_render
+            vr = validate_render(video_path, code, scene_path, cue_durations)
+            if vr.severity == "hard":
+                log.warning("[manimgen] First-pass render has hard failures — forcing retry: %s", "; ".join(vr.issues))
+                success = False
         if not success:
             success, video_path = retry_scene(section, code, class_name, scene_path, cue_durations=cue_durations)
         if not success:
