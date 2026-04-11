@@ -272,3 +272,60 @@ class TestConstants:
 
     def test_xfade_duration_is_reasonable(self):
         assert 0.1 <= _XFADE_DURATION <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# _normalise_all — preset consistency (Issue 5)
+# ---------------------------------------------------------------------------
+
+class TestNormaliseAllPreset:
+
+    def test_with_audio_uses_slow_preset(self, tmp_path):
+        """_normalise_all (with-audio branch) must use -preset slow to match _xfade_pair."""
+        clip = tmp_path / "clip.mp4"
+        clip.write_bytes(b"fake")
+
+        captured_cmds = []
+
+        def fake_run(cmd, **kwargs):
+            captured_cmds.append(list(cmd))
+            return _ok()
+
+        with patch("manimgen.renderer.assembler._has_audio_stream", return_value=True), \
+             patch("subprocess.run", side_effect=fake_run):
+            from manimgen.renderer.assembler import _normalise_all
+            _normalise_all([str(clip)], str(tmp_path))
+
+        assert len(captured_cmds) == 1
+        cmd = captured_cmds[0]
+        assert "-preset" in cmd
+        idx = cmd.index("-preset")
+        assert cmd[idx + 1] == "slow", (
+            f"Expected '-preset slow' but got '-preset {cmd[idx + 1]}'. "
+            "_normalise_all must match _xfade_pair quality setting."
+        )
+
+    def test_no_audio_uses_slow_preset(self, tmp_path):
+        """_normalise_all (no-audio branch) must also use -preset slow."""
+        clip = tmp_path / "clip.mp4"
+        clip.write_bytes(b"fake")
+
+        captured_cmds = []
+
+        def fake_run(cmd, **kwargs):
+            captured_cmds.append(list(cmd))
+            return _ok()
+
+        with patch("manimgen.renderer.assembler._has_audio_stream", return_value=False), \
+             patch("manimgen.renderer.assembler._video_duration", return_value=5.0), \
+             patch("subprocess.run", side_effect=fake_run):
+            from manimgen.renderer.assembler import _normalise_all
+            _normalise_all([str(clip)], str(tmp_path))
+
+        assert len(captured_cmds) == 1
+        cmd = captured_cmds[0]
+        assert "-preset" in cmd
+        idx = cmd.index("-preset")
+        assert cmd[idx + 1] == "slow", (
+            f"Expected '-preset slow' in no-audio branch but got '-preset {cmd[idx + 1]}'."
+        )
