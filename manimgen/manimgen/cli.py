@@ -312,10 +312,46 @@ def main():
     logger.info("[manimgen] Planned %d sections", len(lesson_plan["sections"]))
     logger.info("[manimgen] TTS: %s", "enabled" if tts_on else "disabled")
 
+    # -----------------------------------------------------------------------
+    # Phase 1: Generate TTS for ALL sections upfront, build global overview
+    # -----------------------------------------------------------------------
+    all_section_audio: dict = {}
+    if tts_on:
+        for idx, section in enumerate(lesson_plan["sections"], start=1):
+            section_id = section.get("id", f"section_{idx:02d}")
+            tts_result = _run_tts_for_section(section, idx)
+            if tts_result:
+                from manimgen.planner.segmenter import compute_segments
+                from manimgen.renderer.audio_slicer import slice_audio
+
+                audio_path, timestamps, audio_duration = tts_result
+                cue_word_indices = section.get("cue_word_indices", [0])
+                segments = compute_segments(timestamps, cue_word_indices, audio_duration)
+                audio_slices = slice_audio(
+                    audio_path, segments,
+                    output_dir=paths.audio_dir(),
+                    section_id=section_id,
+                )
+                all_section_audio[section_id] = {
+                    "audio_path": audio_path,
+                    "timestamps": timestamps,
+                    "audio_duration": audio_duration,
+                    "segments": segments,
+                    "audio_slices": audio_slices,
+                    "cue_durations": [seg.duration for seg in segments],
+                }
+
+    overview = _build_overview(lesson_plan, all_section_audio)
+
+    # -----------------------------------------------------------------------
+    # Phase 2: Codegen + render each section using pre-computed audio
+    # -----------------------------------------------------------------------
     rendered_videos: list[str] = []
     for idx, section in enumerate(lesson_plan["sections"], start=1):
+        section_id = section.get("id", f"section_{idx:02d}")
+        section_audio = all_section_audio.get(section_id)
         rendered_videos.extend(
-            _run_section(section, idx, tts_on, current_topic_hash)
+            _run_section(section, idx, tts_on, current_topic_hash, section_audio, overview)
         )
 
     output = assemble_video(rendered_videos, lesson_plan["title"])
