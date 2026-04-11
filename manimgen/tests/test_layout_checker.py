@@ -208,7 +208,6 @@ class TestRetryVisualLoop:
         from manimgen.validator.render_validator import ValidationResult
         soft_vr = ValidationResult(ok=True, issues=[issue_text], severity="soft")
 
-        # Render succeeds but validate_render finds soft issue on first attempt — after visual fix, loop exits (budget gone)
         with patch("manimgen.validator.retry._run_and_capture",
                    return_value={"success": True, "video_path": "/fake/video.mp4", "stderr": ""}), \
              patch("manimgen.validator.retry.validate_render", return_value=soft_vr), \
@@ -221,7 +220,6 @@ class TestRetryVisualLoop:
             from manimgen.validator.retry import retry_scene
             retry_scene(self._make_section(), original_code, "TestScene", scene_path)
 
-        # LLM was called once with the structured visual issues in the prompt
         mock_chat.assert_called_once()
         call_kwargs = mock_chat.call_args.kwargs
         assert issue_text in call_kwargs["user"]
@@ -244,7 +242,7 @@ class TestRetryVisualLoop:
              patch("manimgen.validator.retry.validate_render", return_value=soft_vr), \
              patch("manimgen.validator.retry.chat") as mock_chat:
             from manimgen.validator import retry as retry_module
-            retry_module.MAX_LLM_FIX_CALLS = 0  # budget exhausted from the start
+            retry_module.MAX_LLM_FIX_CALLS = 0
             from manimgen.validator.retry import retry_scene
             success, video = retry_scene(self._make_section(), original_code, "TestScene", scene_path)
 
