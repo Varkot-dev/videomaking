@@ -183,10 +183,12 @@ class TestRetryVisualLoop:
         with open(scene_path, "w") as f:
             f.write("from manimlib import *\nclass TestScene(Scene):\n    def construct(self): pass\n")
 
+        from manimgen.validator.render_validator import ValidationResult
+        clean_vr = ValidationResult(ok=True, issues=[], severity="none")
+
         with patch("manimgen.validator.retry._run_and_capture",
                    return_value={"success": True, "video_path": "/fake/video.mp4", "stderr": ""}), \
-             patch("manimgen.validator.retry.check_layout",
-                   return_value={"ok": True, "issues": "", "skipped": False}):
+             patch("manimgen.validator.retry.validate_render", return_value=clean_vr):
             from manimgen.validator.retry import retry_scene
             success, video = retry_scene(self._make_section(), "from manimlib import *\nclass TestScene(Scene):\n    def construct(self): pass\n", "TestScene", scene_path)
 
@@ -194,20 +196,21 @@ class TestRetryVisualLoop:
         assert video == "/fake/video.mp4"
 
     def test_calls_visual_fix_when_layout_fails_and_budget_allows(self, tmp_path):
-        """When layout check fails and budget allows, LLM is called with structured visual issues."""
+        """When validate_render finds soft issues and budget allows, LLM is called with structured feedback."""
         scene_path = str(tmp_path / "scene.py")
         original_code = "from manimlib import *\nclass TestScene(Scene):\n    def construct(self): pass\n"
         with open(scene_path, "w") as f:
             f.write(original_code)
 
-        issues = "ISSUE: ghost element | CAUSE: Transform point mismatch | FIX: use FadeOut/FadeIn"
+        issue_text = "ISSUE: ghost element | CAUSE: Transform point mismatch | FIX: use FadeOut/FadeIn"
         fixed_code = "from manimlib import *\nclass TestScene(Scene):\n    def construct(self):\n        self.wait(1)\n"
 
-        # Render succeeds but layout fails on first attempt — after visual fix, loop exits (budget gone)
+        from manimgen.validator.render_validator import ValidationResult
+        soft_vr = ValidationResult(ok=True, issues=[issue_text], severity="soft")
+
         with patch("manimgen.validator.retry._run_and_capture",
                    return_value={"success": True, "video_path": "/fake/video.mp4", "stderr": ""}), \
-             patch("manimgen.validator.retry.check_layout",
-                   return_value={"ok": False, "issues": issues, "skipped": False}), \
+             patch("manimgen.validator.retry.validate_render", return_value=soft_vr), \
              patch("manimgen.validator.retry.chat", return_value=fixed_code) as mock_chat, \
              patch("manimgen.validator.retry.precheck_and_autofix",
                    return_value={"ok": True, "stderr": "", "layout_warnings": []}):
@@ -217,10 +220,9 @@ class TestRetryVisualLoop:
             from manimgen.validator.retry import retry_scene
             retry_scene(self._make_section(), original_code, "TestScene", scene_path)
 
-        # LLM was called once with the structured visual issues in the prompt
         mock_chat.assert_called_once()
         call_kwargs = mock_chat.call_args.kwargs
-        assert issues in call_kwargs["user"]
+        assert issue_text in call_kwargs["user"]
 
     def test_accepts_video_when_budget_exhausted_despite_layout_issues(self, tmp_path):
         scene_path = str(tmp_path / "scene.py")
@@ -228,15 +230,19 @@ class TestRetryVisualLoop:
         with open(scene_path, "w") as f:
             f.write(original_code)
 
-        issues = "ISSUE: overlap | CAUSE: stale rect | FIX: recreate rect"
+        from manimgen.validator.render_validator import ValidationResult
+        soft_vr = ValidationResult(
+            ok=True,
+            issues=["ISSUE: overlap | CAUSE: stale rect | FIX: recreate rect"],
+            severity="soft",
+        )
 
         with patch("manimgen.validator.retry._run_and_capture",
                    return_value={"success": True, "video_path": "/fake/video.mp4", "stderr": ""}), \
-             patch("manimgen.validator.retry.check_layout",
-                   return_value={"ok": False, "issues": issues, "skipped": False}), \
+             patch("manimgen.validator.retry.validate_render", return_value=soft_vr), \
              patch("manimgen.validator.retry.chat") as mock_chat:
             from manimgen.validator import retry as retry_module
-            retry_module.MAX_LLM_FIX_CALLS = 0  # budget exhausted from the start
+            retry_module.MAX_LLM_FIX_CALLS = 0
             from manimgen.validator.retry import retry_scene
             success, video = retry_scene(self._make_section(), original_code, "TestScene", scene_path)
 

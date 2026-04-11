@@ -13,6 +13,7 @@ from manimgen.generator.scene_generator import generate_scenes
 from manimgen.validator.runner import run_scene, _find_rendered_video
 from manimgen.validator.retry import retry_scene
 from manimgen.validator.fallback import fallback_scene
+from manimgen.validator.render_validator import validate_render
 from manimgen.renderer.assembler import assemble_video
 from manimgen import paths
 
@@ -65,8 +66,17 @@ def _muxed_path_for(section: dict, idx: int, cue_index: int) -> str:
     return os.path.join(paths.muxed_dir(), f"{section_id}_cue{cue_index:02d}.mp4")
 
 
-def _all_cues_muxed(section: dict, idx: int, n_cues: int) -> bool:
-    return all(os.path.exists(_muxed_path_for(section, idx, i)) for i in range(n_cues))
+def _all_cues_muxed(section: dict, idx: int, n_cues: int, audio_slices: list[str] | None = None) -> bool:
+    """Return True only if all muxed clips exist AND are newer than their audio slices."""
+    for i in range(n_cues):
+        muxed = _muxed_path_for(section, idx, i)
+        if not os.path.exists(muxed):
+            return False
+        if audio_slices and i < len(audio_slices):
+            audio_slice = audio_slices[i]
+            if os.path.exists(audio_slice) and os.path.getmtime(audio_slice) > os.path.getmtime(muxed):
+                return False
+    return True
 
 
 def _topic_hash(topic_or_pdf: str) -> str:
@@ -147,16 +157,16 @@ def _run_section(
             segments = compute_segments(timestamps, cue_word_indices, audio_duration)
             log.info("[manimgen] %d cue segment(s) for this section", len(segments))
 
-            # Skip entire section if all cues already muxed
-            if _all_cues_muxed(section, idx, len(segments)):
-                log.info("[manimgen] All cues already muxed, skipping section")
-                return [_muxed_path_for(section, idx, i) for i in range(len(segments))]
-
             audio_slices = slice_audio(
                 audio_path, segments,
                 output_dir=paths.audio_dir(),
                 section_id=section_id,
             )
+
+            # Skip entire section if all cues already muxed AND newer than audio slices
+            if _all_cues_muxed(section, idx, len(segments), audio_slices):
+                log.info("[manimgen] All cues already muxed, skipping section")
+                return [_muxed_path_for(section, idx, i) for i in range(len(segments))]
             log.info("[manimgen] Audio slices: %s", [os.path.basename(p) for p in audio_slices])
 
     # --- Generate ONE scene for the whole section ---
@@ -180,14 +190,28 @@ def _run_section(
                     with open(scene_path, "w") as f:
                         f.write(code)
         success, video_path = run_scene(scene_path, class_name)
+        soft_issues: list[str] = []
         if success and video_path:
-            from manimgen.validator.render_validator import validate_render
             vr = validate_render(video_path, code, scene_path, cue_durations)
             if vr.severity == "hard":
-                log.warning("[manimgen] First-pass render has hard failures — forcing retry: %s", "; ".join(vr.issues))
+                log.warning(
+                    "[manimgen] First-pass render has hard failures — forcing retry: %s",
+                    "; ".join(vr.issues),
+                )
                 success = False
+                video_path = None
+            elif vr.issues:
+                soft_issues = vr.issues
+                log.warning(
+                    "[manimgen] First-pass render has soft issues (logged for context): %s",
+                    "; ".join(soft_issues),
+                )
         if not success:
-            success, video_path = retry_scene(section, code, class_name, scene_path, cue_durations=cue_durations)
+            success, video_path = retry_scene(
+                section, code, class_name, scene_path,
+                cue_durations=cue_durations,
+                prior_issues=soft_issues,
+            )
         if not success:
             log.info("[manimgen] All retries failed, using fallback")
             video_path = fallback_scene(section)
@@ -217,7 +241,10 @@ def _run_section(
         produced: list[str] = []
         for i, (cue_clip, audio_slice) in enumerate(zip(cue_video_clips, audio_slices)):
             muxed = _muxed_path_for(section, idx, i)
-            if os.path.exists(muxed):
+            if os.path.exists(muxed) and (
+                not os.path.exists(audio_slice)
+                or os.path.getmtime(audio_slice) <= os.path.getmtime(muxed)
+            ):
                 log.info("[manimgen] Skipping cue %d (already muxed)", i)
                 produced.append(muxed)
                 continue
@@ -285,10 +312,46 @@ def main():
     logger.info("[manimgen] Planned %d sections", len(lesson_plan["sections"]))
     logger.info("[manimgen] TTS: %s", "enabled" if tts_on else "disabled")
 
+    # -----------------------------------------------------------------------
+    # Phase 1: Generate TTS for ALL sections upfront, build global overview
+    # -----------------------------------------------------------------------
+    all_section_audio: dict = {}
+    if tts_on:
+        for idx, section in enumerate(lesson_plan["sections"], start=1):
+            section_id = section.get("id", f"section_{idx:02d}")
+            tts_result = _run_tts_for_section(section, idx)
+            if tts_result:
+                from manimgen.planner.segmenter import compute_segments
+                from manimgen.renderer.audio_slicer import slice_audio
+
+                audio_path, timestamps, audio_duration = tts_result
+                cue_word_indices = section.get("cue_word_indices", [0])
+                segments = compute_segments(timestamps, cue_word_indices, audio_duration)
+                audio_slices = slice_audio(
+                    audio_path, segments,
+                    output_dir=paths.audio_dir(),
+                    section_id=section_id,
+                )
+                all_section_audio[section_id] = {
+                    "audio_path": audio_path,
+                    "timestamps": timestamps,
+                    "audio_duration": audio_duration,
+                    "segments": segments,
+                    "audio_slices": audio_slices,
+                    "cue_durations": [seg.duration for seg in segments],
+                }
+
+    overview = _build_overview(lesson_plan, all_section_audio)
+
+    # -----------------------------------------------------------------------
+    # Phase 2: Codegen + render each section using pre-computed audio
+    # -----------------------------------------------------------------------
     rendered_videos: list[str] = []
     for idx, section in enumerate(lesson_plan["sections"], start=1):
+        section_id = section.get("id", f"section_{idx:02d}")
+        section_audio = all_section_audio.get(section_id)
         rendered_videos.extend(
-            _run_section(section, idx, tts_on, current_topic_hash)
+            _run_section(section, idx, tts_on, current_topic_hash, section_audio, overview)
         )
 
     output = assemble_video(rendered_videos, lesson_plan["title"])

@@ -201,9 +201,19 @@ def generate_scenes(
     with open(scene_path, "w") as f:
         f.write(code)
 
-    # Run file-based full validation (layout smells, timing smells, banned patterns)
-    # AFTER saving — the string-only precheck above skips these checks.
-    precheck_and_autofix_file(scene_path)
+    precheck_result = precheck_and_autofix_file(scene_path)
+    _log = __import__("logging").getLogger(__name__)
+    if not precheck_result["ok"]:
+        _log.warning(
+            "[scene_generator] Precheck failed for %s: %s",
+            section["id"], precheck_result["stderr"],
+        )
+    elif precheck_result.get("layout_warnings"):
+        _log.warning(
+            "[scene_generator] Layout warnings for %s: %s",
+            section["id"], precheck_result["layout_warnings"],
+        )
+    # Reload in case precheck_and_autofix_file applied additional in-place fixes
     with open(scene_path) as f:
         code = f.read()
 
