@@ -192,29 +192,33 @@ def _concat(
 
 
 def _hard_concat(paths: list[str], output_path: str) -> None:
-    """Concatenate clips with hard cuts using ffmpeg concat filter."""
-    inputs = []
-    for p in paths:
-        inputs += ["-i", p]
+    """Concatenate normalised clips with hard cuts using stream copy.
 
-    n = len(paths)
-    filter_str = "".join(f"[{i}:v][{i}:a]" for i in range(n))
-    filter_str += f"concat=n={n}:v=1:a=1[v][a]"
-
-    subprocess.run(
-        [
-            "ffmpeg", "-y",
-            *inputs,
-            "-filter_complex", filter_str,
-            "-map", "[v]", "-map", "[a]",
-            "-c:v", "libx264", "-preset", "slow", "-crf", "17",
-            "-c:a", "aac", "-ar", "48000",
-            output_path,
-        ],
-        check=True,
-        capture_output=True,
-        timeout=300,
-    )
+    All inputs are already normalised (same codec, resolution, fps, sample rate)
+    so stream copy is lossless and near-instant. A concat demuxer list file is
+    used rather than the filter_complex concat filter to avoid re-encoding.
+    """
+    import tempfile
+    list_file = output_path + ".concat_list.txt"
+    try:
+        with open(list_file, "w") as f:
+            for p in paths:
+                f.write(f"file '{os.path.abspath(p)}'\n")
+        subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", list_file,
+                "-c", "copy",
+                output_path,
+            ],
+            check=True,
+            capture_output=True,
+            timeout=300,
+        )
+    finally:
+        if os.path.exists(list_file):
+            os.remove(list_file)
 
 
 def _video_duration(path: str) -> float:

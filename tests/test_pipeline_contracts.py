@@ -379,8 +379,9 @@ class TestAssemblerSampleRateContract:
                 "Sample rate mismatch will cause drift in subsequent re-encodes."
             )
 
-    def test_hard_concat_enforces_48khz(self, tmp_path):
-        """_hard_concat must include -ar 48000 — it re-encodes audio in the concat filter."""
+    def test_hard_concat_uses_stream_copy(self, tmp_path):
+        """_hard_concat must use stream copy (-c copy) — inputs are already normalised
+        to 48kHz by _normalise_all, so re-encoding would be a lossy no-op."""
         from manimgen.renderer import assembler
         commands = []
 
@@ -396,12 +397,12 @@ class TestAssemblerSampleRateContract:
             except Exception:
                 pass
 
-        for cmd in commands:
-            cmd_str = " ".join(cmd)
-            assert "48000" in cmd_str, (
-                f"_hard_concat command missing 48000 sample rate: {cmd_str}. "
-                "After normalise_all sets 48kHz, this re-encode must maintain it."
-            )
+        assert commands, "Expected at least one ffmpeg call"
+        cmd_str = " ".join(commands[0])
+        assert "-c copy" in cmd_str or ("-c" in cmd_str and "copy" in cmd_str), (
+            f"_hard_concat must use stream copy, not re-encode: {cmd_str}. "
+            "Inputs are already 48kHz from _normalise_all."
+        )
 
     def test_xfade_pair_enforces_48khz(self, tmp_path):
         """_xfade_pair must include -ar 48000 in its acrossfade re-encode."""

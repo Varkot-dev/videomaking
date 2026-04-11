@@ -73,6 +73,35 @@ _BANNED_PATTERNS: list[tuple[str, str]] = [
         "Or call positionally: self.frame.reorient(theta_val, phi_val).",
     ),
     (
+        r"\.reorient\(\s*(?:phi|theta)\s*=",
+        "reorient() does not accept phi= or theta= kwargs. "
+        "Call positionally: self.frame.reorient(theta_degrees, phi_degrees).",
+    ),
+    (
+        r"\bParametricFunction\s*\(",
+        "ParametricFunction does not exist in ManimGL. Use ParametricCurve(func, t_range=...) instead.",
+    ),
+    (
+        r"\bmax_stroke_width_to_length_ratio\s*=",
+        "max_stroke_width_to_length_ratio is not a ManimGL kwarg. Remove it.",
+    ),
+    (
+        r"\bstroke_dash_offset\s*=",
+        "stroke_dash_offset is not a ManimGL kwarg. Remove it.",
+    ),
+    (
+        r"\bdash_length\s*=",
+        "dash_length is not a ManimGL kwarg. Remove it.",
+    ),
+    (
+        r"\bdash_offset\s*=",
+        "dash_offset is not a ManimGL kwarg. Remove it.",
+    ),
+    (
+        r"\bVGroup\b.*\.get_graph\s*\(",
+        "VGroup has no get_graph() method — only Axes does. Store the Axes object separately.",
+    ),
+    (
         r"\.get_parts_by_tex_expression\s*\(",
         "get_parts_by_tex_expression() does not exist on Tex in ManimGL. "
         "To highlight a sub-expression, use a separate Tex() object positioned with .move_to() "
@@ -168,7 +197,13 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
         applied.append(f"frame y-bounds -> set_height ({count})")
         fixed = new_fixed
 
-    for kw in _BANNED_KWARGS:
+    # ParametricFunction -> ParametricCurve (ManimCommunity -> ManimGL)
+    new_fixed, count = re.subn(r"\bParametricFunction\s*\(", "ParametricCurve(", fixed)
+    if count:
+        applied.append(f"ParametricFunction -> ParametricCurve ({count})")
+        fixed = new_fixed
+
+    for kw in _BANNED_KWARGS + ["max_stroke_width_to_length_ratio", "stroke_dash_offset", "dash_length", "dash_offset"]:
         new_fixed, count = re.subn(rf",?\s*{kw}\s*=\s*[^,\)\n]+", "", fixed)
         if count:
             applied.append(f"removed {kw} ({count})")

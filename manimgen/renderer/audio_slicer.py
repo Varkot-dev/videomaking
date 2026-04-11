@@ -59,10 +59,18 @@ def slice_audio(
     if not segments:
         raise ValueError("segments list is empty — nothing to slice")
 
+    src_mtime = os.path.getmtime(audio_path)
+
+    def _is_stale(out_path: str) -> bool:
+        """Return True if out_path doesn't exist or source is newer than it."""
+        if not os.path.exists(out_path):
+            return True
+        return src_mtime > os.path.getmtime(out_path)
+
     # Single segment: re-encode the whole file to AAC at 48kHz (no slicing needed)
     if len(segments) == 1:
         out_path = os.path.join(output_dir, f"{section_id}_cue00.m4a")
-        if not overwrite and os.path.exists(out_path):
+        if not overwrite and not _is_stale(out_path):
             logger.info("[slicer] Skipping existing: %s", out_path)
             return [out_path]
         _ffmpeg_copy(audio_path, out_path)
@@ -73,7 +81,7 @@ def slice_audio(
     for seg in segments:
         out_path = os.path.join(output_dir, f"{section_id}_cue{seg.cue_index:02d}.m4a")
 
-        if not overwrite and os.path.exists(out_path):
+        if not overwrite and not _is_stale(out_path):
             logger.info("[slicer] Skipping existing: %s", out_path)
             output_paths.append(out_path)
             continue

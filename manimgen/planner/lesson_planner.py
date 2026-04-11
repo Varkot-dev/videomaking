@@ -118,6 +118,9 @@ def _escape_bad_backslashes(s: str) -> str:
         if ch == '\\':
             if i + 1 < len(s) and s[i + 1] in valid_escapes:
                 out.append(ch)          # keep valid escape as-is
+                out.append(s[i + 1])    # include the escape char too
+                i += 2                  # skip both chars
+                continue
             else:
                 out.append('\\\\')      # double-escape bare backslash
         else:

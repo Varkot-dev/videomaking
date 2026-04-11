@@ -6,7 +6,7 @@ from manimgen.llm import chat
 from manimgen.validator.runner import _find_rendered_video, _is_3d_scene
 from manimgen.validator.codeguard import precheck_and_autofix_file as precheck_and_autofix, apply_error_aware_fixes
 from manimgen.validator.env import get_render_env
-from manimgen.validator.layout_checker import check_layout
+from manimgen.validator.render_validator import validate_render
 from manimgen.validator.timing_verifier import verify_timing, auto_fix_timing
 from manimgen import paths
 
@@ -128,6 +128,7 @@ def retry_scene(
     class_name: str,
     scene_path: str,
     cue_durations: list[float] | None = None,
+    prior_issues: list[str] | None = None,
 ) -> tuple[bool, str | None]:
     """
     Retry generating and running a scene up to MAX_RETRIES times.
@@ -140,29 +141,21 @@ def retry_scene(
     system_prompt = _load_retry_system_prompt()
     llm_fix_calls_used = 0
     seen_error_signatures: set[str] = set()
+    _prior_issues_text = "\n".join(prior_issues) if prior_issues else ""
 
     for attempt in range(1, MAX_RETRIES + 1):
         result = _run_and_capture(scene_path, class_name)
         if result["success"]:
-            from manimgen.validator.frame_checker import check_frames
-            frame_result = check_frames(result["video_path"])
-            
-            layout = check_layout(result["video_path"])
-            
-            combined_issues = []
-            if not frame_result.ok:
-                combined_issues.extend(frame_result.issues_text.splitlines())
-            if not layout["ok"] and layout["issues"]:
-                combined_issues.extend(layout["issues"].splitlines())
+            vr = validate_render(result["video_path"], code, scene_path, cue_durations)
 
-            if not combined_issues:
+            if vr.severity == "none":
                 return True, result["video_path"]
 
-            # Scene rendered but has visual defects. Feed structured feedback
-            # back into the retry loop if budget allows.
-            issues_text = "\n".join(combined_issues)
-            print(f"[retry] Attempt {attempt}/{MAX_RETRIES} rendered but has visual defects:")
-            for line in combined_issues:
+            if vr.severity == "hard":
+                print(f"[retry] Attempt {attempt}/{MAX_RETRIES} rendered but has hard failures:")
+            else:
+                print(f"[retry] Attempt {attempt}/{MAX_RETRIES} rendered but has soft issues:")
+            for line in vr.issues:
                 print(f"[retry]   {line}")
 
             if llm_fix_calls_used >= MAX_LLM_FIX_CALLS:
@@ -170,8 +163,7 @@ def retry_scene(
                 return True, result["video_path"]
 
             print("[retry] Requesting visual fix from LLM...")
-            defective_frames = layout.get("frames", [])
-            code = _request_visual_fix(code, "\n".join(combined_issues), system_prompt, defective_frames)
+            code = _request_visual_fix(code, "\n".join(vr.issues), system_prompt, [])
             llm_fix_calls_used += 1
             with open(scene_path, "w") as f:
                 f.write(code)
@@ -221,13 +213,17 @@ def retry_scene(
 
         prompt_stderr = _truncate_for_prompt(result["stderr"], RETRY_PROMPT_STDERR_CHARS)
         prompt_code = _truncate_for_prompt(code, RETRY_PROMPT_CODE_CHARS)
+        prior_context = (
+            f"\nPrior render soft issues (fix these too if possible):\n{_prior_issues_text}\n"
+            if _prior_issues_text else ""
+        )
         fixed = chat(
             system=system_prompt,
             user=f"""This ManimGL scene failed to render. Fix it.
 
 Error type: {error_type}
 Guidance: {guidance}
-
+{prior_context}
 Full error:
 {prompt_stderr}
 
@@ -278,7 +274,7 @@ def _run_and_capture(scene_path: str, class_name: str) -> dict:
     timeout = 360 if _is_3d_scene(scene_path) else 240
     try:
         result = subprocess.run(
-            ["manimgl", scene_path, class_name, "-w", paths.render_quality_flag(), "-c", "#1C1C1C"],
+            ["manimgl", scene_path, class_name, "-w", paths.render_quality_flag(), "--fps", str(paths.render_fps()), "-c", "#1C1C1C"],
             capture_output=True,
             text=True,
             timeout=timeout,

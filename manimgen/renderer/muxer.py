@@ -136,6 +136,7 @@ def _mux_freeze_video(
         "-map", "1:a",
         "-c:v", "libx264",
         "-c:a", "aac",
+        "-t", f"{audio_dur:.6f}",
         output_path,
     ]
     _run(cmd, output_path)

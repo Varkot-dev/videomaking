@@ -130,6 +130,10 @@ step1.next_to(update_rule, DOWN, buff=0.4).align_to(update_rule, LEFT)
 | `FlashAround(obj)` | `Circumscribe(obj)` |
 | `width=W, height=H` in Axes | `x_length=W, y_length=H` |
 | `TransformMatchingTex(a, b)` | `TransformMatchingShapes(a, b)` |
+| `ParametricCurve(func, t_range=...)` | `ParametricFunction(...)` — does not exist in ManimGL |
+| `self.frame.reorient(theta, phi)` (positional) | `self.frame.reorient(phi=..., theta=...)` — no kwargs named `phi`/`theta` |
+| `DashedLine(start, end)` (no extra kwargs) | `dash_length=`, `dash_offset=`, `stroke_dash_offset=`, `max_stroke_width_to_length_ratio=` — none exist in ManimGL |
+| Store `Axes` object; call `axes.get_graph(...)` | `VGroup(...).get_graph(...)` — VGroup has no `get_graph` method |
 
 ### self.frame — complete API (ThreeDScene only)
 `self.frame` is a `CameraFrame`. These are the ONLY valid methods. Do not invent others.
