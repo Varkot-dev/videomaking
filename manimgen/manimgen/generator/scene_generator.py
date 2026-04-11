@@ -13,7 +13,7 @@ import re
 from manimgen.llm import chat
 from manimgen import paths
 from manimgen.utils import strip_fencing, section_class_name, load_reference_frames
-from manimgen.validator.codeguard import precheck_and_autofix
+from manimgen.validator.codeguard import precheck_and_autofix, precheck_and_autofix_file
 
 _WORDS_PER_MINUTE = 130
 _MAX_EXAMPLES = 6
@@ -200,5 +200,21 @@ def generate_scenes(
     scene_path = os.path.join(scenes_dir, f"{section['id']}.py")
     with open(scene_path, "w") as f:
         f.write(code)
+
+    precheck_result = precheck_and_autofix_file(scene_path)
+    _log = __import__("logging").getLogger(__name__)
+    if not precheck_result["ok"]:
+        _log.warning(
+            "[scene_generator] Precheck failed for %s: %s",
+            section["id"], precheck_result["stderr"],
+        )
+    elif precheck_result.get("layout_warnings"):
+        _log.warning(
+            "[scene_generator] Layout warnings for %s: %s",
+            section["id"], precheck_result["layout_warnings"],
+        )
+    # Reload in case precheck_and_autofix_file applied additional in-place fixes
+    with open(scene_path) as f:
+        code = f.read()
 
     return code, class_name, scene_path
