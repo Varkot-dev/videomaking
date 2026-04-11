@@ -93,7 +93,7 @@ def _normalise_all(clip_paths: list[str], work_dir: str) -> list[str]:
                 "ffmpeg", "-y",
                 "-i", path,
                 "-vf", _vf_scale(),
-                "-c:v", "libx264", "-preset", "fast", "-crf", "17",
+                "-c:v", "libx264", "-preset", "slow", "-crf", "17",
                 "-c:a", "aac", "-ar", "48000",
                 norm,
             ]
@@ -106,7 +106,7 @@ def _normalise_all(clip_paths: list[str], work_dir: str) -> list[str]:
                 "-i", path,
                 "-f", "lavfi", "-t", str(dur), "-i", "anullsrc=r=48000:cl=stereo",
                 "-vf", _vf_scale(),
-                "-c:v", "libx264", "-preset", "fast", "-crf", "17",
+                "-c:v", "libx264", "-preset", "slow", "-crf", "17",
                 "-c:a", "aac", "-ar", "48000",
                 "-shortest",
                 norm,

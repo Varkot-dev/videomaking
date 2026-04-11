@@ -13,7 +13,7 @@ import re
 from manimgen.llm import chat
 from manimgen import paths
 from manimgen.utils import strip_fencing, section_class_name, load_reference_frames
-from manimgen.validator.codeguard import precheck_and_autofix
+from manimgen.validator.codeguard import precheck_and_autofix, precheck_and_autofix_file
 
 _WORDS_PER_MINUTE = 130
 _MAX_EXAMPLES = 6
@@ -200,5 +200,11 @@ def generate_scenes(
     scene_path = os.path.join(scenes_dir, f"{section['id']}.py")
     with open(scene_path, "w") as f:
         f.write(code)
+
+    # Run file-based full validation (layout smells, timing smells, banned patterns)
+    # AFTER saving — the string-only precheck above skips these checks.
+    precheck_and_autofix_file(scene_path)
+    with open(scene_path) as f:
+        code = f.read()
 
     return code, class_name, scene_path

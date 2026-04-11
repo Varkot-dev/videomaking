@@ -152,13 +152,15 @@ class TestCheckLayout:
 
     def test_passes_all_frames_to_llm(self):
         frames = ["frame1", "frame2", "frame3"]
+        ref_frames = ["ref1", "ref2"]
         with patch("os.path.exists", return_value=True), \
              patch("manimgen.validator.layout_checker._sample_frames", return_value=frames), \
+             patch("manimgen.validator.layout_checker.load_reference_frames", return_value=ref_frames), \
              patch("manimgen.validator.layout_checker.chat", return_value="OK") as mock_chat:
             check_layout("/fake/video.mp4")
 
         _, kwargs = mock_chat.call_args
-        assert kwargs["images"] == frames
+        assert kwargs["images"] == ref_frames + frames
 
 
 # ── retry.py visual feedback loop ────────────────────────────────────────────
