@@ -55,6 +55,20 @@ def _run_tts_for_section(section: dict, idx: int) -> tuple[str, list, float] | N
         save_timestamps(timestamps, ts_path)
         audio_duration = get_audio_duration(audio_path)
         logger.info("[manimgen] %d word timestamps, %.1fs audio", len(timestamps), audio_duration)
+
+        # Silence check — catch TTS failures before slicing (from OpenMontage audio_energy)
+        from manimgen.renderer.tts import check_audio_not_silent
+        energy = check_audio_not_silent(audio_path)
+        if not energy["ok"]:
+            logger.warning(
+                "[manimgen] TTS audio for '%s' is %.0f%% silent — "
+                "likely a TTS failure. Retrying once.",
+                section["title"], energy["silent_ratio"] * 100,
+            )
+            _, timestamps = generate_narration(narration, audio_path)
+            save_timestamps(timestamps, ts_path)
+            audio_duration = get_audio_duration(audio_path)
+
         return audio_path, timestamps, audio_duration
     except Exception as e:
         logger.warning("[manimgen] TTS failed for '%s': %s", section["title"], e)

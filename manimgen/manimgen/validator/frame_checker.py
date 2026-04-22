@@ -215,11 +215,61 @@ def _check_frozen_frames(
 # Public API
 # ---------------------------------------------------------------------------
 
+def _scene_guided_timestamps(video_path: str, duration: float) -> list[float]:
+    """Build sample timestamps using scene-guided strategy from OpenMontage.
+
+    Detects scene boundaries via ffmpeg's scene filter, then captures the
+    first frame of each scene plus a midpoint for scenes >3s. Falls back to
+    fixed 25/50/75% percentiles if scene detection fails or finds no cuts.
+    Caps at 8 frames to keep PIL work fast.
+    """
+    import re as _re
+    boundaries: list[float] = [0.0]
+    try:
+        proc = subprocess.run(
+            [
+                "ffmpeg", "-i", video_path,
+                "-vf", "select='gt(scene\\,0.35)',showinfo",
+                "-vsync", "vfr", "-f", "null", "-",
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        for line in proc.stderr.split("\n"):
+            m = _re.search(r"pts_time:([\d.]+)", line)
+            if m:
+                t = float(m.group(1))
+                if t > 0.1:
+                    boundaries.append(t)
+    except Exception:
+        pass
+
+    if len(boundaries) < 2:
+        return [duration * 0.25, duration * 0.50, duration * 0.75]
+
+    # First frame + midpoint for scenes >3s
+    boundaries.append(duration)
+    timestamps: list[float] = []
+    for i in range(len(boundaries) - 1):
+        start, end = boundaries[i], boundaries[i + 1]
+        scene_dur = end - start
+        timestamps.append(start + 0.1)
+        if scene_dur > 3.0:
+            timestamps.append(start + scene_dur / 2)
+
+    timestamps = sorted(set(round(t, 3) for t in timestamps if 0 < t < duration))
+    if len(timestamps) > 8:
+        step = len(timestamps) / 8
+        timestamps = [timestamps[int(i * step)] for i in range(8)]
+
+    return timestamps or [duration * 0.25, duration * 0.50, duration * 0.75]
+
+
 def check_frames(video_path: str) -> FrameCheckResult:
     """Run deterministic frame checks on a rendered video.
 
-    Samples frames at 25%, 50%, and 75% of video duration and checks each
-    for black frames, edge clipping, and frozen animation.
+    Uses scene-guided sampling (adapted from OpenMontage FrameSampler): captures
+    the first frame of each detected scene cut plus midpoints for long scenes.
+    Falls back to fixed 25/50/75% percentiles when scene detection finds no cuts.
 
     Returns a FrameCheckResult with ok=True if no issues, or ok=False with
     structured ISSUE|CAUSE|FIX lines matching the layout_checker format.
@@ -234,7 +284,7 @@ def check_frames(video_path: str) -> FrameCheckResult:
     if not duration or duration < 0.5:
         return FrameCheckResult(ok=True, skipped=True)
 
-    timestamps = [duration * 0.25, duration * 0.50, duration * 0.75]
+    timestamps = _scene_guided_timestamps(video_path, duration)
     frames: list[tuple[float, "Image.Image"]] = []
 
     for ts in timestamps:

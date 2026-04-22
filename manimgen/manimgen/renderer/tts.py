@@ -21,6 +21,7 @@
 # cue word[i] starts speaking is exactly when the next animation should begin.
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -28,6 +29,7 @@ import subprocess
 from dataclasses import dataclass
 
 import edge_tts
+import requests
 import yaml
 
 logger = logging.getLogger(__name__)
@@ -98,27 +100,95 @@ async def _generate_async(
     return word_timestamps
 
 
+_ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/with-timestamps"
+
+
+def _generate_elevenlabs(
+    text: str,
+    output_path: str,
+    voice_id: str,
+    api_key: str,
+) -> list[WordTimestamp]:
+    """Call ElevenLabs /with-timestamps endpoint, write audio, return WordTimestamps.
+
+    ElevenLabs returns character-level alignment; this converts to word-level
+    by grouping characters until a space boundary, matching pipeline contract.
+    """
+    resp = requests.post(
+        _ELEVENLABS_API_URL.format(voice_id=voice_id),
+        headers={"xi-api-key": api_key, "Content-Type": "application/json"},
+        json={
+            "text": text,
+            "model_id": "eleven_multilingual_v2",
+            "output_format": "mp3_44100_128",
+        },
+        timeout=120,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+
+    audio_bytes = base64.b64decode(payload["audio_base64"])
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, "wb") as f:
+        f.write(audio_bytes)
+
+    # Character-level alignment → word-level WordTimestamp list
+    alignment = payload.get("alignment", {})
+    chars: list[str] = alignment.get("characters", [])
+    char_starts: list[float] = alignment.get("character_start_times_seconds", [])
+    char_ends: list[float] = alignment.get("character_end_times_seconds", [])
+
+    timestamps: list[WordTimestamp] = []
+    word_chars: list[str] = []
+    word_start: float | None = None
+    word_end: float = 0.0
+
+    for ch, cs, ce in zip(chars, char_starts, char_ends):
+        if ch == " " or ch == "":
+            if word_chars:
+                word = "".join(word_chars).strip(".,!?;:\"'")
+                if word:
+                    timestamps.append(WordTimestamp(word=word, start=word_start, end=word_end))
+                word_chars = []
+                word_start = None
+        else:
+            if word_start is None:
+                word_start = cs
+            word_chars.append(ch)
+            word_end = ce
+
+    if word_chars:
+        word = "".join(word_chars).strip(".,!?;:\"'")
+        if word:
+            timestamps.append(WordTimestamp(word=word, start=word_start, end=word_end))
+
+    return timestamps
+
+
 def generate_narration(
     text: str,
     output_path: str,
     voice: str = None,
 ) -> tuple[str, list[WordTimestamp]]:
-    """Generate narration audio from text using edge-tts.
+    """Generate narration audio from text. Engine selected by config.yaml tts.engine.
 
-    Returns (audio_path, word_timestamps).
-
-    word_timestamps is a list of WordTimestamp(word, start, end) in order,
-    where start/end are seconds from the beginning of the audio file.
-    These are used to cue animations: when word[i] starts speaking,
-    the animation associated with that cue point begins.
+    Returns (audio_path, word_timestamps) — contract identical regardless of engine.
     """
-    if voice is None:
-        voice = _TTS_CFG.get("voice", _DEFAULT_VOICE)
-    rate = _TTS_CFG.get("speed", _DEFAULT_SPEED)
-
+    engine = _TTS_CFG.get("engine", "edge-tts")
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    timestamps = asyncio.run(_generate_async(text, output_path, voice, rate))
+    if engine == "elevenlabs":
+        api_key = os.environ.get("ELEVEN_LABS_KEY") or os.environ.get("ELEVENLABS_API_KEY")
+        if not api_key:
+            raise RuntimeError("ElevenLabs engine selected but ELEVEN_LABS_KEY not set in environment")
+        voice_id = _TTS_CFG.get("elevenlabs_voice_id", "pNInz6obpgDQGcFmaJgB")
+        timestamps = _generate_elevenlabs(text, output_path, voice_id, api_key)
+    else:
+        if voice is None:
+            voice = _TTS_CFG.get("voice", _DEFAULT_VOICE)
+        rate = _TTS_CFG.get("speed", _DEFAULT_SPEED)
+        timestamps = asyncio.run(_generate_async(text, output_path, voice, rate))
+
     return output_path, timestamps
 
 
@@ -187,3 +257,57 @@ def get_audio_duration(audio_path: str) -> float:
 
     data = json.loads(result.stdout)
     return float(data["format"]["duration"])
+
+
+# ---------------------------------------------------------------------------
+# Audio energy / silence check (adapted from OpenMontage audio_energy.py)
+# ---------------------------------------------------------------------------
+
+_SILENCE_LUFS = -60.0  # below this = effectively silent
+
+def check_audio_not_silent(audio_path: str) -> dict:
+    """Check that a TTS audio file has meaningful content.
+
+    Uses ffmpeg's ebur128 filter to measure momentary loudness. Returns
+    a dict with keys: ok (bool), silent_ratio (float 0–1), duration (float).
+
+    A file is flagged as silent when >80% of its duration measures below
+    -60 LUFS — which indicates a TTS failure, empty output, or bad path.
+    Runs in <2s for typical cue-length audio (2–15s).
+    """
+    import re as _re
+    result = {"ok": True, "silent_ratio": 0.0, "duration": 0.0}
+
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "json", audio_path],
+            capture_output=True, text=True, timeout=10,
+        )
+        duration = float(json.loads(probe.stdout)["format"]["duration"])
+        result["duration"] = duration
+    except Exception:
+        return result  # can't probe → assume ok, let downstream fail
+
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-i", audio_path, "-af", "ebur128", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=30,
+        )
+        stderr = proc.stderr
+    except Exception:
+        return result
+
+    # Parse momentary loudness (M:) values at ~100ms intervals
+    pattern = _re.compile(r"M:\s*(-?[\d.]+)")
+    measurements = [float(m) for m in pattern.findall(stderr)]
+
+    if not measurements:
+        return result
+
+    silent_count = sum(1 for m in measurements if m < _SILENCE_LUFS)
+    silent_ratio = silent_count / len(measurements)
+    result["silent_ratio"] = round(silent_ratio, 3)
+    result["ok"] = silent_ratio < 0.80
+
+    return result

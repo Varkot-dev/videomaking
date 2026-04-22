@@ -11,11 +11,64 @@ def _is_3d_scene(scene_path: str) -> bool:
         return "ThreeDScene" in f.read()
 
 
+def validate_scene_inputs(scene_path: str) -> dict:
+    """Pre-render sanity checks before spending time on a manimgl subprocess.
+
+    Adapted from OpenMontage CompositionValidator — catches obvious failures
+    (missing file, unreadable, empty, output dir not writable) at zero cost
+    before any LLM or subprocess calls.
+
+    Returns {"ok": bool, "errors": [str], "warnings": [str]}.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if not os.path.exists(scene_path):
+        errors.append(f"Scene file not found: {scene_path}")
+        return {"ok": False, "errors": errors, "warnings": warnings}
+
+    if os.path.getsize(scene_path) == 0:
+        errors.append(f"Scene file is empty: {scene_path}")
+        return {"ok": False, "errors": errors, "warnings": warnings}
+
+    try:
+        with open(scene_path) as f:
+            content = f.read()
+    except OSError as e:
+        errors.append(f"Cannot read scene file: {e}")
+        return {"ok": False, "errors": errors, "warnings": warnings}
+
+    if "from manimlib" not in content and "import manimlib" not in content:
+        warnings.append("Scene file does not import manimlib — may be wrong template")
+
+    scenes_dir = paths.scenes_dir()
+    try:
+        os.makedirs(scenes_dir, exist_ok=True)
+        test_path = os.path.join(scenes_dir, ".write_check")
+        with open(test_path, "w") as f:
+            f.write("")
+        os.remove(test_path)
+    except OSError as e:
+        errors.append(f"Output scenes directory not writable: {e}")
+
+    logs_dir = paths.logs_dir()
+    try:
+        os.makedirs(logs_dir, exist_ok=True)
+    except OSError as e:
+        warnings.append(f"Could not create logs directory: {e}")
+
+    return {"ok": len(errors) == 0, "errors": errors, "warnings": warnings}
+
+
 def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
     """
     Run a ManimGL scene file and return (success, video_path).
     Logs the attempt to output/logs/.
     """
+    preflight = validate_scene_inputs(scene_path)
+    if not preflight["ok"]:
+        return False, None
+
     logs_dir = paths.logs_dir()
     os.makedirs(logs_dir, exist_ok=True)
 
