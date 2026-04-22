@@ -28,6 +28,33 @@ def _load_researcher_system_prompt() -> str:
         return f.read()
 
 
+def _load_critic_system_prompt() -> str:
+    here = os.path.dirname(__file__)
+    with open(os.path.join(here, "prompts", "storyboard_critic_system.md")) as f:
+        return f.read()
+
+
+def _self_correct(plan: dict, limit: int) -> dict:
+    """Send the storyboard through one critic pass before returning it.
+
+    The critic checks for vague visuals, cue count mismatches, consecutive
+    same techniques, and weak narration — then returns a corrected JSON.
+    One pass costs one LLM call but consistently improves output quality.
+    """
+    import json as _json
+    critic_system = _load_critic_system_prompt()
+    raw_plan = _json.dumps(plan, indent=2)
+    print("[planner] Running storyboard self-correction pass...")
+    corrected_raw = chat(system=critic_system, user=raw_plan)
+    try:
+        corrected = _cap_sections(_safe_json_loads(_strip_fencing(corrected_raw)), limit)
+        print("[planner] Self-correction complete.")
+        return corrected
+    except Exception as e:
+        logger.warning("[planner] Self-correction parse failed (%s) — using original plan", e)
+        return plan
+
+
 def _cap_sections(plan: dict, limit: int) -> dict:
     sections = plan.get("sections", [])
     if len(sections) > limit:
@@ -244,6 +271,7 @@ def plan_lesson(topic: str) -> dict:
 
     raw = chat(system=system, user=user_message)
     plan = _cap_sections(_safe_json_loads(_strip_fencing(raw)), _MAX_SECTIONS_TOPIC)
+    plan = _self_correct(plan, _MAX_SECTIONS_TOPIC)
     return _extract_cues(plan)
 
 
@@ -297,4 +325,5 @@ def plan_lesson_from_pdf(pdf_path: str) -> dict:
     print(f"[planner] Calling LLM for PDF lesson plan (images: {len(images)})...")
     raw = chat(system=system, user=user_message, images=images if images else None)
     plan = _cap_sections(_safe_json_loads(_strip_fencing(raw)), _MAX_SECTIONS_PDF)
+    plan = _self_correct(plan, _MAX_SECTIONS_PDF)
     return _extract_cues(plan)
