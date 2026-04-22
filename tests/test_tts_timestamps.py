@@ -10,6 +10,8 @@ import tempfile
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
+import base64
+
 from manimgen.renderer.tts import (
     WordTimestamp,
     generate_narration,
@@ -72,6 +74,9 @@ def _make_fake_stream(word_events, audio_bytes=b"FAKEAUDIO"):
     return _fake_stream
 
 
+_EDGE_TTS_CFG = {"engine": "edge-tts", "voice": "en-US-AndrewMultilingualNeural", "speed": "+5%"}
+
+
 class TestGenerateNarration:
 
     def test_returns_audio_path_and_timestamps(self, tmp_path):
@@ -84,7 +89,8 @@ class TestGenerateNarration:
         fake_communicate = MagicMock()
         fake_communicate.stream = _make_fake_stream(word_events)
 
-        with patch("manimgen.renderer.tts.edge_tts.Communicate", return_value=fake_communicate):
+        with patch("manimgen.renderer.tts._TTS_CFG", _EDGE_TTS_CFG), \
+             patch("manimgen.renderer.tts.edge_tts.Communicate", return_value=fake_communicate):
             path, timestamps = generate_narration("Hello world", audio_path)
 
         assert path == audio_path
@@ -101,7 +107,8 @@ class TestGenerateNarration:
         fake_communicate = MagicMock()
         fake_communicate.stream = _make_fake_stream(word_events, audio_bytes=b"AUDIODATA")
 
-        with patch("manimgen.renderer.tts.edge_tts.Communicate", return_value=fake_communicate):
+        with patch("manimgen.renderer.tts._TTS_CFG", _EDGE_TTS_CFG), \
+             patch("manimgen.renderer.tts.edge_tts.Communicate", return_value=fake_communicate):
             generate_narration("test", audio_path)
 
         with open(audio_path, "rb") as f:
@@ -113,7 +120,8 @@ class TestGenerateNarration:
         fake_communicate = MagicMock()
         fake_communicate.stream = _make_fake_stream([])
 
-        with patch("manimgen.renderer.tts.edge_tts.Communicate", return_value=fake_communicate) as mock_cls:
+        with patch("manimgen.renderer.tts._TTS_CFG", _EDGE_TTS_CFG), \
+             patch("manimgen.renderer.tts.edge_tts.Communicate", return_value=fake_communicate) as mock_cls:
             generate_narration("test", audio_path)
             _, kwargs = mock_cls.call_args
             assert kwargs.get("boundary") == "WordBoundary"
@@ -124,7 +132,8 @@ class TestGenerateNarration:
         fake_communicate = MagicMock()
         fake_communicate.stream = _make_fake_stream([])
 
-        with patch("manimgen.renderer.tts.edge_tts.Communicate", return_value=fake_communicate):
+        with patch("manimgen.renderer.tts._TTS_CFG", _EDGE_TTS_CFG), \
+             patch("manimgen.renderer.tts.edge_tts.Communicate", return_value=fake_communicate):
             _, timestamps = generate_narration("", audio_path)
 
         assert timestamps == []
@@ -200,3 +209,104 @@ class TestCueTimes:
         times = cue_times(SAMPLE_TIMESTAMPS, [0, 3, 7, 9])
         for i in range(len(times) - 1):
             assert times[i] < times[i + 1]
+
+
+# ---------------------------------------------------------------------------
+# ElevenLabs engine — mock HTTP, assert WordTimestamp contract
+# ---------------------------------------------------------------------------
+
+def _make_elevenlabs_response(words: list[dict], audio_bytes: bytes = b"FAKEAUDIO") -> dict:
+    """Build a fake ElevenLabs /with-timestamps payload."""
+    chars, starts, ends = [], [], []
+    for w in words:
+        for i, ch in enumerate(w["word"]):
+            span = w["end"] - w["start"]
+            cs = w["start"] + i * span / len(w["word"])
+            ce = w["start"] + (i + 1) * span / len(w["word"])
+            chars.append(ch)
+            starts.append(round(cs, 4))
+            ends.append(round(ce, 4))
+        chars.append(" ")
+        starts.append(w["end"])
+        ends.append(w["end"])
+    return {
+        "audio_base64": base64.b64encode(audio_bytes).decode(),
+        "alignment": {
+            "characters": chars,
+            "character_start_times_seconds": starts,
+            "character_end_times_seconds": ends,
+        },
+    }
+
+
+class TestElevenLabsEngine:
+
+    def _patch_cfg(self, engine="elevenlabs", voice_id="pNInz6obpgDQGcFmaJgB"):
+        return patch(
+            "manimgen.renderer.tts._TTS_CFG",
+            {"engine": engine, "elevenlabs_voice_id": voice_id},
+        )
+
+    def test_returns_word_timestamps(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ELEVEN_LABS_KEY", "fake-key")
+        audio_path = str(tmp_path / "narration.mp3")
+        words = [
+            {"word": "Hello", "start": 0.1, "end": 0.4},
+            {"word": "world", "start": 0.5, "end": 0.9},
+        ]
+        fake_resp = MagicMock()
+        fake_resp.json.return_value = _make_elevenlabs_response(words)
+        fake_resp.raise_for_status = MagicMock()
+
+        with self._patch_cfg(), patch("manimgen.renderer.tts.requests.post", return_value=fake_resp):
+            path, timestamps = generate_narration("Hello world", audio_path)
+
+        assert path == audio_path
+        assert os.path.exists(audio_path)
+        assert len(timestamps) == 2
+        assert timestamps[0].word == "Hello"
+        assert timestamps[1].word == "world"
+        assert timestamps[0].start < timestamps[1].start
+
+    def test_audio_bytes_written(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ELEVEN_LABS_KEY", "fake-key")
+        audio_path = str(tmp_path / "narration.mp3")
+        fake_resp = MagicMock()
+        fake_resp.json.return_value = _make_elevenlabs_response(
+            [{"word": "test", "start": 0.1, "end": 0.3}],
+            audio_bytes=b"REALDATA",
+        )
+        fake_resp.raise_for_status = MagicMock()
+
+        with self._patch_cfg(), patch("manimgen.renderer.tts.requests.post", return_value=fake_resp):
+            generate_narration("test", audio_path)
+
+        with open(audio_path, "rb") as f:
+            assert f.read() == b"REALDATA"
+
+    def test_missing_api_key_raises(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("ELEVEN_LABS_KEY", raising=False)
+        monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+        audio_path = str(tmp_path / "narration.mp3")
+
+        with self._patch_cfg():
+            with pytest.raises(RuntimeError, match="ELEVEN_LABS_KEY"):
+                generate_narration("test", audio_path)
+
+    def test_timestamps_monotonically_increasing(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ELEVEN_LABS_KEY", "fake-key")
+        audio_path = str(tmp_path / "narration.mp3")
+        words = [
+            {"word": "Binary", "start": 0.1, "end": 0.5},
+            {"word": "search", "start": 0.6, "end": 1.0},
+            {"word": "algorithm", "start": 1.1, "end": 1.8},
+        ]
+        fake_resp = MagicMock()
+        fake_resp.json.return_value = _make_elevenlabs_response(words)
+        fake_resp.raise_for_status = MagicMock()
+
+        with self._patch_cfg(), patch("manimgen.renderer.tts.requests.post", return_value=fake_resp):
+            _, timestamps = generate_narration("Binary search algorithm", audio_path)
+
+        for i in range(len(timestamps) - 1):
+            assert timestamps[i].end <= timestamps[i + 1].start

@@ -9,3 +9,4 @@ pymupdf
 flask
 setuptools<70.0.0
 audioop-lts
+requests

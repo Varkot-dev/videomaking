@@ -27,7 +27,8 @@ rendering:
   max_retries: 3        # LLM retry calls per scene (increase for production)
 
 tts:
-  engine: edge-tts  # edge-tts | elevenlabs | openai
-  voice: en-US-AndrewMultilingualNeural
+  engine: elevenlabs  # edge-tts | elevenlabs
+  voice: en-US-AndrewMultilingualNeural  # edge-tts only
   enabled: true
-  speed: "+5%"
+  speed: "+5%"             # edge-tts only
+  elevenlabs_voice_id: pNInz6obpgDQGcFmaJgB  # Adam — warm/authoritative male
