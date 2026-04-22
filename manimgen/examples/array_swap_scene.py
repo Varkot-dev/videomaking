@@ -3,8 +3,14 @@ from manimlib import *
 
 class ArraySwapScene(Scene):
     """
-    techniques: array_swap
-    Demonstrates animating element swaps (bubble sort, selection sort, insertion sort).
+    techniques: array_swap, sweep_highlight
+    Demonstrates animating element swaps (bubble sort) with correct role colors.
+
+    Palette roles used:
+    - GREY_B fill / stroke: default box state (STRUCT)
+    - TEAL_A stroke: scanning / active comparison (PRIMARY)
+    - GOLD stroke: swapping elements (SECONDARY)
+    - GREEN fill: sorted / finalized elements (SUCCESS)
 
     CRITICAL PATTERN — VGroup does NOT support item assignment.
     Swapping indices directly on a VGroup crashes with TypeError at runtime.
@@ -13,20 +19,20 @@ class ArraySwapScene(Scene):
         box_list = list(boxes)                     # mutable Python list
         box_list[i], box_list[j] = box_list[j], box_list[i]  # swap the list
 
-    The VGroup is used ONLY for layout (initial arrangement).
+    The VGroup is used ONLY for initial layout arrangement.
     After any swap, use the Python list for position lookups — never index into VGroup.
-
-    To animate the swap: move the mobjects to each other's current positions.
-    No VGroup rebuild needed — the mobjects are already on screen.
     """
 
     def construct(self):
+        # Archetype D
         values = [64, 34, 25, 12, 22, 11, 90]
 
-        # Build boxes and labels as VGroup (for initial layout only)
+        title = Text("Bubble Sort", font_size=48, color=WHITE).to_edge(UP, buff=0.8)
+
+        # Build boxes as VGroup for layout only. Default state: GREY_B stroke, dark fill.
         boxes = VGroup(*[
             Square(side_length=0.85, fill_color="#2a2a2a", fill_opacity=1,
-                   stroke_width=2, color=GREY_B)
+                   stroke_width=2.5, color=GREY_B)
             for _ in values
         ]).arrange(RIGHT, buff=0.14).center()
 
@@ -35,86 +41,85 @@ class ArraySwapScene(Scene):
             for i, v in enumerate(values)
         ])
 
-        title = Text("Bubble Sort — Swap Animation", font_size=34, color=WHITE).to_edge(UP, buff=0.8)
-
         # CUE 0 — 3.0s: Reveal the array
         self.play(Write(title), run_time=0.6)
         self.play(LaggedStart(*[FadeIn(b) for b in boxes], lag_ratio=0.08), run_time=0.8)
         self.play(LaggedStart(*[FadeIn(l) for l in labels], lag_ratio=0.08), run_time=0.6)
         self.wait(1.0)  # 0.6 + 0.8 + 0.6 + 1.0 = 3.0 ✓
 
-        # CRITICAL: build parallel Python lists for index tracking after swaps
-        # box_list[i] = the Square currently at logical position i
-        # label_list[i] = the Text label currently at logical position i
+        # CRITICAL: parallel Python lists for index tracking after swaps
         box_list = list(boxes)
         label_list = list(labels)
+        current_values = list(values)  # track logical values for comparisons
 
-        swap_counter = [0]
-
-        counter_text = Text("Swaps: 0", font_size=26, color=TEAL_C).to_edge(DOWN, buff=0.6)
-        self.play(FadeIn(counter_text), run_time=0.4)
+        # scanning highlight rect — TEAL_A = PRIMARY (active comparison)
+        scan_rect = SurroundingRectangle(box_list[0], color=TEAL_A, buff=0.06, stroke_width=2.5)
+        self.play(ShowCreation(scan_rect), run_time=0.3)
 
         def animate_swap(i, j):
-            """Animate swapping positions i and j. Returns time consumed."""
-            box_i, box_j = box_list[i], box_list[j]
-            lbl_i, lbl_j = label_list[i], label_list[j]
+            """Animate swap of positions i and j. Returns total animation time consumed."""
+            # Show scanning in TEAL_A (PRIMARY — active comparison)
+            scan_rect.become(SurroundingRectangle(box_list[i], color=TEAL_A, buff=0.06, stroke_width=2.5))
+            self.play(ShowCreation(scan_rect), run_time=0.25)
+            scan_rect.become(SurroundingRectangle(box_list[j], color=TEAL_A, buff=0.06, stroke_width=2.5))
+            self.play(ShowCreation(scan_rect), run_time=0.25)
 
-            # Highlight the two elements being compared
+            # Highlight swapping pair in GOLD (SECONDARY — swap accent)
             self.play(
-                box_i.animate.set_color(YELLOW),
-                box_j.animate.set_color(YELLOW),
+                box_list[i].animate.set_stroke(color=GOLD, width=3),
+                box_list[j].animate.set_stroke(color=GOLD, width=3),
                 run_time=0.3,
             )
 
-            # Record current positions before moving
-            pos_i = box_i.get_center()
-            pos_j = box_j.get_center()
+            pos_i = box_list[i].get_center()
+            pos_j = box_list[j].get_center()
 
-            # Animate both boxes AND their labels to each other's positions
+            # Animate boxes AND labels to each other's positions
             self.play(
-                box_i.animate.move_to(pos_j),
-                box_j.animate.move_to(pos_i),
-                lbl_i.animate.move_to(pos_j),
-                lbl_j.animate.move_to(pos_i),
+                box_list[i].animate.move_to(pos_j),
+                box_list[j].animate.move_to(pos_i),
+                label_list[i].animate.move_to(pos_j),
+                label_list[j].animate.move_to(pos_i),
                 run_time=0.55,
             )
 
-            # Update the Python lists to reflect the new logical order
+            # Update Python lists to reflect new logical order
             box_list[i], box_list[j] = box_list[j], box_list[i]
             label_list[i], label_list[j] = label_list[j], label_list[i]
+            current_values[i], current_values[j] = current_values[j], current_values[i]
 
-            # Reset highlight
+            # Reset stroke to GREY_B (default STRUCT color)
             self.play(
-                box_list[i].animate.set_color(GREY_B),
-                box_list[j].animate.set_color(GREY_B),
-                run_time=0.25,
+                box_list[i].animate.set_stroke(color=GREY_B, width=2.5),
+                box_list[j].animate.set_stroke(color=GREY_B, width=2.5),
+                run_time=0.2,
             )
 
-            # Update swap counter via FadeTransform
-            swap_counter[0] += 1
-            new_counter = Text(f"Swaps: {swap_counter[0]}", font_size=26, color=TEAL_C).to_edge(DOWN, buff=0.6)
-            self.play(FadeTransform(counter_text, new_counter), run_time=0.3)
-            counter_text.become(new_counter)
+            return 0.25 + 0.25 + 0.3 + 0.55 + 0.2  # = 1.55s per swap
 
-            return 0.3 + 0.55 + 0.25 + 0.3  # = 1.4s per swap
+        # CUE 1 — 7.0s: Run one full pass of bubble sort
+        anim_time = 0.3  # scan_rect ShowCreation above
+        for i in range(len(values) - 1):
+            if current_values[i] > current_values[i + 1]:
+                anim_time += animate_swap(i, i + 1)
+            else:
+                # just scan — show TEAL_A highlight moving forward
+                scan_rect.become(SurroundingRectangle(box_list[i], color=TEAL_A, buff=0.06, stroke_width=2.5))
+                self.play(ShowCreation(scan_rect), run_time=0.2)
+                anim_time += 0.2
+        self.wait(max(0.01, 7.0 - anim_time))
 
-        # CUE 1 — 6.0s: Run one pass of bubble sort (first 3 comparisons)
-        # Values: [64, 34, 25, 12, 22, 11, 90]
-        # Compare positions 0,1 → swap 64,34  → [34, 64, 25, 12, 22, 11, 90]
-        # Compare positions 1,2 → swap 64,25  → [34, 25, 64, 12, 22, 11, 90]
-        # Compare positions 2,3 → swap 64,12  → [34, 25, 12, 64, 22, 11, 90]
-        anim_time = 0.4  # counter FadeIn above
-        for i in range(3):
-            anim_time += animate_swap(i, i + 1)
-        self.wait(max(0.01, 6.0 - anim_time))
-
-        # CUE 2 — 3.5s: Flash the largest value (90 is already at end, unmoved)
-        highlight = SurroundingRectangle(box_list[-1], color=GREEN, buff=0.08)
-        self.play(ShowCreation(highlight), run_time=0.4)
-        sorted_label = Text("In place", font_size=22, color=GREEN).next_to(highlight, DOWN, buff=0.2)
+        # CUE 2 — 3.0s: Mark the largest (90) as sorted with GREEN (SUCCESS)
+        # After one full pass, the largest element is at the last position
+        self.play(FadeOut(scan_rect), run_time=0.2)
+        self.play(
+            box_list[-1].animate.set_fill(GREEN, opacity=0.35).set_stroke(color=GREEN, width=2.5),
+            run_time=0.5,
+        )
+        sorted_label = Text("Sorted", font_size=22, color=GREEN).next_to(box_list[-1], DOWN, buff=0.25)
         self.play(FadeIn(sorted_label), run_time=0.4)
-        self.wait(3.5 - 0.4 - 0.4)  # 2.7s ✓
+        self.wait(3.0 - 0.2 - 0.5 - 0.4)  # 1.9s ✓
 
-        # CUE 3 — 2.0s: Final FadeOut
+        # CUE 3 — 1.5s: Final FadeOut
         self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)
-        self.wait(1.2)  # 0.8 + 1.2 = 2.0 ✓
+        self.wait(0.7)  # 0.8 + 0.7 = 1.5 ✓

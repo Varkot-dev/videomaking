@@ -73,11 +73,35 @@ _FIX_GUIDANCE: dict[SceneErrorType, str] = {
 }
 
 
-def _fix_guidance(error_type: SceneErrorType) -> str:
-    return _FIX_GUIDANCE.get(error_type, "Fix the error shown in the traceback.")
+def _fix_guidance(error_type: SceneErrorType, stderr: str = "") -> str:
+    base = _FIX_GUIDANCE.get(error_type, "Fix the error shown in the traceback.")
+    if error_type == SceneErrorType.TYPE and "unexpected keyword argument" in stderr:
+        kw_m = re.search(r"got an unexpected keyword argument '(\w+)'", stderr)
+        hint_m = re.search(r"Did you mean '(\w+)'\?", stderr)
+        method_m = re.search(r"(\w+)\(\) got an unexpected keyword argument", stderr)
+        method = method_m.group(1) if method_m else "the method"
+        if kw_m:
+            bad = kw_m.group(1)
+            hint = (
+                f" The correct kwarg name is '{hint_m.group(1)}'."
+                if hint_m else
+                f" Check the exact ManimGL signature for {method}()."
+            )
+            return (
+                f"Fix the TypeError: '{bad}' is not a valid keyword argument for {method}().{hint} "
+                f"Do NOT guess — look up the exact ManimGL signature for {method}() and fix ALL "
+                f"kwargs in that call to use the correct parameter names in one pass."
+            )
+    return base
 
 
 def _build_error_signature(error_type: str, stderr: str) -> str:
+    # For unexpected-kwarg TypeErrors, normalize to method name so that peeling
+    # rows= then cols= from the same call is recognized as one root cause.
+    if "unexpected keyword argument" in stderr:
+        method_m = re.search(r"(\w+)\(\) got an unexpected keyword argument", stderr)
+        if method_m:
+            return f"{error_type}:unexpected_kwarg:{method_m.group(1)}"
     normalized = re.sub(r"\s+", " ", stderr).strip()
     return f"{error_type}:{normalized[:RETRY_ERROR_SIGNATURE_CHARS]}"
 
@@ -141,6 +165,15 @@ def retry_scene(
     llm_fix_calls_used = 0
     seen_error_signatures: set[str] = set()
 
+    # Timing pass on the initial code — catches freeze-frame tails before the
+    # first render attempt at zero cost. (I6 · stable rhythm, I10 · narration contract)
+    if cue_durations:
+        code, initial_timing_warnings = _apply_timing_pass(code, scene_path, cue_durations)
+        if initial_timing_warnings:
+            print(f"[retry] {len(initial_timing_warnings)} timing issue(s) found in initial code:")
+            for w in initial_timing_warnings:
+                print(f"[retry]   {w}")
+
     for attempt in range(1, MAX_RETRIES + 1):
         result = _run_and_capture(scene_path, class_name)
         if result["success"]:
@@ -165,8 +198,8 @@ def retry_scene(
             for line in combined_issues:
                 print(f"[retry]   {line}")
 
-            if llm_fix_calls_used >= MAX_LLM_FIX_CALLS:
-                print("[retry] LLM retry budget exhausted — accepting video despite visual issues.")
+            if llm_fix_calls_used >= MAX_LLM_FIX_CALLS or attempt == MAX_RETRIES:
+                print("[retry] Accepting video despite visual issues (budget or attempt limit reached).")
                 return True, result["video_path"]
 
             print("[retry] Requesting visual fix from LLM...")
@@ -185,7 +218,7 @@ def retry_scene(
             continue
 
         error_type = _classify_error(result["stderr"])
-        guidance = _fix_guidance(error_type)
+        guidance = _fix_guidance(error_type, result["stderr"])
         error_signature = _build_error_signature(error_type, result["stderr"])
         _write_attempt_artifacts(logs_dir, class_name, attempt, code, result["stderr"])
 
@@ -291,16 +324,22 @@ def _run_and_capture(scene_path: str, class_name: str) -> dict:
         return {"success": False, "video_path": None, "stderr": "TimeoutExpired"}
 
 
+_retry_system_prompt_cache: str | None = None
+
+
 def _load_retry_system_prompt() -> str:
-    here = os.path.dirname(__file__)
-    root = os.path.dirname(here)
-    retry_system_path = os.path.join(here, "prompts", "retry_system.md")
-    director_system_path = os.path.join(root, "generator", "prompts", "director_system.md")
-    with open(retry_system_path) as f:
-        system = f.read()
-    with open(director_system_path) as f:
-        director = f.read()
-    return system.strip() + "\n\n" + director
+    global _retry_system_prompt_cache
+    if _retry_system_prompt_cache is None:
+        here = os.path.dirname(__file__)
+        root = os.path.dirname(here)
+        retry_system_path = os.path.join(here, "prompts", "retry_system.md")
+        director_system_path = os.path.join(root, "generator", "prompts", "director_system.md")
+        with open(retry_system_path) as f:
+            system = f.read()
+        with open(director_system_path) as f:
+            director = f.read()
+        _retry_system_prompt_cache = system.strip() + "\n\n" + director
+    return _retry_system_prompt_cache
 
 
 def _request_visual_fix(code: str, issues: str, system_prompt: str, frames: list[str]) -> str:

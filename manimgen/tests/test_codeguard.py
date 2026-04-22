@@ -580,7 +580,7 @@ class TestHorizontalChainOverflow:
 
     def test_three_right_chain_detected(self):
         """3+ objects chained with .next_to(prev, RIGHT) should warn."""
-        from manimgen.validator.codeguard import _check_layout_smells
+        from manimgen.validator.codeguard import _check_layout_smells, run_invariant_warnings
         code = (
             'step1 = Tex(r"a").next_to(rule, DOWN)\n'
             'step2 = Tex(r"b").next_to(step1, RIGHT, buff=0.2)\n'
@@ -594,7 +594,7 @@ class TestHorizontalChainOverflow:
 
     def test_two_right_not_flagged(self):
         """2 .next_to(RIGHT) is borderline but not flagged (chain length < 3)."""
-        from manimgen.validator.codeguard import _check_layout_smells
+        from manimgen.validator.codeguard import _check_layout_smells, run_invariant_warnings
         code = (
             'step1 = Tex(r"a").next_to(rule, DOWN)\n'
             'step2 = Tex(r"b").next_to(step1, RIGHT, buff=0.2)\n'
@@ -605,7 +605,7 @@ class TestHorizontalChainOverflow:
 
     def test_vertical_chain_not_flagged(self):
         """All .next_to(prev, DOWN) should not trigger horizontal warning."""
-        from manimgen.validator.codeguard import _check_layout_smells
+        from manimgen.validator.codeguard import _check_layout_smells, run_invariant_warnings
         code = (
             'step1 = Tex(r"a").next_to(rule, DOWN)\n'
             'step2 = Tex(r"b").next_to(step1, DOWN)\n'
@@ -617,7 +617,7 @@ class TestHorizontalChainOverflow:
 
     def test_next_to_parabola_right_detected(self):
         """Placing content RIGHT of parabola/axes should warn."""
-        from manimgen.validator.codeguard import _check_layout_smells
+        from manimgen.validator.codeguard import _check_layout_smells, run_invariant_warnings
         code = (
             'table = VGroup().next_to(parabola, RIGHT, buff=1.0)\n'
             'self.play(FadeOut(table))\n'
@@ -629,7 +629,7 @@ class TestHorizontalChainOverflow:
 
     def test_next_to_axes_right_detected(self):
         """Placing content RIGHT of axes should warn."""
-        from manimgen.validator.codeguard import _check_layout_smells
+        from manimgen.validator.codeguard import _check_layout_smells, run_invariant_warnings
         code = (
             'label = Text("info").next_to(axes, RIGHT, buff=0.5)\n'
             'self.play(FadeOut(label))\n'
@@ -639,7 +639,7 @@ class TestHorizontalChainOverflow:
 
     def test_next_to_axes_down_not_flagged(self):
         """Placing content below axes is fine."""
-        from manimgen.validator.codeguard import _check_layout_smells
+        from manimgen.validator.codeguard import _check_layout_smells, run_invariant_warnings
         code = (
             'label = Text("info").next_to(axes, DOWN, buff=0.5)\n'
             'self.play(FadeOut(label))\n'
@@ -649,7 +649,7 @@ class TestHorizontalChainOverflow:
 
     def test_section_05_triggers_warning(self):
         """The actual section_05.py from the failed render should trigger warnings."""
-        from manimgen.validator.codeguard import _check_layout_smells
+        from manimgen.validator.codeguard import _check_layout_smells, run_invariant_warnings
         # Simplified extract from the real section_05.py
         code = (
             'table_headers = VGroup().next_to(parabola, RIGHT, buff=1.0)\n'
@@ -657,3 +657,816 @@ class TestHorizontalChainOverflow:
         )
         warnings = _check_layout_smells(code)
         assert any("right screen edge" in w.lower() or "overflow" in w.lower() for w in warnings)
+
+
+# ── I3 — hex → palette constant auto-fix ────────────────────────────────────
+
+class TestHexToPaletteConstantFix:
+
+    def test_primary_hex_replaced(self):
+        code = 'curve = axes.get_graph(lambda x: x, color="#00D9FF")'
+        fixed, applied = apply_known_fixes(code)
+        assert '"#00D9FF"' not in fixed
+        assert "TEAL_A" in fixed
+        assert any("TEAL_A" in a for a in applied)
+
+    def test_secondary_hex_replaced(self):
+        code = 'dot = Dot(color="#FF6B35")'
+        fixed, applied = apply_known_fixes(code)
+        assert '"#FF6B35"' not in fixed
+        assert "GOLD" in fixed
+
+    def test_success_hex_replaced(self):
+        code = 'label = Text("OK", color="#3DD17B")'
+        fixed, applied = apply_known_fixes(code)
+        assert '"#3DD17B"' not in fixed
+        assert "GREEN" in fixed
+
+    def test_struct_hex_replaced(self):
+        code = 'axes = Axes(axis_config={"color": "#3A6F8A"})'
+        fixed, applied = apply_known_fixes(code)
+        assert '"#3A6F8A"' not in fixed
+        assert "GREY_B" in fixed
+
+    def test_dark_bg_hex_replaced(self):
+        code = 'rect = Rectangle(fill_color="#1C1C1C")'
+        fixed, applied = apply_known_fixes(code)
+        assert '"#1C1C1C"' not in fixed
+        assert "GREY_E" in fixed
+
+    def test_unknown_hex_left_alone(self):
+        code = 'dot = Dot(color="#ABCDEF")'
+        fixed, applied = apply_known_fixes(code)
+        assert '"#ABCDEF"' in fixed
+        assert not any("ABCDEF" in a for a in applied)
+
+    def test_multiple_hex_in_one_file(self):
+        code = (
+            'curve = axes.get_graph(lambda x: x, color="#00D9FF")\n'
+            'area = axes.get_area(curve, color="#FF6B35")\n'
+        )
+        fixed, applied = apply_known_fixes(code)
+        assert '"#00D9FF"' not in fixed
+        assert '"#FF6B35"' not in fixed
+        assert "TEAL_A" in fixed
+        assert "GOLD" in fixed
+
+
+# ── I4 — font_size off canonical type scale warning ──────────────────────────
+
+class TestFontSizeCanonicalScaleWarning:
+    """Invariant I4 — warns on off-scale font_size literals.
+
+    The auto-fix _fix_font_size_to_scale snaps off-scale values to the nearest
+    canonical size, so in practice these warnings rarely fire at runtime. The
+    invariant is tested directly to guarantee coverage if an off-scale literal
+    ever reaches run_invariant_warnings without being auto-fixed first.
+    """
+
+    def test_valid_font_sizes_no_warning(self):
+        from manimgen.validator.codeguard import run_invariant_warnings
+        code = (
+            'title = Text("Hello", font_size=48)\n'
+            'sub = Text("world", font_size=28)\n'
+            'caption = Text("note", font_size=18)\n'
+        )
+        warnings = run_invariant_warnings(code)
+        assert not any(w.startswith("I4:") for w in warnings)
+
+    def test_off_scale_font_size_warns(self):
+        from manimgen.validator.codeguard import run_invariant_warnings
+        code = 'label = Text("hi", font_size=32)'
+        warnings = run_invariant_warnings(code)
+        assert any("font_size=32" in w and "I4" in w for w in warnings)
+
+    def test_all_valid_sizes_no_warning(self):
+        from manimgen.validator.codeguard import run_invariant_warnings
+        for size in [48, 44, 36, 28, 22, 20, 18]:
+            code = f'label = Text("x", font_size={size})'
+            warnings = run_invariant_warnings(code)
+            assert not any(w.startswith("I4:") for w in warnings), \
+                f"font_size={size} should not warn"
+
+    def test_font_size_24_warns(self):
+        from manimgen.validator.codeguard import run_invariant_warnings
+        code = 'tick = Text("0", font_size=24)'
+        warnings = run_invariant_warnings(code)
+        assert any("font_size=24" in w for w in warnings)
+
+    def test_font_size_in_dict_not_checked(self):
+        # The checker uses the `font_size=` kwarg syntax — dict-style "font_size": N
+        # is not caught (acceptable limitation; Director uses kwarg form).
+        from manimgen.validator.codeguard import run_invariant_warnings
+        code = 'decimal_number_config={"font_size": 16}'
+        warnings = run_invariant_warnings(code)
+        assert not any("font_size=16" in w for w in warnings)
+
+
+# ── I5: FadeOut cleanup check ─────────────────────────────────────────────────
+
+class TestI5FadeOutCleanup:
+
+    def _smells(self, code):
+        from manimgen.validator.codeguard import run_invariant_warnings
+        return run_invariant_warnings(code)
+
+    def _i5_warnings(self, code):
+        return [w for w in self._smells(code) if "I5" in w]
+
+    def test_no_fadeout_at_all_warns(self):
+        code = (
+            "from manimlib import *\n"
+            "class Foo(Scene):\n"
+            "    def construct(self):\n"
+            "        t = Text('hello')\n"
+            "        self.play(FadeIn(t))\n"
+            "        self.wait(1)\n"
+        )
+        assert self._i5_warnings(code), "Expected I5 warning when no FadeOut present"
+
+    def test_full_fadeout_pattern_at_tail_no_warn(self):
+        code = (
+            "from manimlib import *\n"
+            "class Foo(Scene):\n"
+            "    def construct(self):\n"
+            "        t = Text('hello')\n"
+            "        self.play(FadeIn(t))\n"
+            "        self.wait(1)\n"
+            "        self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)\n"
+        )
+        assert not self._i5_warnings(code), "Expected no I5 warning with full FadeOut cleanup"
+
+    def test_fadeout_without_self_mobjects_warns(self):
+        # FadeOut present but not the full cleanup pattern in the tail
+        code = (
+            "from manimlib import *\n"
+            "class Foo(Scene):\n"
+            "    def construct(self):\n"
+            "        t = Text('hello')\n"
+            "        self.play(FadeIn(t))\n"
+            "        self.wait(1)\n"
+            "        self.play(FadeOut(t))\n"
+        )
+        assert self._i5_warnings(code), "Expected I5 warning when FadeOut lacks self.mobjects"
+
+    def test_full_fadeout_buried_deep_warns(self):
+        # Full cleanup pattern exists but is more than 15 lines from the end
+        body_lines = ["        self.wait(0.1)\n"] * 20
+        code = (
+            "from manimlib import *\n"
+            "class Foo(Scene):\n"
+            "    def construct(self):\n"
+            "        self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)\n"
+            + "".join(body_lines)
+        )
+        assert self._i5_warnings(code), (
+            "Expected I5 warning when full FadeOut is not in the last 15 lines"
+        )
+
+
+# ── I7: ThreeDScene fix_in_frame check ───────────────────────────────────────
+
+class TestI7ThreeDFixInFrame:
+
+    def _smells(self, code):
+        from manimgen.validator.codeguard import run_invariant_warnings
+        return run_invariant_warnings(code)
+
+    def _i7_warnings(self, code):
+        return [w for w in self._smells(code) if "I7" in w]
+
+    def test_threedscene_text_missing_fix_in_frame_warns(self):
+        code = (
+            "from manimlib import *\n"
+            "class Foo(ThreeDScene):\n"
+            "    def construct(self):\n"
+            "        label = Text('hello')\n"
+            "        self.play(FadeIn(label))\n"
+            "        self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)\n"
+        )
+        w = self._i7_warnings(code)
+        assert w, "Expected I7 warning for Text without fix_in_frame"
+        assert "label" in w[0]
+
+    def test_threedscene_text_with_fix_in_frame_no_warn(self):
+        code = (
+            "from manimlib import *\n"
+            "class Foo(ThreeDScene):\n"
+            "    def construct(self):\n"
+            "        label = Text('hello')\n"
+            "        label.fix_in_frame()\n"
+            "        self.play(FadeIn(label))\n"
+            "        self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)\n"
+        )
+        assert not self._i7_warnings(code), "Expected no I7 warning when fix_in_frame is present"
+
+    def test_regular_scene_text_no_warn(self):
+        # Only ThreeDScene triggers I7 — plain Scene should never warn
+        code = (
+            "from manimlib import *\n"
+            "class Foo(Scene):\n"
+            "    def construct(self):\n"
+            "        label = Text('hello')\n"
+            "        self.play(FadeIn(label))\n"
+            "        self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)\n"
+        )
+        assert not self._i7_warnings(code), "Expected no I7 warning for plain Scene"
+
+    def test_threedscene_tex_missing_fix_in_frame_warns(self):
+        code = (
+            "from manimlib import *\n"
+            "class Foo(ThreeDScene):\n"
+            "    def construct(self):\n"
+            "        eq = Tex(r'x^2')\n"
+            "        self.play(Write(eq))\n"
+            "        self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)\n"
+        )
+        w = self._i7_warnings(code)
+        assert w, "Expected I7 warning for Tex without fix_in_frame"
+        assert "eq" in w[0]
+
+    def test_inline_text_not_warned(self):
+        # Inline use like self.play(FadeIn(Text('x'))) — no variable assignment — no I7
+        code = (
+            "from manimlib import *\n"
+            "class Foo(ThreeDScene):\n"
+            "    def construct(self):\n"
+            "        self.play(FadeIn(Text('hello')))\n"
+            "        self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)\n"
+        )
+        assert not self._i7_warnings(code), (
+            "Expected no I7 warning for inline Text (no variable assignment)"
+        )
+
+
+# ── I9 — high mobject density heuristic ─────────────────────────────────────
+
+class TestI9DensityWarning:
+
+    @staticmethod
+    def _warnings(code: str):
+        from manimgen.validator.codeguard import run_invariant_warnings
+        return run_invariant_warnings(code)
+
+    def _make_code(self, n: int) -> str:
+        """Generate a scene with n distinct mobject creations plus a FadeOut."""
+        lines = []
+        mobject_types = [
+            "Text", "Tex", "Dot", "Circle", "Arrow",
+            "Line", "Rectangle", "VGroup", "Axes", "NumberLine",
+            "ParametricSurface",
+        ]
+        for i in range(n):
+            t = mobject_types[i % len(mobject_types)]
+            lines.append(f"    obj{i} = {t}()")
+        lines.append("    self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)")
+        return "\n".join(lines)
+
+    def test_11_objects_warns(self):
+        code = self._make_code(11)
+        warnings = self._warnings(code)
+        assert any("I9" in w for w in warnings), (
+            f"Expected I9 density warning for 11 objects, got: {warnings}"
+        )
+        assert any("11" in w for w in warnings)
+
+    def test_5_objects_no_warn(self):
+        code = self._make_code(5)
+        warnings = self._warnings(code)
+        assert not any("I9" in w for w in warnings), (
+            f"Expected no I9 warning for 5 objects, got: {warnings}"
+        )
+
+    def test_exactly_10_objects_no_warn(self):
+        """Boundary: exactly 10 creations should NOT warn (threshold is > 10)."""
+        code = self._make_code(10)
+        warnings = self._warnings(code)
+        assert not any("I9" in w for w in warnings), (
+            f"Expected no I9 warning at threshold boundary (10 objects), got: {warnings}"
+        )
+
+    def test_warning_mentions_vgroup_suggestion(self):
+        code = self._make_code(12)
+        warnings = self._warnings(code)
+        assert any("VGroup" in w for w in warnings)
+
+
+# ── I2 — zone grammar: .to_edge(UP) enforcement ──────────────────────────────
+
+class TestI2ZoneGrammar:
+
+    @staticmethod
+    def _warnings(code: str):
+        from manimgen.validator.codeguard import run_invariant_warnings
+        return run_invariant_warnings(code)
+
+    def test_single_to_edge_up_no_warn(self):
+        """One .to_edge(UP) is allowed — the section title."""
+        code = (
+            "title = Text('Section').to_edge(UP)\n"
+            "self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)\n"
+        )
+        warnings = self._warnings(code)
+        assert not any("I2" in w and "Multiple" in w for w in warnings), (
+            f"Single to_edge(UP) should not warn, got: {warnings}"
+        )
+
+    def test_double_to_edge_up_warns(self):
+        """Two .to_edge(UP) calls should trigger the I2 multiple-calls warning."""
+        code = (
+            "title = Text('Section').to_edge(UP)\n"
+            "subtitle = Text('Sub').to_edge(UP)\n"
+            "self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)\n"
+        )
+        warnings = self._warnings(code)
+        assert any("I2" in w and "Multiple" in w for w in warnings), (
+            f"Expected I2 multiple to_edge(UP) warning, got: {warnings}"
+        )
+
+    def test_axes_to_edge_up_warns(self):
+        """axes.to_edge(UP) pushes content into TITLE zone — should warn."""
+        code = (
+            "axes = Axes(x_range=[-3, 3], y_range=[-2, 2])\n"
+            "axes.to_edge(UP)\n"
+            "self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)\n"
+        )
+        warnings = self._warnings(code)
+        assert any("I2" in w and "axes" in w.lower() for w in warnings), (
+            f"Expected I2 content-in-title-zone warning for axes.to_edge(UP), got: {warnings}"
+        )
+
+    def test_curve_to_edge_up_warns(self):
+        """curve.to_edge(UP) pushes content into TITLE zone — should warn."""
+        code = (
+            "curve = axes.get_graph(lambda x: x**2)\n"
+            "curve.to_edge(UP)\n"
+            "self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)\n"
+        )
+        warnings = self._warnings(code)
+        assert any("I2" in w for w in warnings), (
+            f"Expected I2 warning for curve.to_edge(UP), got: {warnings}"
+        )
+
+    def test_to_edge_down_not_flagged(self):
+        """to_edge(DOWN) is fine and should not trigger I2."""
+        code = (
+            "footer = Text('note').to_edge(DOWN)\n"
+            "footer2 = Text('note2').to_edge(DOWN)\n"
+            "self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)\n"
+        )
+        warnings = self._warnings(code)
+        assert not any("I2" in w for w in warnings), (
+            f"to_edge(DOWN) should not trigger I2, got: {warnings}"
+        )
+
+
+# ── Fix 1: rename-aware kwarg fixer ──────────────────────────────────────────
+
+class TestRenameAwareKwargFixer:
+
+    def test_renames_kwarg_when_hint_present(self):
+        """Registry path: when a known method fires, ALL its wrong kwargs are fixed at once."""
+        code = "grid.arrange_in_grid(rows=20, cols=50, row_buff=0.01, col_buff=0.01)"
+        stderr = (
+            "TypeError: VGroup.arrange_in_grid() got an unexpected keyword argument 'rows'. "
+            "Did you mean 'n_rows'?"
+        )
+        fixed, applied = apply_error_aware_fixes(code, stderr)
+        assert "n_rows=20" in fixed, f"Expected n_rows=20 in: {fixed}"
+        # Registry fixes ALL kwargs in one pass — cols becomes n_cols too
+        assert "n_cols=50" in fixed, f"Expected n_cols=50 (registry), got: {fixed}"
+        import re as _re
+        assert not _re.search(r"(?<!n_)rows=", fixed), f"Old kwarg 'rows=' should be gone: {fixed}"
+        assert any("rows" in a for a in applied), f"Applied: {applied}"
+
+    def test_strips_kwarg_when_no_hint(self):
+        """Without 'Did you mean', fall back to stripping the bad kwarg."""
+        code = "FadeIn(obj, run_time=1, bogus_param=True)"
+        stderr = "TypeError: Animation.__init__() got an unexpected keyword argument 'bogus_param'"
+        fixed, applied = apply_error_aware_fixes(code, stderr)
+        assert "bogus_param" not in fixed
+        assert any("bogus_param" in a for a in applied)
+
+    def test_font_size_never_touched_even_with_hint(self):
+        """font_size= is always left alone, regardless of any hint in stderr."""
+        code = "Tex(r'x^2', font_size=48)"
+        stderr = (
+            "TypeError: Tex.__init__() got an unexpected keyword argument 'font_size'. "
+            "Did you mean 'scale'?"
+        )
+        fixed, applied = apply_error_aware_fixes(code, stderr)
+        assert "font_size=48" in fixed, f"font_size must not be renamed, got: {fixed}"
+        assert not any("font_size" in a for a in applied), f"Applied should not touch font_size: {applied}"
+
+
+# ── Fix 2: mobject explosion gate ────────────────────────────────────────────
+
+class TestMobjectExplosionGate:
+
+    def test_vgroup_range_1000_rejected(self):
+        """VGroup with range(1000) is infeasible — validate_scene_code must return an error."""
+        code = "boxes = VGroup(*[Square() for _ in range(1000)])"
+        errors = validate_scene_code(code)
+        assert any("1000" in e and "infeasible" in e for e in errors), (
+            f"Expected infeasible error mentioning 1000, got: {errors}"
+        )
+
+    def test_vgroup_range_1000_message_has_symbolic_guidance(self):
+        """Error message must include the N value (×) so the retry LLM gets actionable guidance."""
+        code = "boxes = VGroup(*[Square() for _ in range(1000)])"
+        errors = validate_scene_code(code)
+        assert any("1000" in e for e in errors), f"N value missing from error: {errors}"
+
+    def test_vgroup_range_50_allowed(self):
+        """N=50 is at the threshold — must not be rejected."""
+        code = "boxes = VGroup(*[Square() for _ in range(50)])"
+        errors = validate_scene_code(code)
+        explosion_errors = [e for e in errors if "infeasible" in e]
+        assert not explosion_errors, f"N=50 should be allowed, got: {explosion_errors}"
+
+    def test_vgroup_range_8_allowed(self):
+        """N=8 is a common legit case — must not be rejected."""
+        code = "boxes = VGroup(*[Square() for _ in range(8)])"
+        errors = validate_scene_code(code)
+        explosion_errors = [e for e in errors if "infeasible" in e]
+        assert not explosion_errors, f"N=8 should be allowed, got: {explosion_errors}"
+
+
+# ── Fix 4a: arrange_in_grid kwarg normalization ───────────────────────────────
+
+class TestFixArrangeInGridKwargs:
+    """4a — proactive one-pass normalization of all wrong arrange_in_grid kwargs."""
+
+    def test_rows_renamed_to_n_rows(self):
+        code = "grid.arrange_in_grid(rows=4, n_cols=3)"
+        fixed, applied = apply_known_fixes(code)
+        assert "n_rows=4" in fixed, f"Expected n_rows=4, got: {fixed}"
+        assert "rows=4" not in fixed or "n_rows=4" in fixed
+
+    def test_cols_renamed_to_n_cols(self):
+        code = "grid.arrange_in_grid(n_rows=4, cols=3)"
+        fixed, applied = apply_known_fixes(code)
+        assert "n_cols=3" in fixed, f"Expected n_cols=3, got: {fixed}"
+
+    def test_row_buff_renamed_to_buff(self):
+        code = "grid.arrange_in_grid(n_rows=4, n_cols=3, row_buff=0.2)"
+        fixed, applied = apply_known_fixes(code)
+        assert "row_buff" not in fixed, f"row_buff should be gone: {fixed}"
+        assert "buff=0.2" in fixed, f"Expected buff=0.2, got: {fixed}"
+
+    def test_col_buff_renamed_to_buff(self):
+        code = "grid.arrange_in_grid(n_rows=4, n_cols=3, col_buff=0.3)"
+        fixed, applied = apply_known_fixes(code)
+        assert "col_buff" not in fixed, f"col_buff should be gone: {fixed}"
+        assert "buff=0.3" in fixed, f"Expected buff=0.3, got: {fixed}"
+
+    def test_all_four_wrong_kwargs_fixed_in_one_pass(self):
+        """The core regression test — all four wrong kwargs fixed before first render."""
+        code = "grid.arrange_in_grid(rows=20, cols=50, row_buff=0.01, col_buff=0.01)"
+        fixed, applied = apply_known_fixes(code)
+        assert "n_rows=20" in fixed, f"Expected n_rows=20 in: {fixed}"
+        assert "n_cols=50" in fixed, f"Expected n_cols=50 in: {fixed}"
+        assert "row_buff" not in fixed, f"row_buff should be gone: {fixed}"
+        assert "col_buff" not in fixed, f"col_buff should be gone: {fixed}"
+        assert any("arrange_in_grid" in a for a in applied), f"Applied: {applied}"
+
+    def test_correct_kwargs_not_touched(self):
+        """n_rows= and n_cols= already correct — must not be double-renamed."""
+        code = "grid.arrange_in_grid(n_rows=4, n_cols=3, buff=0.2)"
+        fixed, applied = apply_known_fixes(code)
+        assert "n_rows=4" in fixed
+        assert "n_cols=3" in fixed
+        assert "buff=0.2" in fixed
+
+    def test_non_arrange_in_grid_rows_not_touched(self):
+        """rows= on a different method must not be renamed."""
+        code = "some_other_func(rows=4)"
+        fixed, applied = apply_known_fixes(code)
+        assert "rows=4" in fixed, f"rows= on non-arrange_in_grid must be left alone: {fixed}"
+
+
+# ── Fix 4b: kwarg normalization registry ─────────────────────────────────────
+
+class TestKwargNormalizationRegistry:
+    """4b — apply_error_aware_fixes uses registry to fix ALL known kwargs for a method."""
+
+    def test_registry_fixes_all_arrange_in_grid_kwargs_on_rows_error(self):
+        """When rows= error fires, ALL wrong arrange_in_grid kwargs fixed in one call."""
+        code = "grid.arrange_in_grid(rows=20, cols=50, row_buff=0.01, col_buff=0.01)"
+        stderr = (
+            "TypeError: VGroup.arrange_in_grid() got an unexpected keyword argument 'rows'. "
+            "Did you mean 'n_rows'?"
+        )
+        fixed, applied = apply_error_aware_fixes(code, stderr)
+        assert "n_rows=20" in fixed, f"n_rows missing: {fixed}"
+        assert "n_cols=50" in fixed, f"n_cols missing: {fixed}"
+        assert "row_buff" not in fixed, f"row_buff should be gone: {fixed}"
+        assert "col_buff" not in fixed, f"col_buff should be gone: {fixed}"
+
+    def test_registry_fixes_all_reorient_kwargs_on_theta_deg_error(self):
+        """When theta_deg= error fires, both reorient kwargs fixed."""
+        code = "self.frame.reorient(theta_deg=-45, phi_deg=60)"
+        stderr = (
+            "TypeError: CameraFrame.reorient() got an unexpected keyword argument 'theta_deg'. "
+            "Did you mean 'theta_degrees'?"
+        )
+        fixed, applied = apply_error_aware_fixes(code, stderr)
+        assert "theta_degrees=-45" in fixed, f"theta_degrees missing: {fixed}"
+        assert "phi_degrees=60" in fixed, f"phi_degrees missing: {fixed}"
+        assert "theta_deg=" not in fixed
+        assert "phi_deg=" not in fixed
+
+    def test_unknown_method_falls_back_to_single_rename(self):
+        """Method not in registry → existing single-rename behavior preserved."""
+        code = "FadeIn(obj, run_time=1, bogus_param=True)"
+        stderr = "TypeError: Animation.__init__() got an unexpected keyword argument 'bogus_param'"
+        fixed, applied = apply_error_aware_fixes(code, stderr)
+        assert "bogus_param" not in fixed
+        assert any("bogus_param" in a for a in applied)
+
+
+# ── Fix 4c: root-cause error signature ───────────────────────────────────────
+
+class TestRootCauseErrorSignature:
+    """4c — error signature captures method+error_class, not raw kwarg name."""
+
+    def _sig(self, error_type, stderr):
+        from manimgen.validator.retry import _build_error_signature
+        return _build_error_signature(error_type, stderr)
+
+    def test_arrange_in_grid_rows_and_cols_produce_same_signature(self):
+        """rows= and cols= on arrange_in_grid have the same root cause."""
+        sig1 = self._sig("type",
+            "TypeError: VGroup.arrange_in_grid() got an unexpected keyword argument 'rows'.")
+        sig2 = self._sig("type",
+            "TypeError: VGroup.arrange_in_grid() got an unexpected keyword argument 'cols'.")
+        assert sig1 == sig2, (
+            f"rows= and cols= should share signature (same root cause).\n"
+            f"sig1={sig1}\nsig2={sig2}"
+        )
+
+    def test_different_methods_produce_different_signatures(self):
+        """arrange_in_grid and reorient are different root causes."""
+        sig1 = self._sig("type",
+            "TypeError: VGroup.arrange_in_grid() got an unexpected keyword argument 'rows'.")
+        sig2 = self._sig("type",
+            "TypeError: CameraFrame.reorient() got an unexpected keyword argument 'theta_deg'.")
+        assert sig1 != sig2, "Different methods must have different signatures"
+
+    def test_non_kwarg_typeerror_falls_back_to_truncated_stderr(self):
+        """TypeErrors not about unexpected kwargs fall back to the original behavior."""
+        sig = self._sig("type", "TypeError: unsupported operand type(s) for +: 'int' and 'str'")
+        assert sig.startswith("type:"), f"Expected type: prefix, got: {sig}"
+        assert "unexpected_kwarg" not in sig
+
+
+# ── Fix 4d: targeted TYPE error guidance ─────────────────────────────────────
+
+class TestTargetedTypeErrorGuidance:
+    """4d — _fix_guidance extracts bad kwarg + hint from stderr for TYPE errors."""
+
+    def _guidance(self, error_type, stderr=""):
+        from manimgen.validator.retry import _fix_guidance, SceneErrorType
+        return _fix_guidance(error_type, stderr)
+
+    def test_type_error_with_kwarg_and_hint_mentions_both(self):
+        stderr = (
+            "TypeError: VGroup.arrange_in_grid() got an unexpected keyword argument 'rows'. "
+            "Did you mean 'n_rows'?"
+        )
+        guidance = self._guidance("type", stderr)
+        assert "rows" in guidance, f"Bad kwarg missing from guidance: {guidance}"
+        assert "n_rows" in guidance, f"Hint kwarg missing from guidance: {guidance}"
+        assert "arrange_in_grid" in guidance, f"Method name missing: {guidance}"
+
+    def test_type_error_with_kwarg_no_hint_still_names_kwarg(self):
+        stderr = (
+            "TypeError: VGroup.arrange_in_grid() got an unexpected keyword argument 'row_buff'"
+        )
+        guidance = self._guidance("type", stderr)
+        assert "row_buff" in guidance, f"Bad kwarg missing from guidance: {guidance}"
+
+    def test_type_error_no_kwarg_returns_generic(self):
+        """Non-kwarg TypeError keeps the generic guidance string."""
+        stderr = "TypeError: unsupported operand type(s) for +: 'int' and 'str'"
+        guidance = self._guidance("type", stderr)
+        assert "type error" in guidance.lower() or "argument" in guidance.lower()
+
+    def test_non_type_error_unaffected(self):
+        """SYNTAX guidance is unchanged regardless of stderr."""
+        g1 = self._guidance("syntax", "")
+        g2 = self._guidance("syntax", "TypeError: something")
+        assert g1 == g2, "Non-TYPE errors must not be affected by stderr"
+
+    def test_guidance_instructs_fix_all_kwargs(self):
+        """Guidance must tell LLM to fix ALL kwargs, not just the named one."""
+        stderr = (
+            "TypeError: VGroup.arrange_in_grid() got an unexpected keyword argument 'rows'. "
+            "Did you mean 'n_rows'?"
+        )
+        guidance = self._guidance("type", stderr)
+        assert "all" in guidance.lower() or "ALL" in guidance, (
+            f"Guidance must instruct fixing ALL kwargs: {guidance}"
+        )
+
+
+# ── Fix 5c: retry system prompt caching ──────────────────────────────────────
+
+class TestRetrySystemPromptCache:
+    """5c — _load_retry_system_prompt() reads files only once across multiple calls."""
+
+    def test_returns_nonempty_string(self):
+        from manimgen.validator.retry import _load_retry_system_prompt
+        result = _load_retry_system_prompt()
+        assert isinstance(result, str) and len(result) > 100
+
+    def test_second_call_returns_identical_result(self):
+        from manimgen.validator.retry import _load_retry_system_prompt
+        result1 = _load_retry_system_prompt()
+        result2 = _load_retry_system_prompt()
+        assert result1 == result2
+
+    def test_cached_after_first_call(self, monkeypatch):
+        """After first call, open() must NOT be called again."""
+        from manimgen.validator import retry as retry_mod
+        # Prime the cache with a real call first
+        retry_mod._load_retry_system_prompt()
+
+        open_calls = []
+        real_open = open
+
+        def tracking_open(path, *args, **kwargs):
+            open_calls.append(path)
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.open", tracking_open)
+        retry_mod._load_retry_system_prompt()
+        prompt_file_opens = [p for p in open_calls if "retry_system" in str(p) or "director_system" in str(p)]
+        assert not prompt_file_opens, (
+            f"Prompt files opened on second call — cache not working: {prompt_file_opens}"
+        )
+
+
+# ── Invariant registry — architectural contract ──────────────────────────────
+
+class TestInvariantRegistry:
+    """The registry is the canonical list of design-system rules.
+
+    These tests pin the contract: run_all returns (errors, warnings), ERROR
+    severity blocks the render, WARNING severity surfaces guidance. Adding a
+    new invariant is one row in the registry — these tests validate the row
+    plumbing, not every check's content.
+    """
+
+    def test_run_all_returns_errors_and_warnings(self):
+        from manimgen.validator.invariants import run_all
+        code = "boxes = VGroup(*[Square() for _ in range(1000)])\n" \
+               'label = Text("hi", font_size=26)\n'
+        errors, warnings = run_all(code)
+        assert errors, "Expected mobject explosion error"
+        assert any("1000" in e for e in errors)
+        # Off-scale font_size surfaces as a warning (auto-fix handles it too)
+        assert any("I4" in w for w in warnings)
+
+    def test_clean_code_has_no_errors(self):
+        from manimgen.validator.invariants import run_all
+        code = (
+            "from manimlib import *\n"
+            "class Foo(Scene):\n"
+            "    def construct(self):\n"
+            "        title = Text('Hi', font_size=48).to_edge(UP, buff=0.8)\n"
+            "        self.play(Write(title))\n"
+            "        self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)\n"
+        )
+        errors, _ = run_all(code)
+        assert errors == [], f"Clean code produced errors: {errors}"
+
+    def test_validate_scene_code_flows_errors_from_registry(self):
+        code = "boxes = VGroup(*[Square() for _ in range(500)])"
+        errors = validate_scene_code(code)
+        assert any("500" in e and "infeasible" in e for e in errors)
+
+    def test_severity_enum_is_a_closed_set(self):
+        from manimgen.validator.invariants import Severity, INVARIANTS
+        for inv in INVARIANTS:
+            assert isinstance(inv.severity, Severity), (
+                f"Invariant {inv.id} has non-Severity severity {inv.severity}"
+            )
+
+
+class TestInvariantI3RoleConstants:
+    """I3 role-constant warnings — flags raw RED/GREEN/YELLOW in color kwargs."""
+
+    @staticmethod
+    def _warnings(code: str):
+        from manimgen.validator.codeguard import run_invariant_warnings
+        return run_invariant_warnings(code)
+
+    def test_color_red_warns(self):
+        code = "Square(color=RED)"
+        warnings = self._warnings(code)
+        assert any("RED" in w and "ALERT" in w for w in warnings)
+
+    def test_set_fill_green_warns(self):
+        code = "box.set_fill(GREEN, opacity=0.5)"
+        warnings = self._warnings(code)
+        assert any("GREEN" in w and "SUCCESS" in w for w in warnings)
+
+    def test_stroke_yellow_warns(self):
+        code = "box.set_stroke(YELLOW, width=3)"
+        warnings = self._warnings(code)
+        assert any("YELLOW" in w and "WARNING" in w for w in warnings)
+
+    def test_teal_not_warned(self):
+        code = "Square(color=TEAL_A)"
+        warnings = self._warnings(code)
+        assert not any(w.startswith("I3: raw TEAL") for w in warnings)
+
+    def test_word_boundary_avoids_false_positives(self):
+        code = "reduced = 3\ngreenhouse = True"
+        warnings = self._warnings(code)
+        assert not any("RED" in w and "ALERT" in w for w in warnings)
+        assert not any("GREEN" in w and "SUCCESS" in w for w in warnings)
+
+
+class TestInvariantI3RawHex:
+    """I3 raw hex — sanctions the two design-system hexes, warns on everything else."""
+
+    @staticmethod
+    def _warnings(code: str):
+        from manimgen.validator.codeguard import run_invariant_warnings
+        return run_invariant_warnings(code)
+
+    def test_unsanctioned_hex_warns(self):
+        code = 'Square(fill_color="#FF00FF")'
+        warnings = self._warnings(code)
+        assert any("#FF00FF" in w for w in warnings)
+
+    def test_sanctioned_struct_hex_not_flagged(self):
+        # "#2a2a2a" is the design-system STRUCT fill — not an I3 violation.
+        code = 'Square(fill_color="#2a2a2a")'
+        warnings = self._warnings(code)
+        assert not any("#2a2a2a" in w for w in warnings)
+
+    def test_sanctioned_background_hex_not_flagged(self):
+        code = 'self.camera.background_color = "#1C1C1C"'
+        warnings = self._warnings(code)
+        assert not any("#1C1C1C" in w for w in warnings)
+
+
+class TestInvariantI2CornerTitle:
+    """I2 — titles must never be placed with .to_corner()."""
+
+    @staticmethod
+    def _warnings(code: str):
+        from manimgen.validator.codeguard import run_invariant_warnings
+        return run_invariant_warnings(code)
+
+    def test_title_to_corner_ul_warns(self):
+        code = "title_left = Text('A').to_corner(UL, buff=0.3)"
+        warnings = self._warnings(code)
+        assert any("title" in w.lower() and "to_corner" in w for w in warnings)
+
+    def test_title_to_corner_ur_warns(self):
+        code = "section_title = Text('B').to_corner(UR)"
+        warnings = self._warnings(code)
+        assert any("title" in w.lower() and "to_corner" in w for w in warnings)
+
+    def test_non_title_to_corner_not_flagged(self):
+        code = "counter = Text('3').to_corner(DR)"
+        warnings = self._warnings(code)
+        assert not any("title" in w.lower() and "to_corner" in w for w in warnings)
+
+
+# ── Font-size auto-fix (token-free snap to canonical scale) ──────────────────
+
+class TestFontSizeAutoFix:
+    """apply_known_fixes snaps off-scale font_size literals to the nearest canonical value."""
+
+    def test_snaps_26_to_28(self):
+        code = 'Text("x", font_size=26)'
+        fixed, applied = apply_known_fixes(code)
+        assert "font_size=28" in fixed
+        assert any("font_size=26 -> 28" in a for a in applied)
+
+    def test_snaps_32_to_36(self):
+        code = 'Text("x", font_size=32)'
+        fixed, applied = apply_known_fixes(code)
+        assert "font_size=36" in fixed
+
+    def test_snaps_56_to_48(self):
+        code = 'Text("x", font_size=56)'
+        fixed, applied = apply_known_fixes(code)
+        assert "font_size=48" in fixed
+
+    def test_canonical_value_not_touched(self):
+        code = 'Text("x", font_size=28)'
+        fixed, applied = apply_known_fixes(code)
+        assert "font_size=28" in fixed
+        assert not any("font_size=28" in a and "->" in a for a in applied)
+
+    def test_all_canonical_values_pass_through(self):
+        for size in [48, 44, 36, 28, 22, 20, 18]:
+            code = f'Text("x", font_size={size})'
+            fixed, _ = apply_known_fixes(code)
+            assert f"font_size={size}" in fixed, f"Canonical {size} was modified"

@@ -2,6 +2,36 @@ import ast
 import re
 from typing import Any
 
+from manimgen.validator.invariants import run_all as _run_invariants
+
+
+_CANONICAL_FONT_SIZES = (48, 44, 36, 28, 22, 20, 18)
+
+
+def _snap_to_canonical_font_size(value: int) -> int:
+    """Return the nearest canonical design-system font size."""
+    return min(_CANONICAL_FONT_SIZES, key=lambda cs: abs(cs - value))
+
+
+def _fix_font_size_to_scale(code: str) -> tuple[str, list[str]]:
+    """Snap off-scale font_size literals to the nearest canonical value.
+
+    Token-free enforcement of I4 (type scale). Cheaper than a retry, safer
+    than trusting the Director to memorize the scale.
+    """
+    applied: list[str] = []
+
+    def _replace(match: re.Match) -> str:
+        value = int(match.group(1))
+        if value in _CANONICAL_FONT_SIZES:
+            return match.group(0)
+        snapped = _snap_to_canonical_font_size(value)
+        applied.append(f"font_size={value} -> {snapped}")
+        return f"font_size={snapped}"
+
+    new = re.sub(r"\bfont_size\s*=\s*(\d+)", _replace, code)
+    return new, applied
+
 
 _BANNED_PATTERNS: list[tuple[str, str]] = [
     (r"\bfrom\s+manim\s+import\s+\*", "Use `from manimlib import *`, not `from manim import *`."),
@@ -85,6 +115,57 @@ _BANNED_KWARGS = [
     "scale_factor", "target_position",
 ]
 
+# Registry of known-wrong kwarg names per method.
+# Maps method_name → {wrong_kwarg: correct_kwarg or None (strip)}.
+# Used by both apply_known_fixes (proactive) and apply_error_aware_fixes (reactive).
+_KWARG_NORMALIZATION_REGISTRY: dict[str, dict[str, str | None]] = {
+    "arrange_in_grid": {
+        "rows":     "n_rows",
+        "cols":     "n_cols",
+        "row_buff": "buff",
+        "col_buff": "buff",
+    },
+    "reorient": {
+        "theta_deg": "theta_degrees",
+        "phi_deg":   "phi_degrees",
+    },
+    "NumberLine": {
+        "label": None,
+    },
+}
+
+
+def _fix_arrange_in_grid_kwargs(code: str) -> tuple[str, str | None]:
+    """Normalize all wrong kwarg names on .arrange_in_grid() calls in one pass.
+
+    Correct signature: arrange_in_grid(n_rows=None, n_cols=None, buff=MED_SMALL_BUFF)
+    LLM commonly emits rows=, cols=, row_buff=, col_buff= simultaneously.
+    """
+    norm = _KWARG_NORMALIZATION_REGISTRY["arrange_in_grid"]
+    applied = []
+    fixed = code
+    for wrong, right in norm.items():
+        if right is None:
+            new, count = re.subn(
+                rf"(\.arrange_in_grid\([^)]*?),?\s*{re.escape(wrong)}\s*=\s*[^,\)\n]+",
+                r"\1",
+                fixed,
+                flags=re.DOTALL,
+            )
+        else:
+            new, count = re.subn(
+                rf"(\.arrange_in_grid\([^)]*?)\b{re.escape(wrong)}\s*=",
+                rf"\1{right}=",
+                fixed,
+                flags=re.DOTALL,
+            )
+        if count:
+            applied.append(f"{wrong}= → {right or 'stripped'} ({count})")
+            fixed = new
+    if applied:
+        return fixed, "fixed arrange_in_grid kwargs: " + ", ".join(applied)
+    return code, None
+
 
 def apply_known_fixes(code: str) -> tuple[str, list[str]]:
     fixed = code
@@ -113,6 +194,27 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
 
     for pattern, repl, label in replacements:
         new_fixed, count = re.subn(pattern, repl, fixed)
+        if count:
+            applied.append(f"{label} ({count})")
+            fixed = new_fixed
+
+    # Palette role hex → MaminGL constant (I3). Maps the canonical hex values from
+    # COLOR_PALETTE.md (CANONICAL aesthetic) to their ManimGL constant equivalents.
+    _HEX_TO_CONSTANT: list[tuple[str, str, str]] = [
+        (r'"#00D9FF"', "TEAL_A",   "PRIMARY hex -> TEAL_A"),
+        (r'"#FF6B35"', "GOLD",     "SECONDARY hex -> GOLD"),
+        (r'"#3DD17B"', "GREEN",    "SUCCESS hex -> GREEN"),
+        (r'"#FFC857"', "YELLOW",   "WARNING hex -> YELLOW"),
+        (r'"#E5484D"', "RED",      "ALERT hex -> RED"),
+        (r'"#E8E8E8"', "WHITE",    "INK hex -> WHITE"),
+        (r'"#9A9A9A"', "GREY_A",   "MUTED hex -> GREY_A"),
+        (r'"#4A4A4A"', "GREY_D",   "SUBTLE hex -> GREY_D"),
+        (r'"#3A6F8A"', "GREY_B",   "STRUCT hex -> GREY_B"),
+        (r'"#58C4DD"', "TEAL_B",   "legacy TEAL hex -> TEAL_B"),
+        (r'"#1C1C1C"', "GREY_E",   "dark bg hex -> GREY_E"),
+    ]
+    for hex_pat, const, label in _HEX_TO_CONSTANT:
+        new_fixed, count = re.subn(hex_pat, const, fixed)
         if count:
             applied.append(f"{label} ({count})")
             fixed = new_fixed
@@ -219,6 +321,10 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
     if numberline_applied:
         applied.append(numberline_applied)
 
+    fixed, grid_applied = _fix_arrange_in_grid_kwargs(fixed)
+    if grid_applied:
+        applied.append(grid_applied)
+
     fixed, yaxis_applied = _fix_y_axis_include_numbers(fixed)
     if yaxis_applied:
         applied.append(yaxis_applied)
@@ -231,6 +337,10 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
     if count:
         applied.append(f"clamped negative/zero self.wait() to 0.01 ({count})")
         fixed = new_fixed
+
+    fixed, font_fixes = _fix_font_size_to_scale(fixed)
+    for fix in font_fixes:
+        applied.append(fix)
 
     return fixed, applied
 
@@ -560,10 +670,39 @@ def _strip_label_kwarg_from_numberline(code: str) -> tuple[str, str | None]:
     return code, None
 
 
+def _fix_broken_call_args(code: str) -> tuple[str, list[str]]:
+    """Fix LLM-generated calls with leading/trailing commas in argument lists.
+
+    Patterns like get_axis_labels(, y_label=...) and reorient(, theta=...)
+    are SyntaxErrors. Strip the stray leading comma.
+    """
+    applied: list[str] = []
+    # Leading comma after open paren: func(, arg) → func(arg)
+    new, count = re.subn(r"\(\s*,\s*", "(", code)
+    if count:
+        applied.append(f"removed leading comma in call args ({count})")
+        code = new
+    # Trailing comma before close paren when nothing follows: func(arg,) → func(arg)
+    new, count = re.subn(r",\s*\)", ")", code)
+    if count:
+        applied.append(f"removed trailing comma in call args ({count})")
+        code = new
+    # reorient(, theta=X * DEGREES) → reorient() — can't salvage partial 3D args
+    new, count = re.subn(r"\.reorient\(\s*,\s*theta\s*=\s*[^)]+\)", ".reorient(-45, 70)", code)
+    if count:
+        applied.append(f"fixed broken reorient call ({count})")
+        code = new
+    return code, applied
+
+
 def apply_error_aware_fixes(code: str, stderr: str) -> tuple[str, list[str]]:
     """Deterministic, token-free repairs driven by actual runtime traceback."""
     fixed = code
     applied: list[str] = []
+
+    # Always run structural syntax fixers regardless of error type
+    fixed, structural_fixes = _fix_broken_call_args(fixed)
+    applied.extend(structural_fixes)
 
     if "No such file or directory: 'latex'" in stderr or "latex: not found" in stderr:
         new_fixed, count = re.subn(r"\bTex\(\s*str\(([^)]+)\)\s*(,[^)]*)?\)", r"Text(str(\1)\2)", fixed)
@@ -578,11 +717,42 @@ def apply_error_aware_fixes(code: str, stderr: str) -> tuple[str, list[str]]:
 
     if "unexpected keyword argument" in stderr:
         kw_match = re.search(r"got an unexpected keyword argument '(\w+)'", stderr)
+        hint_match = re.search(r"Did you mean '(\w+)'\?", stderr)
+        method_match = re.search(r"(\w+)\(\) got an unexpected keyword argument", stderr)
         if kw_match:
             bad_kw = kw_match.group(1)
+            method = method_match.group(1) if method_match else None
             # font_size= is a valid kwarg on Tex() (handled internally) — do not strip or convert.
-            # Only strip genuinely unexpected kwargs.
-            if bad_kw != "font_size":
+            if bad_kw == "font_size":
+                pass
+            elif method and method in _KWARG_NORMALIZATION_REGISTRY:
+                # Fix ALL known wrong kwargs for this method in one pass — not just the one
+                # named in the error. This prevents the one-kwarg-at-a-time peeling pattern.
+                norm = _KWARG_NORMALIZATION_REGISTRY[method]
+                for wrong, right in norm.items():
+                    if right is None:
+                        new_fixed, count = re.subn(
+                            rf",?\s*{re.escape(wrong)}\s*=\s*[^,\)\n]+", "", fixed
+                        )
+                    else:
+                        new_fixed, count = re.subn(
+                            rf"\b{re.escape(wrong)}\s*=", f"{right}=", fixed
+                        )
+                    if count:
+                        applied.append(f"registry fix: {wrong}= → {right or 'stripped'} ({count})")
+                        fixed = new_fixed
+            elif hint_match:
+                # Rename, don't strip — the traceback tells us what the right name is.
+                good_kw = hint_match.group(1)
+                new_fixed, count = re.subn(
+                    rf"\b{re.escape(bad_kw)}\s*=",
+                    f"{good_kw}=",
+                    fixed,
+                )
+                if count:
+                    applied.append(f"renamed kwarg '{bad_kw}' → '{good_kw}' ({count})")
+                    fixed = new_fixed
+            else:
                 new_fixed, count = re.subn(rf",?\s*{bad_kw}\s*=\s*[^,\)\n]+", "", fixed)
                 if count:
                     applied.append(f"removed unexpected kwarg '{bad_kw}' ({count})")
@@ -646,6 +816,11 @@ def apply_error_aware_fixes(code: str, stderr: str) -> tuple[str, list[str]]:
 
 
 def validate_scene_code(code: str) -> list[str]:
+    """Return errors that must block the render.
+
+    Syntax + banned patterns + TMT-on-Text + design-system ERROR invariants
+    (via the invariants registry). Warnings go through run_invariant_warnings.
+    """
     errors: list[str] = []
 
     try:
@@ -659,7 +834,20 @@ def validate_scene_code(code: str) -> list[str]:
 
     errors.extend(_detect_tmt_on_text(code))
 
+    inv_errors, _ = _run_invariants(code)
+    errors.extend(inv_errors)
+
     return errors
+
+
+def run_invariant_warnings(code: str) -> list[str]:
+    """Return the design-system WARNING invariants for a code string.
+
+    Surfaced to the retry LLM via precheck_and_autofix_file's layout_warnings
+    channel. Does not block the render.
+    """
+    _, warnings = _run_invariants(code)
+    return warnings
 
 
 def _check_next_to_stacking(lines: list[str], warnings: list[str]) -> None:
@@ -822,7 +1010,14 @@ def _check_horizontal_chain_overflow(lines: list[str], warnings: list[str]) -> N
 
 
 def _check_layout_smells(code: str) -> list[str]:
-    """Heuristic warnings for overlap-prone layout patterns."""
+    """Codeguard-local layout heuristics that are not design-system invariants.
+
+    Design-system invariants (I2/I3/I4/I5/I7/I9) live in invariants.py and are
+    surfaced via run_invariant_warnings. This function covers mechanical ManimGL
+    traps: axes sizing, axes tick font, stacking on shared anchors, horizontal
+    overflow chains. These are local to codeguard because they relate to
+    specific ManimGL API pitfalls, not to abstract design rules.
+    """
     warnings: list[str] = []
     if re.search(r"\bAxes\s*\(", code) and not re.search(r"\.set_width\s*\(|x_length\s*=|width\s*=|height\s*=", code):
         warnings.append(
@@ -830,7 +1025,6 @@ def _check_layout_smells(code: str) -> list[str]:
             "producing dead space or overflow. Use .set_width(10).center() "
             "(add .shift(DOWN * 0.5) if a title is present)."
         )
-    # axes.move_to(ORIGIN) without set_width is a common dead-space cause
     if re.search(r"axes\.move_to\s*\(\s*ORIGIN\s*\)", code) and not re.search(r"\.set_width\s*\(", code):
         warnings.append(
             "axes.move_to(ORIGIN) used without .set_width(); this does not resize axes. "
@@ -838,15 +1032,11 @@ def _check_layout_smells(code: str) -> list[str]:
         )
     if re.search(r"\.move_to\s*\(\s*axes\.(?:c2p|i2gp|get_center)", code):
         warnings.append("Label moved into axes area; this often overlaps curves/ticks.")
+
     lines = code.strip().splitlines()
-    tail = "\n".join(lines[-12:]) if lines else ""
-    if "FadeOut" not in "\n".join(lines):
-        warnings.append("Scene has no FadeOut at all — add one at the very end of the last cue.")
-    # Detect multiple .next_to() calls sharing the same anchor within 6 lines — likely overlap
     _check_next_to_stacking(lines, warnings)
-    # Detect horizontal chains that overflow past screen edge
     _check_horizontal_chain_overflow(lines, warnings)
-    # Detect .next_to(right-aligned-obj, RIGHT) — pushing content off right edge
+
     right_anchor_re = re.compile(
         r"\.next_to\(\s*(parabola|axes|graph|curve|surface|table_headers)\s*,\s*RIGHT"
     )
@@ -856,16 +1046,14 @@ def _check_layout_smells(code: str) -> list[str]:
             "overflow past the right screen edge. Place it below or to the left instead, "
             "or use .to_edge(RIGHT) with a buff."
         )
-    # Axes tick font size: missing decimal_number_config causes oversized tick labels (default is 36)
+
     if re.search(r"\bAxes\s*\(", code):
-        has_decimal_cfg = re.search(r"decimal_number_config", code)
-        if not has_decimal_cfg:
+        if not re.search(r"decimal_number_config", code):
             warnings.append(
                 "Axes missing decimal_number_config in axis_config; tick labels will render at "
                 "default font_size=36 (too large). Add "
                 "decimal_number_config={\"font_size\": 24} inside axis_config."
             )
-        # Also catch the common mistake of passing font_size directly (crashes at runtime)
         if re.search(r"axis_config\s*=\s*\{[^}]*[\"']font_size[\"']", code):
             warnings.append(
                 "font_size passed directly in axis_config will crash (TypeError). "
@@ -897,7 +1085,10 @@ def precheck_and_autofix(code: str) -> str:
     Called by scene_generator before saving the file. Also called by retry.py
     on the file path (see precheck_and_autofix_file for that variant).
     """
-    fixed, applied_fixes = apply_known_fixes(code)
+    # Fix structural syntax errors first (leading/trailing commas in calls)
+    fixed, structural_fixes = _fix_broken_call_args(code)
+    fixed, applied_fixes = apply_known_fixes(fixed)
+    applied_fixes = structural_fixes + applied_fixes
     if applied_fixes:
         import logging
         logging.getLogger(__name__).debug("[codeguard] applied: %s", applied_fixes)
@@ -915,7 +1106,8 @@ def precheck_and_autofix_file(scene_path: str) -> dict[str, Any]:
             f.write(fixed)
 
     errors = validate_scene_code(fixed)
-    layout_warnings = _check_layout_smells(fixed)
+    layout_warnings = run_invariant_warnings(fixed)
+    layout_warnings.extend(_check_layout_smells(fixed))
     layout_warnings.extend(_check_loop_timing_smells(fixed))
     if errors:
         return {

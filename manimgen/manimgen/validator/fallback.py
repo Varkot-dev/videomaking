@@ -1,31 +1,30 @@
 import logging
 import os
+import re
 import subprocess
 from manimgen.validator.env import get_render_env
 from manimgen import paths
 
 logger = logging.getLogger(__name__)
 
+# Styled title card fallback — on-brand, always renderable (I8 · reach floor).
+# Design: section number + title + subtitle rule + horizontal divider.
+# font_size values are from the canonical type scale (I4).
 FALLBACK_TEMPLATE = '''from manimlib import *
 
 class FallbackScene(Scene):
     def construct(self):
-        title = Text({title!r}, font_size=42, color=BLUE_B).to_edge(UP, buff=0.8)
-        points = VGroup(
-            Text({point1!r}, font_size=28, color=WHITE),
-            Text({point2!r}, font_size=28, color=WHITE),
-            Text({point3!r}, font_size=28, color=WHITE),
-        ).arrange(DOWN, aligned_edge=LEFT, buff=0.35).center().shift(DOWN * 0.3)
-        bullets = VGroup(*[
-            Dot(p.get_left() + LEFT * 0.3, radius=0.06, fill_color=YELLOW)
-            for p in points
-        ])
-        content = VGroup(points, bullets)
-        self.play(Write(title), run_time=1.2)
-        self.play(LaggedStartMap(FadeIn, points, lag_ratio=0.25), run_time=1.8)
-        self.play(FadeIn(bullets), run_time=0.5)
+        num = Text({section_num!r}, font_size=48, color=GREY_A).to_edge(UP, buff=1.2)
+        title = Text({title!r}, font_size=48, color=WHITE).center()
+        subtitle = Text({subtitle!r}, font_size=28, color=GREY_A)
+        subtitle.next_to(title, DOWN, buff=0.4)
+        rule = Line(LEFT * 4, RIGHT * 4, color=GREY_B, stroke_width=1.5)
+        rule.next_to(title, DOWN, buff=1.0)
+        self.play(FadeIn(num), run_time=0.5)
+        self.play(Write(title), run_time=1.0)
+        self.play(FadeIn(subtitle), ShowCreation(rule), run_time=0.8)
         self.wait({hold_seconds})
-        self.play(FadeOut(content), FadeOut(title), run_time=0.8)
+        self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)
 '''
 
 
@@ -47,13 +46,16 @@ def fallback_scene(section: dict) -> str | None:
     hold_seconds = _estimate_hold(section)
     scene_path = os.path.join(scenes_dir, f"{section['id']}_fallback.py")
     class_name = f"{section['id'].replace('_', ' ').title().replace(' ', '')}FallbackScene"
-    points = _fallback_points(section)
+    section_num = _section_num(section)
+    subtitle = _fallback_subtitle(section)
+    title = section["title"]
+    if len(title) > 52:
+        title = title[:49] + "..."
     code = FALLBACK_TEMPLATE.format(
-        title=section["title"],
+        section_num=section_num,
+        title=title,
+        subtitle=subtitle,
         hold_seconds=hold_seconds,
-        point1=points[0],
-        point2=points[1],
-        point3=points[2],
     )
     code = code.replace("class FallbackScene(Scene):", f"class {class_name}(Scene):")
 
@@ -82,22 +84,22 @@ def fallback_scene(section: dict) -> str | None:
     return None
 
 
-def _fallback_points(section: dict) -> list[str]:
-    cues = section.get("cues", [])
-    visuals = []
-    for cue in cues:
-        text = str(cue.get("visual", "")).strip()
-        if text:
-            # Keep lines compact so fallback text does not overflow.
-            visuals.append(text[:72] + ("..." if len(text) > 72 else ""))
-    if visuals:
-        points = visuals[:3]
-        while len(points) < 3:
-            points.append("Additional visual cue")
-        return points
+def _section_num(section: dict) -> str:
+    import re
+    sid = section.get("id", "")
+    m = re.search(r"(\d+)", sid)
+    if m:
+        return m.group(1).zfill(2)
+    return "00"
 
-    return [
-        "Core idea overview",
-        "Key visual relationship",
-        "Main takeaway",
-    ]
+
+def _fallback_subtitle(section: dict) -> str:
+    # Use the first sentence of narration — human-readable, no storyboard junk
+    narration = section.get("narration", "")
+    if narration:
+        sentence = re.split(r"[.!?]", narration)[0].strip()
+        if sentence:
+            return sentence[:60] + ("..." if len(sentence) > 60 else "")
+        words = narration.split()
+        return " ".join(words[:8]) + ("..." if len(words) > 8 else "")
+    return "Visual overview"
