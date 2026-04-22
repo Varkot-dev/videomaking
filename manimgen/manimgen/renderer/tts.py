@@ -187,3 +187,33 @@ def get_audio_duration(audio_path: str) -> float:
 
     data = json.loads(result.stdout)
     return float(data["format"]["duration"])
+
+
+def check_audio_not_silent(audio_path: str) -> dict:
+    """Return silence report for an audio file using ffmpeg ebur128.
+
+    Returns {"ok": bool, "silent_ratio": float, "duration": float}.
+    Flags as silent if >80% of momentary loudness measurements are below -60 LUFS.
+    """
+    import re as _re
+    cmd = [
+        "ffmpeg", "-i", audio_path,
+        "-af", "ebur128=peak=true",
+        "-f", "null", "-",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    output = result.stderr
+
+    m_values = [float(m) for m in _re.findall(r"M:\s*([-\d.]+)", output)]
+    if not m_values:
+        return {"ok": True, "silent_ratio": 0.0, "duration": 0.0}
+
+    silent = sum(1 for v in m_values if v < -60.0)
+    ratio = silent / len(m_values)
+
+    try:
+        duration = get_audio_duration(audio_path)
+    except Exception:
+        duration = 0.0
+
+    return {"ok": ratio < 0.8, "silent_ratio": ratio, "duration": duration}

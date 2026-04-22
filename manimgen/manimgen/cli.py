@@ -36,7 +36,7 @@ def _tts_enabled(cfg: dict) -> bool:
 
 def _run_tts_for_section(section: dict, idx: int) -> tuple[str, list, float] | None:
     """Run TTS for a section. Returns (audio_path, timestamps, audio_duration) or None."""
-    from manimgen.renderer.tts import generate_narration, save_timestamps, get_audio_duration
+    from manimgen.renderer.tts import generate_narration, save_timestamps, get_audio_duration, check_audio_not_silent
 
     narration = section.get("narration", "").strip()
     if not narration:
@@ -53,6 +53,17 @@ def _run_tts_for_section(section: dict, idx: int) -> tuple[str, list, float] | N
         ts_path = audio_path.replace(".mp3", "_timestamps.json")
         save_timestamps(timestamps, ts_path)
         audio_duration = get_audio_duration(audio_path)
+
+        energy = check_audio_not_silent(audio_path)
+        if not energy["ok"]:
+            logger.warning(
+                "[manimgen] TTS audio for '%s' is %.0f%% silent — retrying once.",
+                section["title"], energy["silent_ratio"] * 100,
+            )
+            _, timestamps = generate_narration(narration, audio_path)
+            save_timestamps(timestamps, ts_path)
+            audio_duration = get_audio_duration(audio_path)
+
         logger.info("[manimgen] %d word timestamps, %.1fs audio", len(timestamps), audio_duration)
         return audio_path, timestamps, audio_duration
     except Exception as e:
@@ -117,11 +128,53 @@ def _write_hash_sidecar(video_path: str, topic_hash: str) -> None:
 # Per-section pipeline
 # ---------------------------------------------------------------------------
 
+def _build_overview(plan: dict, all_section_audio: dict) -> dict:
+    """Build a summary of the lesson plan enriched with TTS audio durations.
+
+    Args:
+        plan:              The lesson plan dict (from plan_lesson / plan_lesson_from_pdf).
+        all_section_audio: Mapping of section_id → TTS result dict, as returned
+                           by _run_tts_for_section (keys: audio_path, timestamps,
+                           audio_duration, segments, audio_slices, cue_durations).
+
+    Returns a dict with:
+        total_duration, n_sections, pacing_notes, sections (list of per-section summaries).
+    """
+    sections_summary = []
+    total = 0.0
+    for i, section in enumerate(plan.get("sections", []), start=1):
+        sid = section.get("id", f"section_{i:02d}")
+        audio = all_section_audio.get(sid, {})
+        dur = audio.get("audio_duration", 0.0)
+        cue_durations = audio.get("cue_durations", [])
+        total += dur
+        sections_summary.append({
+            "id": sid,
+            "title": section.get("title", ""),
+            "position": f"{i} of {len(plan.get('sections', []))}",
+            "duration": dur,
+            "n_cues": len(cue_durations),
+        })
+
+    # Simple pacing note
+    avg = total / len(sections_summary) if sections_summary else 0.0
+    pacing_notes = f"Total: {total:.1f}s across {len(sections_summary)} sections (avg {avg:.1f}s each)."
+
+    return {
+        "total_duration": total,
+        "n_sections": len(sections_summary),
+        "pacing_notes": pacing_notes,
+        "sections": sections_summary,
+    }
+
+
 def _run_section(
     section: dict,
     idx: int,
     tts_on: bool,
     current_topic_hash: str,
+    section_audio: dict | None = None,
+    overview: dict | None = None,
 ) -> list[str]:
     """Run the full pipeline for one section and return a list of video paths to assemble.
 
@@ -136,7 +189,16 @@ def _run_section(
     segments = None
     audio_slices: list[str] = []
 
-    if tts_on:
+    if section_audio is not None:
+        # Use precomputed audio from global TTS phase
+        segments = section_audio.get("segments") or None
+        audio_slices = section_audio.get("audio_slices") or []
+        if segments:
+            log.info("[manimgen] Using precomputed audio: %d cue segment(s)", len(segments))
+            if _all_cues_muxed(section, idx, len(segments)):
+                log.info("[manimgen] All cues already muxed, skipping section")
+                return [_muxed_path_for(section, idx, i) for i in range(len(segments))]
+    elif tts_on:
         tts_result = _run_tts_for_section(section, idx)
         if tts_result:
             from manimgen.planner.segmenter import compute_segments
@@ -147,7 +209,6 @@ def _run_section(
             segments = compute_segments(timestamps, cue_word_indices, audio_duration)
             log.info("[manimgen] %d cue segment(s) for this section", len(segments))
 
-            # Skip entire section if all cues already muxed
             if _all_cues_muxed(section, idx, len(segments)):
                 log.info("[manimgen] All cues already muxed, skipping section")
                 return [_muxed_path_for(section, idx, i) for i in range(len(segments))]
@@ -170,7 +231,7 @@ def _run_section(
         video_path = found_video
         success = True
     else:
-        code, class_name, scene_path = generate_scenes(section, cue_durations=cue_durations)
+        code, class_name, scene_path = generate_scenes(section, cue_durations=cue_durations, overview=overview)
         if cue_durations:
             from manimgen.validator.timing_verifier import verify_timing, auto_fix_timing
             result = verify_timing(code, cue_durations)
@@ -285,10 +346,50 @@ def main():
     logger.info("[manimgen] Planned %d sections", len(lesson_plan["sections"]))
     logger.info("[manimgen] TTS: %s", "enabled" if tts_on else "disabled")
 
+    # --- Global audio phase: run all TTS before any codegen ---
+    all_section_audio: dict[str, dict] = {}
+    if tts_on:
+        logger.info("[manimgen] Phase 1: TTS for all %d sections", len(lesson_plan["sections"]))
+        for idx, section in enumerate(lesson_plan["sections"], start=1):
+            section_id = section.get("id", f"section_{idx:02d}")
+            tts_result = _run_tts_for_section(section, idx)
+            if tts_result:
+                from manimgen.planner.segmenter import compute_segments
+                from manimgen.renderer.audio_slicer import slice_audio
+
+                audio_path, timestamps, audio_duration = tts_result
+                cue_word_indices = section.get("cue_word_indices", [0])
+                segments = compute_segments(timestamps, cue_word_indices, audio_duration)
+                audio_slices = slice_audio(
+                    audio_path, segments,
+                    output_dir=paths.audio_dir(),
+                    section_id=section_id,
+                )
+                all_section_audio[section_id] = {
+                    "audio_path": audio_path,
+                    "timestamps": timestamps,
+                    "audio_duration": audio_duration,
+                    "segments": segments,
+                    "audio_slices": audio_slices,
+                    "cue_durations": [seg.duration for seg in segments],
+                }
+
+    overview = _build_overview(lesson_plan, all_section_audio)
+    logger.info("[manimgen] Overview: %s", overview["pacing_notes"])
+
+    # --- Phase 2: codegen + render for all sections ---
     rendered_videos: list[str] = []
     for idx, section in enumerate(lesson_plan["sections"], start=1):
+        section_id = section.get("id", f"section_{idx:02d}")
+        # When tts_on, always pass section_audio (even {} for failed TTS) so
+        # _run_section doesn't re-attempt TTS — global phase already ran it.
+        if tts_on:
+            section_audio = all_section_audio.get(section_id, {})
+        else:
+            section_audio = None
         rendered_videos.extend(
-            _run_section(section, idx, tts_on, current_topic_hash)
+            _run_section(section, idx, tts_on, current_topic_hash,
+                         section_audio=section_audio, overview=overview)
         )
 
     output = assemble_video(rendered_videos, lesson_plan["title"])

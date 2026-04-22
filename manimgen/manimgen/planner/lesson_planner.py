@@ -10,6 +10,28 @@ _MAX_SECTIONS_TOPIC = 6
 _MAX_SECTIONS_PDF = 8
 
 
+_SELF_CORRECT_LIMIT = 1  # number of critic passes per plan
+
+
+def _load_critic_system_prompt() -> str:
+    here = os.path.dirname(__file__)
+    with open(os.path.join(here, "prompts", "storyboard_critic_system.md")) as f:
+        return f.read()
+
+
+def _self_correct(plan: dict, limit: int = _SELF_CORRECT_LIMIT) -> dict:
+    critic_system = _load_critic_system_prompt()
+    for _ in range(limit):
+        raw = chat(system=critic_system, user=json.dumps(plan, indent=2))
+        stripped = _strip_fencing(raw)
+        try:
+            plan = _safe_json_loads(stripped)
+        except Exception:
+            logger.warning("[planner] Self-correction returned non-JSON — keeping original plan")
+            break
+    return plan
+
+
 def _load_system_prompt() -> str:
     here = os.path.dirname(__file__)
     with open(os.path.join(here, "prompts", "planner_system.md")) as f:
@@ -244,6 +266,7 @@ def plan_lesson(topic: str) -> dict:
 
     raw = chat(system=system, user=user_message)
     plan = _cap_sections(_safe_json_loads(_strip_fencing(raw)), _MAX_SECTIONS_TOPIC)
+    plan = _self_correct(plan)
     return _extract_cues(plan)
 
 
@@ -297,4 +320,5 @@ def plan_lesson_from_pdf(pdf_path: str) -> dict:
     print(f"[planner] Calling LLM for PDF lesson plan (images: {len(images)})...")
     raw = chat(system=system, user=user_message, images=images if images else None)
     plan = _cap_sections(_safe_json_loads(_strip_fencing(raw)), _MAX_SECTIONS_PDF)
+    plan = _self_correct(plan)
     return _extract_cues(plan)

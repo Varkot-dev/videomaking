@@ -199,3 +199,18 @@ if __name__ == "__main__":
     print(f"Raw text length : {len(result['raw_text'])} chars")
     print("\n--- First chunk preview ---")
     print(result["chunks"][0][:500] if result["chunks"] else "(none)")
+
+
+
+# ---------------------------------------------------------------------------
+# Input parser (absorbed from parser.py)
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+
+def parse_input(raw: str) -> str:
+    """Normalize raw user input into a clean topic description."""
+    text = raw.strip()
+    text = _re.sub(r"\s+", " ", text)
+    return text

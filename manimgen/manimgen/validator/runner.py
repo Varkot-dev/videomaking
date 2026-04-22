@@ -11,11 +11,58 @@ def _is_3d_scene(scene_path: str) -> bool:
         return "ThreeDScene" in f.read()
 
 
+def validate_scene_inputs(scene_path: str) -> dict:
+    """Pre-render asset validation gate.
+
+    Returns {"ok": bool, "errors": [str], "warnings": [str]}.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if not os.path.exists(scene_path):
+        errors.append(f"Scene file not found: {scene_path}")
+        return {"ok": False, "errors": errors, "warnings": warnings}
+
+    if os.path.getsize(scene_path) == 0:
+        errors.append(f"Scene file is empty: {scene_path}")
+
+    try:
+        with open(scene_path) as f:
+            f.read(1)
+    except OSError as e:
+        errors.append(f"Scene file not readable: {e}")
+
+    scenes_dir = paths.scenes_dir()
+    try:
+        os.makedirs(scenes_dir, exist_ok=True)
+        write_check = os.path.join(scenes_dir, ".write_check")
+        with open(write_check, "w") as f:
+            f.write("")
+        os.unlink(write_check)
+    except OSError as e:
+        errors.append(f"Output scenes dir not writable: {e}")
+
+    try:
+        os.makedirs(paths.logs_dir(), exist_ok=True)
+    except OSError as e:
+        warnings.append(f"Could not create logs dir: {e}")
+
+    return {"ok": len(errors) == 0, "errors": errors, "warnings": warnings}
+
+
 def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
     """
     Run a ManimGL scene file and return (success, video_path).
     Logs the attempt to output/logs/.
     """
+    preflight = validate_scene_inputs(scene_path)
+    if not preflight["ok"]:
+        import logging as _logging
+        _logging.getLogger(__name__).error(
+            "[runner] Pre-render validation failed: %s", preflight["errors"]
+        )
+        return False, None
+
     logs_dir = paths.logs_dir()
     os.makedirs(logs_dir, exist_ok=True)
 

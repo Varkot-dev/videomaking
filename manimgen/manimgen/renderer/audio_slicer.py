@@ -19,7 +19,7 @@ import logging
 import os
 import subprocess
 
-from manimgen.planner.segmenter import CueSegment
+from manimgen.types import CueSegment
 
 logger = logging.getLogger(__name__)
 

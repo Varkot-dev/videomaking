@@ -212,6 +212,45 @@ def _check_frozen_frames(
 
 
 # ---------------------------------------------------------------------------
+# Scene-guided frame sampling
+# ---------------------------------------------------------------------------
+
+def _scene_guided_timestamps(video_path: str, duration: float) -> list[float]:
+    """Return frame timestamps guided by detected scene cuts.
+
+    Runs ffmpeg select filter to find scene boundaries, then samples:
+    - First frame of each new scene
+    - Midpoint of scenes longer than 3s
+    Caps at 8 frames; falls back to [0.25, 0.50, 0.75] * duration on error.
+    """
+    import re as _re
+    import subprocess as _sp
+    fallback = [duration * 0.25, duration * 0.50, duration * 0.75]
+    try:
+        cmd = [
+            "ffmpeg", "-i", video_path,
+            "-vf", r"select=gt(scene\,0.35),showinfo",
+            "-vsync", "vfr", "-f", "null", "-",
+        ]
+        result = _sp.run(cmd, capture_output=True, text=True, timeout=30)
+        pts_times = [float(m) for m in _re.findall(r"pts_time:([\d.]+)", result.stderr)]
+        if not pts_times:
+            return fallback
+        timestamps: list[float] = []
+        prev = 0.0
+        for t in pts_times:
+            timestamps.append(t)
+            seg_len = t - prev
+            if seg_len > 3.0:
+                timestamps.append(prev + seg_len / 2)
+            prev = t
+        timestamps.sort()
+        return timestamps[:8] if timestamps else fallback
+    except Exception:
+        return fallback
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -234,7 +273,7 @@ def check_frames(video_path: str) -> FrameCheckResult:
     if not duration or duration < 0.5:
         return FrameCheckResult(ok=True, skipped=True)
 
-    timestamps = [duration * 0.25, duration * 0.50, duration * 0.75]
+    timestamps = _scene_guided_timestamps(video_path, duration)
     frames: list[tuple[float, "Image.Image"]] = []
 
     for ts in timestamps:

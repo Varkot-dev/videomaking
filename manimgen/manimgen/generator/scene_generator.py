@@ -144,6 +144,7 @@ def generate_scenes(
     section: dict,
     cue_durations: list[float] | None = None,
     duration_seconds: float | None = None,
+    overview: dict | None = None,
 ) -> tuple[str, str, str]:
     """Generate one ManimGL scene file for a full section.
 
