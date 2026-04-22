@@ -102,6 +102,15 @@ The `visual` field MUST start with `Technique: <name>`. Choose from this exact l
 - At least 1 cue per video must use `camera_zoom`, `grid_transform`, or `equation_morph`
 - Any section where narration says "compare" or "contrast" → one cue MUST be `split_screen`
 
+### Bias toward under-used techniques
+These techniques produce visually distinctive scenes but the planner tends to underuse them.
+When the topic permits, actively prefer:
+- `array_swap` — any sorting, ordering, ranking, or rearranging concept
+- `apply_matrix` / `grid_transform` — any linear map, transformation, or coordinate change
+- `3d_surface` — any function of two variables, cost landscape, probability density, optimization
+- `code_reveal` — any algorithm, pseudocode, or step-by-step procedure
+- `lagged_path` — any convergence, aggregation, or elements arriving at a destination
+
 ---
 
 ## Rules for the `visual` field — this is the most important thing you produce
