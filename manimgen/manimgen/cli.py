@@ -61,6 +61,42 @@ def _run_tts_for_section(section: dict, idx: int) -> tuple[str, list, float] | N
         return None
 
 
+def _build_overview(lesson_plan: dict, all_section_audio: dict) -> dict:
+    """Build a global video overview from pre-computed per-section audio data."""
+    sections = lesson_plan.get("sections", [])
+    n = len(sections)
+
+    section_entries = []
+    for i, section in enumerate(sections, start=1):
+        section_id = section.get("id", f"section_{i:02d}")
+        audio = all_section_audio.get(section_id, {})
+        dur = audio.get("audio_duration", 0.0)
+        cue_durations = audio.get("cue_durations", [])
+        section_entries.append({
+            "id": section_id,
+            "title": section.get("title", ""),
+            "duration": dur,
+            "n_cues": len(cue_durations),
+            "position": f"{i} of {n}",
+        })
+
+    total = sum(e["duration"] for e in section_entries)
+
+    pacing_notes = ""
+    if section_entries:
+        longest = max(section_entries, key=lambda e: e["duration"])
+        if longest["duration"] > 0:
+            mins, secs = divmod(int(longest["duration"]), 60)
+            pacing_notes = f"Section '{longest['title']}' is longest at {mins}m{secs:02d}s"
+
+    return {
+        "total_duration": total,
+        "n_sections": n,
+        "sections": section_entries,
+        "pacing_notes": pacing_notes,
+    }
+
+
 def _muxed_path_for(section: dict, idx: int, cue_index: int) -> str:
     section_id = section.get("id", f"section_{idx:02d}")
     return os.path.join(paths.muxed_dir(), f"{section_id}_cue{cue_index:02d}.mp4")
@@ -132,36 +168,28 @@ def _run_section(
     idx: int,
     tts_on: bool,
     current_topic_hash: str,
+    section_audio: dict | None = None,
+    overview: dict | None = None,
 ) -> list[str]:
     """Run the full pipeline for one section and return a list of video paths to assemble.
 
-    Handles TTS, codegen, render, retry, fallback, audio-slice, and per-cue muxing.
+    Handles codegen, render, retry, fallback, and per-cue muxing.
+    section_audio contains pre-computed TTS results from Phase 1 (or None if TTS off/failed).
     Returns the ordered list of clip paths produced (may be empty if section is skipped).
     """
     section_id = section.get("id", f"section_{idx:02d}")
     log = logging.LoggerAdapter(logger, {"section": section_id})
     log.info("[manimgen] Section %d: %s", idx, section["title"])
 
-    # --- TTS + segmentation ---
+    # --- Use pre-computed TTS results from Phase 1 ---
     segments = None
     audio_slices: list[str] = []
 
-    if tts_on:
-        tts_result = _run_tts_for_section(section, idx)
-        if tts_result:
-            from manimgen.planner.segmenter import compute_segments
-            from manimgen.renderer.audio_slicer import slice_audio
-
-            audio_path, timestamps, audio_duration = tts_result
-            cue_word_indices = section.get("cue_word_indices", [0])
-            segments = compute_segments(timestamps, cue_word_indices, audio_duration)
-            log.info("[manimgen] %d cue segment(s) for this section", len(segments))
-
-            audio_slices = slice_audio(
-                audio_path, segments,
-                output_dir=paths.audio_dir(),
-                section_id=section_id,
-            )
+    if tts_on and section_audio:
+        segments = section_audio.get("segments") or None
+        audio_slices = section_audio.get("audio_slices", [])
+        if segments:
+            log.info("[manimgen] %d cue segment(s) for this section (pre-computed)", len(segments))
 
             # Skip entire section if all cues already muxed AND newer than audio slices
             if _all_cues_muxed(section, idx, len(segments), audio_slices):
@@ -180,7 +208,7 @@ def _run_section(
         video_path = found_video
         success = True
     else:
-        code, class_name, scene_path = generate_scenes(section, cue_durations=cue_durations)
+        code, class_name, scene_path = generate_scenes(section, cue_durations=cue_durations, overview=overview)
         if cue_durations:
             from manimgen.validator.timing_verifier import verify_timing, auto_fix_timing
             result = verify_timing(code, cue_durations)

@@ -110,7 +110,7 @@ def _escape_bad_backslashes(s: str) -> str:
     We walk the string and double-escape any backslash not followed by a
     valid JSON escape character.
     """
-    valid_escapes = set('"\\\/bfnrtu')
+    valid_escapes = set('"\\' + r'\/' + 'bfnrtu')
     out = []
     i = 0
     while i < len(s):
