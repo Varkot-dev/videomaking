@@ -23,6 +23,13 @@ logger = logging.getLogger(__name__)
 
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
 
+# Network resilience defaults. Both providers hang indefinitely on a flaky
+# TLS handshake without explicit timeouts (MASTER GUIDELINES §4.2).
+# 120s is comfortable for multi-second generations; 3 retries with
+# exponential backoff survive transient blips without failing a whole run.
+_REQUEST_TIMEOUT_SECONDS = 120.0
+_REQUEST_RETRY_ATTEMPTS = 3
+
 _DEFAULTS = {
     "llm_provider": "gemini",
     "gemini_model": "gemini-2.5-flash",
@@ -80,7 +87,18 @@ def _gemini(system: str, user: str, images: list[str]) -> str:
     from google.genai import types
 
     cfg = _load_llm_config()
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    client = genai.Client(
+        api_key=os.environ["GEMINI_API_KEY"],
+        http_options=types.HttpOptions(
+            timeout=int(_REQUEST_TIMEOUT_SECONDS * 1000),  # SDK takes milliseconds
+            retry_options=types.HttpRetryOptions(
+                attempts=_REQUEST_RETRY_ATTEMPTS,
+                initial_delay=1.0,
+                max_delay=30.0,
+                exp_base=2.0,
+            ),
+        ),
+    )
 
     contents: list = []
     for b64 in images:
@@ -103,7 +121,11 @@ def _anthropic(system: str, user: str, images: list[str]) -> str:
     import anthropic
 
     cfg = _load_llm_config()
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    client = anthropic.Anthropic(
+        api_key=os.environ["ANTHROPIC_API_KEY"],
+        timeout=_REQUEST_TIMEOUT_SECONDS,
+        max_retries=_REQUEST_RETRY_ATTEMPTS,
+    )
 
     content: list = []
     for b64 in images:
