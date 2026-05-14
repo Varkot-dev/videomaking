@@ -3,9 +3,10 @@ name: manimgen-video-review
 description: >
   Use this skill after ANY manimgen pipeline render — whenever a video has been generated,
   re-generated, or a pipeline run completes. Also use when the user says "check the video",
-  "see what it looks like", "review the output", "does it look good", or "what's wrong with it".
-  This skill extracts frames from the rendered video, lets Claude see them directly, identifies
-  every visual defect with timestamps, and does not declare success until the video actually looks good.
+  "see what it looks like", "review the output", "does it look good", "audit it", or "what's
+  wrong with it". This skill extracts frames from the rendered video, lets Claude see them,
+  classifies every section as PASS/FAIL with named defects, and does not declare success until
+  the video actually looks good.
 ---
 
 # ManimGen Video Review
@@ -14,109 +15,238 @@ You have vision. Use it. Never trust a pipeline run just because it exited 0.
 
 ## When to use this skill
 
-After every render. Before telling the user anything is "done" or "fixed". If a section fell back to bullet points, if there are freeze-frame tails, if labels overlap — you need to see it yourself rather than guess from logs.
+After every render. Before telling the user anything is "done" or "fixed". If a section fell
+back to bullet points, if there are freeze-frame tails, if labels overlap — you need to see
+it yourself rather than guess from logs.
 
-## Step 1: Extract frames
+## The audit pipeline (run scripts in this order)
 
-Use ffmpeg to pull frames at multiple points in the video. Always extract:
-- First 2 seconds (one frame at 0.5s, one at 1.5s) — catches opening layout
-- 25%, 50%, 75% of duration — catches mid-scene issues  
-- Last 2 seconds — catches freeze-frame tails and fallback bullet points
+The four `tools/` scripts implement a layered audit: cheap deterministic checks first, then
+expensive vision checks, then structured output, then regression diff against prior runs.
 
 ```bash
-# Get video duration first
-ffprobe -v quiet -show_entries format=duration -of csv=p=0 <video_path>
+SKILL=/Users/varshithkotagiri/Projects/3Blue1Brown/.claude/skills/manimgen-video-review/tools
+VIDEO=<path/to/final.mp4>
+OUT=/tmp/manimgen_review
 
-# Extract frames (replace TIMESTAMP with actual values)
-ffmpeg -ss TIMESTAMP -i <video_path> -vframes 1 -q:v 2 /tmp/manimgen_review/frame_TIMESTAMP.jpg -y
+# 1. Cheap codeguard pre-check — emits warnings about source code defects
+#    you'd otherwise have to spot in pixels. Run BEFORE looking at frames.
+python3 $SKILL/codeguard_audit.py > $OUT/codeguard.json
+
+# 2. Frame extraction — open/mid/close per section, plus intro/outro bookends
+python3 $SKILL/extract_section_frames.py "$VIDEO" --out $OUT
+# → writes frame_*.jpg files and $OUT/frames.json describing each one
+
+# 3. Read each frame with the Read tool, apply the binary checklist below,
+#    then write the result:
+python3 $SKILL/write_audit.py --out $OUT/audit.json --video "$VIDEO" \
+    --section '1:PASS' \
+    --section '2:FAIL:title-zone collision: scene_title and geo_title at top edge' \
+    --codeguard-warnings-total <total>
+
+# 4. Regression diff — only if a prior audit exists
+python3 $SKILL/diff_audit.py --current $OUT/audit.json --prior $OUT/audit_prior.json
 ```
 
-Always save to `/tmp/manimgen_review/` and create that directory first with `mkdir -p /tmp/manimgen_review`.
+Always start with codeguard.json — it tells you which sections to inspect most carefully.
+Sections with codeguard warnings are FAIL by default unless you can prove otherwise from frames.
 
-Extract at least 6 frames per video. For a 3-minute video extract every 15 seconds.
+## Step 1: Codeguard pre-check (zero cost)
 
-## Step 2: Read every frame
-
-Use the Read tool on each extracted frame. Actually look at it. Don't skim.
-
-For each frame, check:
-
-**Layout problems:**
-- Is the title overlapping a LaTeX equation? (Both at top of screen)
-- Are y-axis numbers rotated 90° and stacked on top of each other?
-- Are labels piling up at the same position?
-- Is any text cut off at screen edges?
-- Is anything outside the visible frame area?
-
-**Content problems:**
-- Is this a bullet point fallback? (Look for plain text bullets instead of animations)
-- Is the scene completely black or frozen?
-- Is the same static frame repeating across multiple timestamps? (freeze-frame tail)
-- Are there 3+ elements crowded into one area with no spacing?
-
-**Quality problems:**
-- Does it look like a 3Blue1Brown video or like a broken slide deck?
-- Is the dark background (#1C1C1C) present?
-- Are the animations actually visible or is it just text on black?
-
-## Step 3: Compare frames for freeze-frame detection
-
-If the frame at 50% looks identical to the frame at 75% and 90%, that's a freeze-frame tail. 
-Report: "Section X has a freeze-frame tail starting at Ys — the last Z seconds are frozen."
-
-## Step 4: Report specific issues
-
-Don't say "there are some issues". Be specific:
-
-```
-SECTION 4 (gradient_descent):
-- [0:23] Y-axis numbers are rotated and stacked — looks unreadable
-- [0:31-0:45] FREEZE-FRAME TAIL — 14 seconds of frozen image while audio plays
-- [1:02] Title "The Update Rule" overlaps LaTeX equation θ_new = ...
-
-SECTION 3 (mathematizing):
-- FALLBACK — entire section rendered as bullet points, no animations
-
-SECTION 1, 2, 5: PASS — animations playing, no obvious layout issues
-```
-
-## Step 5: Decide what to fix
-
-If any section is a bullet point fallback → that's a pipeline failure, needs a re-render with better scene code.
-
-If freeze-frame tails > 3 seconds on more than half the cues → the timing bug is systemic, need to fix the Director prompt and re-render.
-
-If layout overlaps exist → codeguard should catch them. Check if the fix worked.
-
-If everything looks good → say so clearly and show the user the best-looking frame as evidence.
-
-## Step 6: Fix and re-render if needed
-
-Don't just report issues — fix them. After identifying the root cause from visual inspection:
-
-1. If it's a codeguard-catchable issue (y-axis numbers, title overlap): add the fix to codeguard, clear cache, re-render
-2. If it's a timing issue: check the generated scene file, find the wrong `self.wait()` calculation, fix it directly in the scene file, re-render that section only
-3. If it's a fallback: look at the error log for that section, understand why it failed, fix the underlying cause
-
-To re-render a single section without re-running the whole pipeline:
 ```bash
-# Find the scene file
-ls manimgen/output/scenes/section_0X.py
+python3 $SKILL/codeguard_audit.py
+```
 
-# Delete just that section's muxed clips to force re-render
-rm manimgen/output/muxed/section_0X_*.mp4
+This runs `_check_layout_smells` against every `output/scenes/section_*.py`. Each warning
+names a real defect that's already in the code. No need to extract frames to confirm.
 
-# Re-run pipeline with --resume flag (uses cached plan and audio)
-export $(cat .env | xargs) && python3 -m manimgen.cli "TOPIC" --resume
+If a section has a `title zone (UP edge / UR-UL corner)` warning, that section is FAIL on
+layout grounds before you look at any pixels. Note it in the audit and only check frames
+to confirm the visual manifestation.
+
+## Step 2: Extract frames at section boundaries
+
+```bash
+python3 $SKILL/extract_section_frames.py "$VIDEO" --out $OUT
+```
+
+The script reads `plan.json` and the muxed clip durations to compute per-section start times,
+then extracts:
+
+- **opening (open):** start + 0.5s and start + 2s — catches title-zone collisions
+- **midpoint (mid):** section center — catches the main content
+- **closing (close):** end - 0.5s — catches uncleaned residual mobjects, missing FadeOut
+- **bookends (intro/outro):** first 2s and last 2s of the full video
+
+`frames.json` maps each frame back to (section_id, section_title, phase). For a 6-section
+2-min video, expect ~24 frames.
+
+## Step 3: Read every frame with the Read tool
+
+Don't skim. Look at each one and apply the binary checks below.
+
+## Step 4: Run the binary checklist per frame
+
+Each item is **pass or fail** — no "minor" or "partial". If the user can see it, it counts.
+For each frame, ask each question. Any failure ⇒ that section is FAIL.
+
+### A. Title-zone exclusivity (the most common bug)
+
+- Are there 2+ pieces of text in the top band (y > 2.5, top ~25% of frame)?
+- Do they visibly overlap or sit at the same y-coordinate creating crowded text?
+- Does a section title spanning the full width cross into where panel titles or
+  corner readouts sit?
+
+If yes: **FAIL — title-zone collision.** Name the colliding text mobjects exactly.
+
+### B. Text-on-text overlap
+
+- Look at every text element. Is any letter or word from one mobject visually
+  rendering on top of another mobject's letter or word?
+- Are there double-edges, ghost characters, or letters that look "doubled" (a sign
+  of two text mobjects rendering at the same coordinate)?
+
+If yes: **FAIL — text overlap.** Quote the overlapping strings.
+
+### C. Edge clipping
+
+- Is any element cut off at the screen edge (text whose final character is missing,
+  arrows whose tips run off the canvas, axes labels at -6 or 6 that get truncated)?
+
+If yes: **FAIL — edge clipping.** Name the clipped element.
+
+### D. Fallback / frozen scene
+
+- Does the frame contain only a section number, section title, and a one-line
+  description (the fallback title-card pattern)?
+- Are 3 frames sampled across the section visually identical to each other?
+
+If yes: **FAIL — fallback** (or **FAIL — full-section freeze**).
+
+### E. Layout proportions
+
+- Do labels sit on top of axes lines or tick numbers?
+- Are 3+ elements crowded into the same ~1 unit area with no spacing?
+- Does the scene have inappropriate dead space (e.g. content in a 30% strip with
+  70% empty)?
+
+If yes: **FAIL — proportion** (or **layout density**).
+
+### F. A/V sync (audio-video synchronization)
+
+- Did ffmpeg report stream duration mismatches during muxing?
+- Are there codec parameter conflicts (sample rate, channels, format)?
+- Do frames arrive out of order (DTS violations)?
+- Is any stream truncated during mux?
+
+Check the muxer log (saved during pipeline run) for warnings. If yes: **FAIL — av_sync**.
+
+## Step 5: Classify each section as PASS / FAIL — never PARTIAL
+
+Build a section-by-section table. Each section is either PASS (no defects from steps A–E
+across all sampled frames) or FAIL (one or more defects). If a section has good content but
+also has one named defect, it is FAIL — not PARTIAL. The previous version of this skill
+used PARTIAL as a hedge and consistently let title-overlap bugs ship.
+
+Format (use exactly this — it makes regressions easy to compare):
+
+```
+SECTION 1 (0–16s, "Section Title") — PASS
+SECTION 2 (16–39s, "Section Title") — FAIL
+  [0:18] title-zone collision: scene_title and geo_title both at top edge
+  [0:36] edge clipping: "Effective Force" label cut off at right
+SECTION 3 (39–62s, "Section Title") — FAIL — fallback
+```
+
+## Step 6: Write structured audit JSON
+
+Once you've classified every section, persist the result so future runs can diff against it:
+
+```bash
+python3 $SKILL/write_audit.py \
+  --out $OUT/audit.json \
+  --video "$VIDEO" \
+  --section '1:PASS' \
+  --section '2:FAIL:title-zone collision: scene_title and geo_title at top edge' \
+  --codeguard-warnings-total <total>
+```
+
+Defect categories accepted:
+`title_zone_collision`, `text_overlap`, `edge_clipping`, `fallback`, `freeze`,
+`layout_proportion`, `codeguard`.
+
+The detail string is parsed for category keywords, so phrasing like "title zone..."
+auto-classifies as `title_zone_collision`.
+
+## Step 7: Diff against prior audit (regression check)
+
+If a baseline exists for this topic, diff to surface regressions and improvements.
+Use the baseline manager to fetch the prior audit:
+
+```bash
+TOPIC="Fourier Series"  # or extract from plan.json
+python3 $SKILL/manage_baselines.py --get --topic "$TOPIC" --base $OUT/baselines > $OUT/audit_prior.json
+
+if [[ -f $OUT/audit_prior.json ]]; then
+  python3 $SKILL/diff_audit.py --current $OUT/audit.json --prior $OUT/audit_prior.json
+fi
+```
+
+Exit code is 1 if any regressions, 0 if all-clean. Examples of what gets reported:
+- `section 6 PASS → FAIL` (status regressed)
+- `section 6: new defect category 'edge_clipping'` (new defect type)
+- `codeguard warnings increased: 5 → 9`
+
+After a successful run, store the current audit as the new baseline:
+```bash
+python3 $SKILL/manage_baselines.py --set --topic "$TOPIC" --audit $OUT/audit.json --base $OUT/baselines
+```
+
+Or use the all-in-one CI gate script which handles baseline lookup and storage:
+
+```bash
+bash $SKILL/audit_gate.sh --video /path/to/final.mp4 --prior-topic "Fourier Series" --baseline-dir /tmp/manimgen_review/baselines
+```
+
+## Step 8: Show evidence
+
+Pick the single best-looking frame as proof of working pipeline. Pick the single worst frame
+as evidence of each FAIL. Reference frame paths so the user can re-check (e.g.
+`/tmp/manimgen_review/frame_72s.jpg`).
+
+## Step 9: Decide what to fix
+
+| Defect | Where the fix belongs |
+|---|---|
+| title-zone collision (A) | `_check_top_edge_collision` in `codeguard.py` should have caught — verify it ran; also Director prompt visual-continuity rule |
+| text-on-text overlap (B) | Director prompt or codeguard layout-smell |
+| edge clipping (C) | Director prompt safe-bounds rule |
+| fallback / freeze (D) | Pipeline retry/timing fixes (see `manimgen-test-fix`) |
+| layout proportion (E) | Director prompt archetype rules |
+
+If half or more of the sections FAIL with the same defect type, that's a systemic Director
+prompt or codeguard issue — fix it once at the source rather than per-section.
+
+## Step 10: Re-render only when fixes are in code, not in narration
+
+If you've changed the Director prompt or codeguard, clear the cached renders for the affected
+sections and re-run with `--resume`. If you've only "told the user" how it should look, you
+have not fixed anything.
+
+```bash
+rm /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/manimgen/videos/Section*.mp4
+rm /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/manimgen/videos/Section*.hash
+GEMINI_API_KEY=$(grep GEMINI_API_KEY .env | cut -d= -f2) python3 -m manimgen.cli "<topic>" --resume
 ```
 
 ## What good looks like
 
 A passing video has:
 - Dark (#1C1C1C) background throughout
-- Animations actually playing (not static)  
+- Animations actually playing (no full-section freeze)
+- One mobject in the title zone at any given time — never two
 - Text that doesn't overlap other text
-- Audio and video roughly in sync (no 5+ second freeze-frames)
-- No bullet point fallbacks
+- Audio and video roughly in sync (no 5+ second freeze-frame tails)
+- No fallback title cards
 
-Show the user at least one frame from a passing section as proof.
+Show the user at least one frame from a PASS section as proof.
