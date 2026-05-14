@@ -45,7 +45,11 @@ class CueTiming:
         return abs(self.diff) < _TOLERANCE
 
 
-_TOLERANCE = 0.5  # seconds — mismatches below this are acceptable
+_TOLERANCE = 1.0  # seconds — mismatches below this are acceptable
+# Sub-1s drift (either freeze-frame tail or mild overrun) is visually unnoticeable
+# once the muxer pads/trims to audio length. Retrying for sub-1s deltas was
+# actively damaging already-good renders — the LLM would rewrite the scene to
+# shave 0.8s and end up 3s short on a different cue.
 _DEFAULT_PLAY_RUNTIME = 1.0  # ManimGL default when run_time= is omitted
 
 
@@ -295,11 +299,81 @@ def verify_timing(
 
     all_ok = all(ct.ok for ct in cue_timings)
 
-    if warnings:
-        for w in warnings:
-            logger.info("[timing_verifier] %s", w)
+    # Warnings are returned to the caller — do NOT log here. The retry loop
+    # prints them once via its own "[retry]" prefix, and logging them here
+    # caused 3x duplication for every single warning (once from cli first-pass,
+    # once from retry pre-pass, once from retry re-verify).
 
     return {"ok": all_ok, "cues": cue_timings, "warnings": warnings}
+
+
+def _strip_phantom_cue_blocks(
+    code: str,
+    max_valid_index: int,
+) -> tuple[str, list[str]]:
+    """Delete CUE blocks whose index is >= max_valid_index.
+
+    The Director sometimes hallucinates a CUE N comment when only N durations
+    were provided. The extra cue block's animations push the scene past the
+    audio duration and every retry regenerates the same phantom, burning the
+    retry budget. Physically removing those blocks from the source before
+    rendering prevents the cycle.
+
+    A phantom block runs from its ``# CUE N`` line up to the next ``# CUE`` or
+    the end of the construct method (whichever comes first). The final
+    ``self.play(*[FadeOut...]`` cleanup is preserved if it is outside any CUE
+    block, but if it lives inside the phantom block it is sacrificed — the
+    previous (valid) cue's FadeOut at end-of-section covers the cleanup.
+    """
+    lines = code.splitlines(keepends=True)
+    cue_re = _CUE_COMMENT_RE
+    out_lines: list[str] = []
+    stripped_lines: list[str] = []  # everything we removed — scan for cleanup
+    stripping = False
+    removed: list[str] = []
+
+    for line in lines:
+        m = cue_re.search(line)
+        if m:
+            cue_idx = int(m.group(1))
+            if cue_idx >= max_valid_index:
+                stripping = True
+                removed.append(f"CUE {cue_idx}")
+                stripped_lines.append(line)
+                continue
+            stripping = False
+            out_lines.append(line)
+            continue
+        if stripping:
+            # Lines that are not indented at all belong to the enclosing module,
+            # not the cue block — stop stripping at them.
+            stripped_prefix = line.lstrip()
+            if stripped_prefix and not line.startswith((" ", "\t")):
+                stripping = False
+                out_lines.append(line)
+                continue
+            stripped_lines.append(line)
+            continue
+        out_lines.append(line)
+
+    if not removed:
+        return code, []
+
+    # Preserve any final FadeOut-everything cleanup that was inside the phantom
+    # block — otherwise the scene ends on a static frame instead of fading out.
+    cleanup_re = re.compile(r"self\.play\s*\(\s*\*\s*\[\s*FadeOut")
+    cleanup_line = next(
+        (ln for ln in stripped_lines if cleanup_re.search(ln)),
+        None,
+    )
+    if cleanup_line:
+        out_lines.append(cleanup_line)
+
+    note = [
+        f"Stripped phantom {label} (only {max_valid_index} durations provided)"
+        for label in removed
+    ]
+    return "".join(out_lines), note
 
 
 def auto_fix_timing(
@@ -314,14 +388,19 @@ def auto_fix_timing(
     This handles the common case where the Director's wait arithmetic is wrong
     but the animation structure is correct.
 
+    Before the wait-adjustment pass, any CUE block with index >= len(cue_durations)
+    is physically deleted. Those phantom blocks are the Section-2-style failure
+    mode where every retry regenerates the same invalid cue and burns the budget.
+
     Returns (fixed_code, list_of_applied_fixes).
     """
-    cue_blocks = _split_into_cue_blocks(code)
-    if not cue_blocks:
-        return code, []
-
     applied: list[str] = []
-    fixed_code = code
+    fixed_code, phantom_fixes = _strip_phantom_cue_blocks(code, len(cue_durations))
+    applied.extend(phantom_fixes)
+
+    cue_blocks = _split_into_cue_blocks(fixed_code)
+    if not cue_blocks:
+        return fixed_code, applied
 
     # Process cue blocks in REVERSE order so that rfind() on the full code
     # always matches the correct (last remaining) occurrence when two blocks

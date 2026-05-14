@@ -147,6 +147,12 @@ def check_layout(video_path: str) -> dict:
         logger.warning("[layout_checker] LLM call failed: %s", exc)
         return {"ok": True, "issues": "", "skipped": True, "frames": []}
 
+    # Some providers return None on content-filter blocks or empty replies.
+    # Treat those as "no verdict available" — skip rather than crash downstream.
+    if not response:
+        logger.warning("[layout_checker] LLM returned empty response — skipping")
+        return {"ok": True, "issues": "", "skipped": True, "frames": []}
+
     clean = response.strip()
     if clean.upper() == "OK":
         return {"ok": True, "issues": "", "skipped": False, "frames": frames}

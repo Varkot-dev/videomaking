@@ -165,6 +165,12 @@ def retry_scene(
     llm_fix_calls_used = 0
     seen_error_signatures: set[str] = set()
 
+    # Track the best rendered video across attempts. Later attempts that fail
+    # to render at all must not evict an earlier successful render — otherwise
+    # one bad LLM fix between attempt 2 and 5 drags the section to fallback.
+    best_video_path: str | None = None
+    best_issue_count: int = 10**9
+
     # Timing pass on the initial code — catches freeze-frame tails before the
     # first render attempt at zero cost. (I6 · stable rhythm, I10 · narration contract)
     if cue_durations:
@@ -179,17 +185,32 @@ def retry_scene(
         if result["success"]:
             from manimgen.validator.frame_checker import check_frames
             frame_result = check_frames(result["video_path"])
-            
+
             layout = check_layout(result["video_path"])
-            
-            combined_issues = []
-            if not frame_result.ok:
-                combined_issues.extend(frame_result.issues_text.splitlines())
+
+            # Frozen-frame detection is not a retry trigger: a static frame
+            # during a narration HOLD phase is correct behavior, and retrying
+            # for it was burning the retry budget on already-good renders.
+            # Black frames and edge clipping are still tracked.
+            frame_issues = [
+                issue for issue in (frame_result.issues or [])
+                if "identical — animation appears frozen" not in issue
+            ]
+
+            combined_issues = list(frame_issues)
             if not layout["ok"] and layout["issues"]:
                 combined_issues.extend(layout["issues"].splitlines())
 
             if not combined_issues:
                 return True, result["video_path"]
+
+            # Record this render as the best-so-far if it has fewer issues
+            # than anything we've rendered before. Future failing attempts
+            # can fall back to this instead of triggering a title-card fallback.
+            issue_count = len(combined_issues)
+            if issue_count < best_issue_count:
+                best_video_path = result["video_path"]
+                best_issue_count = issue_count
 
             # Scene rendered but has visual defects. Feed structured feedback
             # back into the retry loop if budget allows.
@@ -200,7 +221,7 @@ def retry_scene(
 
             if llm_fix_calls_used >= MAX_LLM_FIX_CALLS or attempt == MAX_RETRIES:
                 print("[retry] Accepting video despite visual issues (budget or attempt limit reached).")
-                return True, result["video_path"]
+                return True, best_video_path or result["video_path"]
 
             print("[retry] Requesting visual fix from LLM...")
             defective_frames = layout.get("frames", [])
@@ -296,6 +317,11 @@ Original code:
                 for w in timing_warnings:
                     print(f"[retry]   {w}")
 
+    # All attempts exhausted. If an earlier attempt rendered successfully
+    # (even with some visual defects), prefer it over the title-card fallback.
+    if best_video_path:
+        print(f"[retry] All attempts exhausted — shipping best earlier render (had {best_issue_count} visual issue(s)).")
+        return True, best_video_path
     return False, None
 
 

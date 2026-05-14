@@ -229,14 +229,15 @@ class TestVerifyTimingBad:
         """The classic bug: subtracting one iteration instead of all N."""
         code = textwrap.dedent("""\
             # CUE 0 — 4.0s
-            for i in range(5):
-                self.play(ShowCreation(scan_rect), run_time=0.2)
-            self.wait(4.0 - 0.2)
+            for i in range(10):
+                self.play(ShowCreation(scan_rect), run_time=0.3)
+            self.wait(4.0 - 0.3)
         """)
-        # loop = 5 * 0.2 = 1.0, wait = 3.8 → total = 4.8, expected = 4.0 → 0.8s over
+        # loop = 10 * 0.3 = 3.0, wait = 3.7 → total = 6.7, expected = 4.0 → 2.7s over
+        # Tolerance is 1.0s — a 2.7s overrun must still trip verification.
         result = verify_timing(code, [4.0])
         assert not result["ok"]
-        assert result["cues"][0].diff < -0.5  # scene is over-long
+        assert result["cues"][0].diff < -1.0  # scene is over-long by more than tolerance
 
     def test_no_cue_comments_is_not_failure(self):
         code = "self.play(Write(x), run_time=1.0)\nself.wait(2.0)\n"

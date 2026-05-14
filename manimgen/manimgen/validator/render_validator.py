@@ -25,7 +25,11 @@ from manimgen.validator.layout_checker import check_layout
 logger = logging.getLogger(__name__)
 
 # frame_checker issue keywords that classify as hard failures.
-_HARD_KEYWORDS = ("Black/empty frame", "identical — animation appears frozen")  # black + frozen
+# Frozen-frame detection is intentionally NOT hard: a static frame during a
+# narration HOLD phase is correct behavior (the narrator is still talking), and
+# treating it as hard was forcing retries on already-good renders and pushing
+# sections into title-card fallbacks.
+_HARD_KEYWORDS = ("Black/empty frame",)
 
 
 @dataclass
