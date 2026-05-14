@@ -14,3 +14,4 @@ videos/
 .DS_Store
 downloads/
 test_clips/
+.claude/scheduled_tasks.lock
