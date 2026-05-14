@@ -876,6 +876,53 @@ def _check_next_to_stacking(lines: list[str], warnings: list[str]) -> None:
                 break  # one warning per anchor is enough
 
 
+_TOP_EDGE_PLACEMENT_RE = re.compile(
+    r"(?:"
+    r"\b(\w+)\s*=\s*[^#\n]*?\.to_edge\s*\(\s*UP\b"
+    r"|\b(\w+)\s*=\s*[^#\n]*?\.to_corner\s*\(\s*U[LR]\b"
+    r"|\b(\w+)\.animate\.to_edge\s*\(\s*UP\b"
+    r")",
+)
+_FADEOUT_NAMES_RE = re.compile(r"FadeOut\s*\(\s*(\w+)")
+
+
+def _check_top_edge_collision(lines: list[str], warnings: list[str]) -> None:
+    """Warn when 2+ Text/Tex mobjects occupy the title zone without intervening FadeOut.
+
+    The title zone (y > 2.5) holds at most ONE mobject at a time. When a second
+    .to_edge(UP) / .to_corner(UR|UL) / .animate.to_edge(UP) call appears, the
+    code must have FadeOut(prev_var) between the two — otherwise both end up
+    stacked at the top edge and the text overlaps illegibly.
+
+    This was the root cause of the dot-product video's Section 4 (3 titles at
+    UP same y) and Section 6 (residual section title under conclusion) layout
+    bugs. The Director keeps making the same mistake under generation pressure.
+    """
+    pending_top: list[tuple[int, str]] = []  # (line_idx, var_name)
+
+    for i, line in enumerate(lines):
+        # FadeOut() clears matching vars from the pending list.
+        for m in _FADEOUT_NAMES_RE.finditer(line):
+            name = m.group(1)
+            pending_top = [(idx, n) for (idx, n) in pending_top if n != name]
+
+        m = _TOP_EDGE_PLACEMENT_RE.search(line)
+        if not m:
+            continue
+        var = m.group(1) or m.group(2) or m.group(3)
+        if not var:
+            continue
+        if pending_top:
+            other_names = ", ".join(n for _, n in pending_top)
+            warnings.append(
+                f"Line {i+1}: '{var}' placed in title zone (UP edge / UR-UL corner) "
+                f"while prior top-edge mobject(s) ({other_names}) have not been faded out. "
+                f"The title zone holds ONE mobject at a time — add FadeOut({other_names}) "
+                f"before introducing '{var}', or both will visibly overlap."
+            )
+        pending_top.append((i, var))
+
+
 def _check_loop_timing_smells(code: str) -> list[str]:
     """Warn when self.wait() follows a for/while loop body with no timing accumulator.
 
@@ -1036,6 +1083,7 @@ def _check_layout_smells(code: str) -> list[str]:
     lines = code.strip().splitlines()
     _check_next_to_stacking(lines, warnings)
     _check_horizontal_chain_overflow(lines, warnings)
+    _check_top_edge_collision(lines, warnings)
 
     right_anchor_re = re.compile(
         r"\.next_to\(\s*(parabola|axes|graph|curve|surface|table_headers)\s*,\s*RIGHT"
@@ -1054,7 +1102,7 @@ def _check_layout_smells(code: str) -> list[str]:
                 "default font_size=36 (too large). Add "
                 "decimal_number_config={\"font_size\": 24} inside axis_config."
             )
-        if re.search(r"axis_config\s*=\s*\{[^}]*[\"']font_size[\"']", code):
+        if re.search(r"\baxis_config\s*=\s*\{[^{}]*[\"']font_size[\"']", code):
             warnings.append(
                 "font_size passed directly in axis_config will crash (TypeError). "
                 "Nest it inside decimal_number_config: "

@@ -28,6 +28,8 @@ class SectionName(Scene):
 
 **Never show a black screen.** The user must always have something to look at.
 
+**Title-zone exclusivity.** Before placing ANY new mobject at `.to_edge(UP, ...)`, `.to_corner(UR, ...)`, or `.to_corner(UL, ...)`, you MUST `FadeOut(prev)` the existing top-edge mobject first. The title zone (y > 2.5) holds at most ONE mobject at a time. Two un-faded titles at the top end up stacked and produce illegible text-on-text overlap. The same rule applies to `.animate.to_edge(UP)` — animating a second mobject INTO the title zone is a placement, not an exception.
+
 - Only FadeOut an element when something new is about to replace it.
 - If a cue has no major new animation, add a supporting visual instead: a label that appears, an arrow pointing at the key element, `self.play(ShowCreation(SurroundingRectangle(obj, color=YELLOW)))` highlighting what the narrator is describing, a counter updating, a Brace with annotation.
 - The full FadeOut (`FadeOut(m) for m in self.mobjects`) happens **only at the very end of the last cue** — never mid-scene.
@@ -151,6 +153,8 @@ Pick one archetype per scene. Name it in a comment (`# Archetype A`). Compose fr
 ### Archetype C — split-screen layout for COMPARE cues
 
 For COMPARE cues with two panels: put two titles at `.to_edge(UP, buff=0.8).shift(LEFT*3.2)` and `.shift(RIGHT*3.2)` respectively. Each panel occupies x∈[-6.5,-0.2] or x∈[0.2,6.5]. Never use `.to_corner()` for titles — the zone grammar has no corner titles.
+
+**Archetype C uses panel titles only — there is NO center scene title.** The two panel titles ARE the section header. If a center scene title (e.g. from a previous cue) is on screen, you MUST `FadeOut(scene_title)` BEFORE introducing the panel titles. Otherwise all three text mobjects stack at y≈3.4 and the center title visibly overlaps the panel titles where they meet near the middle.
 
 ### Title rule — ALWAYS center, NEVER corner
 
@@ -554,7 +558,7 @@ self.play(
 4. Text over a NumberPlane or busy background → `.set_backstroke(width=8)`.
 5. Short cue (< 2s): one animation + one wait. Don't cram 4 animations.
 6. Long cue (> 8s): chain multiple animations — don't just wait.
-7. **Title + equation NEVER both at top.** If a title exists at `to_edge(UP)` and you also have a LaTeX equation, place the equation below the title: `equation.next_to(title, DOWN, buff=0.4)` — never `.center()` when a title is present. Otherwise they overlap.
+7. **Title + equation NEVER both at top.** If a title exists at `to_edge(UP)` and you also have a LaTeX equation, place the equation below the title: `equation.next_to(title, DOWN, buff=0.4)` — never `.center()` when a title is present. Otherwise they overlap. The "top" zone here means y > 2.5 — that includes `.to_corner(UR)`, `.to_corner(UL)`, and `.shift(UP * N)` with N > 1.5. A dynamic readout placed at `.to_corner(UR)` while a section title sits at `.to_edge(UP)` will visually crowd the top row, so place readouts in the BOTTOM zone (y < -2.8) or below the content area instead.
 8. **Never place multiple dots/labels at the same coordinate.** If you create 3 dots at the same `axes.c2p(x, y)`, they will stack invisibly. Stagger them: place each at a different x value, or reveal them one at a time.
 9. **y_axis_config must always have `"include_numbers": False`.** Add y-axis labels manually as `Text` objects placed with `.next_to(axes.y_axis.n2p(n), LEFT, buff=0.15)`. Never `include_numbers=True` on y_axis — ManimGL rotates them and they pile up.
 10. **In ThreeDScene, ALL Text/Tex/title objects MUST call `.fix_in_frame()` immediately after creation.** Without it, text rotates with the 3D camera and appears diagonal/tilted on screen. No exceptions. Example:
