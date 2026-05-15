@@ -94,6 +94,13 @@ def _extract_cues(plan: dict) -> dict:
             if i < len(existing_cues):
                 entry = dict(existing_cues[i])
                 entry["index"] = i
+                # Reconstruct real LaTeX from the backslash-free `§` notation
+                # the planner is instructed to emit (§ cannot break JSON the
+                # way a raw \ does). Single point where every cue is
+                # normalized before any downstream consumer (Director prompt
+                # build, example selection, 3D promotion) sees it.
+                if isinstance(entry.get("visual"), str):
+                    entry["visual"] = _reconstruct_latex(entry["visual"])
                 cues_out.append(entry)
             else:
                 # Synthesise a minimal fallback so the Director never receives visual: "".
@@ -114,6 +121,22 @@ def _extract_cues(plan: dict) -> dict:
 
 
 from manimgen.utils import strip_fencing as _strip_fencing
+
+# Sentinel the planner is instructed to use in place of a LaTeX backslash,
+# because a raw "\" in a JSON string value silently corrupts or breaks
+# json.loads (\f -> form-feed, \t -> tab, \x -> error). The planner emits
+# "§frac{1}{x}"; we restore "\frac{1}{x}" here so the Director receives
+# normal LaTeX exactly as before. See planner_system.md equations rule.
+_LATEX_BACKSLASH_SENTINEL = "§"
+
+
+def _reconstruct_latex(visual: str) -> str:
+    """Restore real LaTeX backslashes from the planner's `§` sentinel.
+
+    Idempotent for sentinel-free text (plain prose and the synthesised
+    fallback contain no `§`, so they pass through unchanged).
+    """
+    return visual.replace(_LATEX_BACKSLASH_SENTINEL, "\\")
 
 
 def _safe_json_loads(raw: str) -> dict:

@@ -139,7 +139,7 @@ The visual field must give the animator enough information to write exact ManimG
 - **Sorted arrays**: row of Square+Text VGroups arranged RIGHT
 - **Curves**: axes.get_graph() with color — must specify x_range and formula
 - **Highlights**: SurroundingRectangle with color
-- **Equations**: Tex() with raw LaTeX — specify the exact LaTeX string
+- **Equations**: Tex() with LaTeX, but write every LaTeX backslash as the section sign `§` instead of `\`. JSON string values cannot contain a raw backslash, and a literal `\` here will corrupt or break the storyboard. Example: write `Tex(§frac{1}{x})` and `§theta_1 = 3 - 0.1 §cdot §nabla f`, NOT `Tex(\frac{1}{x})`. Use `§` for ALL LaTeX commands (§frac, §theta, §nabla, §cdot, §Rightarrow, §sum, §int, the LaTeX line break §§, etc.). The pipeline converts every `§` back to `\` before rendering, so the math renders exactly as normal LaTeX. Never put a raw `\` anywhere in a visual description.
 - **Text reveals**: Text() objects in VGroup arranged DOWN, revealed via LaggedStart
 - **Moving dots**: ValueTracker + always_redraw Dot on a curve
 - **Area fill**: axes.get_area() with color and x_range
