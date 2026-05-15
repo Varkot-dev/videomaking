@@ -232,15 +232,27 @@ def _run_section(
         success = True
     else:
         code, class_name, scene_path = generate_scenes(section, cue_durations=cue_durations, overview=overview)
+        # Single authoritative timing gate (same pass retry.py uses): verify →
+        # auto-fix → re-verify. If timing issues survive auto-fix, skip the
+        # expensive first render entirely and go straight to the retry path,
+        # which can apply an LLM fix with the timing warnings in context.
+        # This is the zero-cost pre-render gate for freeze-frame tails.
+        timing_blocked = False
         if cue_durations:
-            from manimgen.validator.timing_verifier import verify_timing, auto_fix_timing
-            result = verify_timing(code, cue_durations)
-            if not result.get("ok", True):
-                code, fixes = auto_fix_timing(code, cue_durations)
-                if fixes:
-                    with open(scene_path, "w") as f:
-                        f.write(code)
-        success, video_path = run_scene(scene_path, class_name)
+            from manimgen.validator.retry import apply_timing_gate
+            code, remaining_timing_warnings = apply_timing_gate(code, scene_path, cue_durations)
+            if remaining_timing_warnings:
+                log.warning(
+                    "[manimgen] Unresolvable timing issues after auto-fix — "
+                    "skipping first render, routing to retry: %s",
+                    "; ".join(remaining_timing_warnings),
+                )
+                timing_blocked = True
+
+        if timing_blocked:
+            success, video_path = False, None
+        else:
+            success, video_path = run_scene(scene_path, class_name)
         if success and video_path:
             from manimgen.validator.render_validator import validate_render
             vr = validate_render(video_path, code, scene_path, cue_durations)

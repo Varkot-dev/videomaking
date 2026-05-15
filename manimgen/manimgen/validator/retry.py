@@ -12,6 +12,15 @@ from manimgen import paths
 
 MAX_RETRIES = paths.render_max_retries()
 MAX_LLM_FIX_CALLS = int(os.environ.get("MANIMGEN_MAX_RETRY_LLM_CALLS", str(MAX_RETRIES)))
+# Error fixes and visual fixes draw from independent budgets so an error storm
+# cannot bankrupt visual correction (and vice versa). Both default to
+# MAX_LLM_FIX_CALLS unless separately overridden.
+MAX_ERROR_LLM_FIX_CALLS = int(
+    os.environ.get("MANIMGEN_MAX_ERROR_LLM_CALLS", str(MAX_LLM_FIX_CALLS))
+)
+MAX_VISUAL_LLM_FIX_CALLS = int(
+    os.environ.get("MANIMGEN_MAX_VISUAL_LLM_CALLS", str(MAX_LLM_FIX_CALLS))
+)
 RETRY_ERROR_SIGNATURE_CHARS = 500
 RETRY_PROMPT_STDERR_CHARS = 3000
 RETRY_PROMPT_CODE_CHARS = 7000
@@ -118,7 +127,7 @@ def _truncate_for_prompt(text: str, max_chars: int) -> str:
     )
 
 
-def _apply_timing_pass(
+def apply_timing_gate(
     code: str,
     scene_path: str,
     cue_durations: list[float],
@@ -162,8 +171,13 @@ def retry_scene(
     logs_dir = paths.logs_dir()
     os.makedirs(logs_dir, exist_ok=True)
     system_prompt = _load_retry_system_prompt()
-    llm_fix_calls_used = 0
+    error_llm_calls_used = 0
+    visual_llm_calls_used = 0
     seen_error_signatures: set[str] = set()
+    # Timing warnings carried forward into the next LLM fix prompt so the
+    # model is aware of freeze-frame-tail risk even when it is fixing an
+    # unrelated error. Previously these were only printed and lost.
+    pending_timing_warnings: list[str] = []
 
     # Track the best rendered video across attempts. Later attempts that fail
     # to render at all must not evict an earlier successful render — otherwise
@@ -174,7 +188,7 @@ def retry_scene(
     # Timing pass on the initial code — catches freeze-frame tails before the
     # first render attempt at zero cost. (I6 · stable rhythm, I10 · narration contract)
     if cue_durations:
-        code, initial_timing_warnings = _apply_timing_pass(code, scene_path, cue_durations)
+        code, initial_timing_warnings = apply_timing_gate(code, scene_path, cue_durations)
         if initial_timing_warnings:
             print(f"[retry] {len(initial_timing_warnings)} timing issue(s) found in initial code:")
             for w in initial_timing_warnings:
@@ -186,8 +200,6 @@ def retry_scene(
             from manimgen.validator.frame_checker import check_frames
             frame_result = check_frames(result["video_path"])
 
-            layout = check_layout(result["video_path"])
-
             # Frozen-frame detection is not a retry trigger: a static frame
             # during a narration HOLD phase is correct behavior, and retrying
             # for it was burning the retry budget on already-good renders.
@@ -197,9 +209,18 @@ def retry_scene(
                 if "identical — animation appears frozen" not in issue
             ]
 
+            # Gate the expensive LLM vision check: skip check_layout when the
+            # zero-cost frame_checker already found concrete defects (we have
+            # actionable issues and don't need a paid second opinion). When
+            # frames are clean, run check_layout to catch defects frames can't
+            # see. Detection is never budget-gated.
             combined_issues = list(frame_issues)
-            if not layout["ok"] and layout["issues"]:
-                combined_issues.extend(layout["issues"].splitlines())
+            defective_frames: list[str] = []
+            if not frame_issues:
+                layout = check_layout(result["video_path"])
+                if not layout["ok"] and layout["issues"]:
+                    combined_issues.extend(layout["issues"].splitlines())
+                defective_frames = layout.get("frames", [])
 
             if not combined_issues:
                 return True, result["video_path"]
@@ -219,14 +240,13 @@ def retry_scene(
             for line in combined_issues:
                 print(f"[retry]   {line}")
 
-            if llm_fix_calls_used >= MAX_LLM_FIX_CALLS or attempt == MAX_RETRIES:
+            if visual_llm_calls_used >= MAX_VISUAL_LLM_FIX_CALLS or attempt == MAX_RETRIES:
                 print("[retry] Accepting video despite visual issues (budget or attempt limit reached).")
                 return True, best_video_path or result["video_path"]
 
             print("[retry] Requesting visual fix from LLM...")
-            defective_frames = layout.get("frames", [])
             code = _request_visual_fix(code, "\n".join(combined_issues), system_prompt, defective_frames)
-            llm_fix_calls_used += 1
+            visual_llm_calls_used += 1
             with open(scene_path, "w") as f:
                 f.write(code)
             precheck_and_autofix(scene_path)
@@ -235,7 +255,8 @@ def retry_scene(
                 code = f.read()
             # Timing pass — catch timing bugs in the LLM's visual fix
             if cue_durations:
-                code, _ = _apply_timing_pass(code, scene_path, cue_durations)
+                code, tw = apply_timing_gate(code, scene_path, cue_durations)
+                pending_timing_warnings = tw
             continue
 
         error_type = _classify_error(result["stderr"])
@@ -254,27 +275,35 @@ def retry_scene(
 
         print(f"[retry] Attempt {attempt}/{MAX_RETRIES} failed ({error_type}). Requesting fix...")
 
-        # Stop making token calls after the final failed attempt.
+        # The remaining cases (last attempt, repeated signature, budget
+        # exhausted) all mean: there is no productive LLM fix we can make.
+        # Re-rendering the unchanged code would only burn attempts producing
+        # nothing, so break out (the best-render / fallback logic below
+        # handles delivery) instead of spinning idle iterations.
         if attempt == MAX_RETRIES:
             break
-
-        # Avoid paying tokens repeatedly for the same failure mode.
         if error_signature in seen_error_signatures:
             print(
-                f"[retry] Skipping LLM fix for repeated error signature "
-                f"(attempt {attempt}/{MAX_RETRIES})."
+                f"[retry] Repeated error signature with no deterministic fix "
+                f"available — stopping (attempt {attempt}/{MAX_RETRIES})."
             )
-            continue
-
-        if llm_fix_calls_used >= MAX_LLM_FIX_CALLS:
+            break
+        if error_llm_calls_used >= MAX_ERROR_LLM_FIX_CALLS:
             print(
-                f"[retry] LLM retry budget reached ({MAX_LLM_FIX_CALLS} calls). "
-                f"Skipping token call."
+                f"[retry] Error-fix LLM budget reached "
+                f"({MAX_ERROR_LLM_FIX_CALLS} calls) — stopping."
             )
-            continue
+            break
 
         prompt_stderr = _truncate_for_prompt(result["stderr"], RETRY_PROMPT_STDERR_CHARS)
         prompt_code = _truncate_for_prompt(code, RETRY_PROMPT_CODE_CHARS)
+        timing_context = ""
+        if pending_timing_warnings:
+            timing_context = (
+                "\n\nKnown timing issues detected in this code (fix these too "
+                "to avoid freeze-frame tails):\n- "
+                + "\n- ".join(pending_timing_warnings)
+            )
         fixed = chat(
             system=system_prompt,
             user=f"""This ManimGL scene failed to render. Fix it.
@@ -283,12 +312,12 @@ Error type: {error_type}
 Guidance: {guidance}
 
 Full error:
-{prompt_stderr}
+{prompt_stderr}{timing_context}
 
 Original code:
 {prompt_code}""",
         )
-        llm_fix_calls_used += 1
+        error_llm_calls_used += 1
         seen_error_signatures.add(error_signature)
 
         if fixed.startswith("```"):
@@ -308,11 +337,12 @@ Original code:
         # Timing pass — auto-fix self.wait() values and inject remaining
         # timing warnings into the next attempt's error context.
         if cue_durations:
-            code, timing_warnings = _apply_timing_pass(code, scene_path, cue_durations)
+            code, timing_warnings = apply_timing_gate(code, scene_path, cue_durations)
+            # Carry into the NEXT LLM fix prompt so the model is aware of
+            # freeze-frame-tail risk even while fixing an unrelated error.
+            # Previously these were only printed and silently lost.
+            pending_timing_warnings = timing_warnings
             if timing_warnings:
-                # Prepend timing warnings to the seen context so the next
-                # render attempt (if it fails for other reasons) carries
-                # awareness of the timing issues.
                 print(f"[retry] {len(timing_warnings)} timing warning(s) after auto-fix:")
                 for w in timing_warnings:
                     print(f"[retry]   {w}")

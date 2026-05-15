@@ -384,15 +384,13 @@ Most visible quality issue. Cues often have 1–8 seconds of frozen still at the
 **Root cause:** Director subtracts one iteration's `run_time` instead of `n * run_time`.
 
 **Fix plan:**
-- Director prompt: make the loop timing rule impossible to miss (already has example, but LLM ignores it under pressure — move to top of Cue timing section)
-- `timing_verifier.py` is already built — wire it into the retry loop as a pre-render check
+- Director prompt: make the loop timing rule impossible to miss (already has example, but LLM ignores it under pressure — move to top of Cue timing section) — STILL OPEN
+- ✅ DONE — `timing_verifier` is now a single authoritative gate (`retry.apply_timing_gate`) called as a zero-cost pre-render check in `cli.py`. Unresolvable timing issues skip the first render and route straight to the retry path, with timing warnings carried into the LLM fix prompt.
 
-**Files:** `generator/prompts/director_system.md`, `validator/timing_verifier.py`, `validator/retry.py`
+**Files:** `generator/prompts/director_system.md` (prompt work still open), `validator/timing_verifier.py`, `validator/retry.py`, `cli.py`
 
-### 2. MEDIUM — timing_verifier.py not wired in
-Built and tested but not called anywhere in the pipeline. Should run after codeguard, before rendering, to catch timing mismatches at zero cost.
-
-**Files:** `validator/retry.py` (add call after `precheck_and_autofix`)
+### 2. ✅ RESOLVED — timing_verifier wiring
+`timing_verifier` is wired in via `retry.apply_timing_gate` (verify → auto-fix → re-verify). It runs: (a) once on initial code before the first render in `cli.py`; (b) on initial code in `retry_scene`; (c) after every error fix and visual fix. The previous duplicated ad-hoc copy in `cli.py` was removed in favor of the shared gate. Unresolvable warnings block the first render and force the retry path.
 
 ### 3. MEDIUM — frame_checker.py wiring unclear
 Built with tests but unclear if it's actually called in the retry loop.

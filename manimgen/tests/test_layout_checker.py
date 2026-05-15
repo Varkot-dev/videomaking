@@ -203,9 +203,13 @@ class TestRetryVisualLoop:
         issues = "ISSUE: ghost element | CAUSE: Transform point mismatch | FIX: use FadeOut/FadeIn"
         fixed_code = "from manimlib import *\nclass TestScene(Scene):\n    def construct(self):\n        self.wait(1)\n"
 
-        # Render succeeds but layout fails on first attempt — after visual fix, loop exits (budget gone)
+        # Render succeeds, frame_checker is clean (so the gate consults the
+        # LLM vision check), layout fails → visual fix requested.
+        from manimgen.validator.frame_checker import FrameCheckResult
         with patch("manimgen.validator.retry._run_and_capture",
                    return_value={"success": True, "video_path": "/fake/video.mp4", "stderr": ""}), \
+             patch("manimgen.validator.frame_checker.check_frames",
+                   return_value=FrameCheckResult(ok=True)), \
              patch("manimgen.validator.retry.check_layout",
                    return_value={"ok": False, "issues": issues, "skipped": False}), \
              patch("manimgen.validator.retry.chat", return_value=fixed_code) as mock_chat, \
@@ -213,7 +217,7 @@ class TestRetryVisualLoop:
                    return_value={"ok": True, "stderr": "", "layout_warnings": []}):
             import manimgen.validator.retry as retry_module
             retry_module.MAX_RETRIES = 3
-            retry_module.MAX_LLM_FIX_CALLS = 1
+            retry_module.MAX_VISUAL_LLM_FIX_CALLS = 1
             from manimgen.validator.retry import retry_scene
             retry_scene(self._make_section(), original_code, "TestScene", scene_path)
 
@@ -230,16 +234,111 @@ class TestRetryVisualLoop:
 
         issues = "ISSUE: overlap | CAUSE: stale rect | FIX: recreate rect"
 
+        from manimgen.validator.frame_checker import FrameCheckResult
         with patch("manimgen.validator.retry._run_and_capture",
                    return_value={"success": True, "video_path": "/fake/video.mp4", "stderr": ""}), \
+             patch("manimgen.validator.frame_checker.check_frames",
+                   return_value=FrameCheckResult(ok=True)), \
              patch("manimgen.validator.retry.check_layout",
                    return_value={"ok": False, "issues": issues, "skipped": False}), \
              patch("manimgen.validator.retry.chat") as mock_chat:
             from manimgen.validator import retry as retry_module
-            retry_module.MAX_LLM_FIX_CALLS = 0  # budget exhausted from the start
+            retry_module.MAX_VISUAL_LLM_FIX_CALLS = 0  # visual budget exhausted from the start
             from manimgen.validator.retry import retry_scene
             success, video = retry_scene(self._make_section(), original_code, "TestScene", scene_path)
 
+        # Budget exhausted + defects → ship the best render (remote behavior we
+        # deliberately kept; we dropped the fail-to-fallback approach). No LLM
+        # call is made because the visual budget is zero.
         assert success is True
         assert video == "/fake/video.mp4"
         mock_chat.assert_not_called()
+
+    def test_repeated_error_signature_breaks_instead_of_draining(self, tmp_path):
+        """Bug #1: a repeated unfixable error signature must stop the loop,
+        not spin idle render iterations until MAX_RETRIES is exhausted."""
+        scene_path = str(tmp_path / "scene.py")
+        original_code = "from manimlib import *\nclass TestScene(Scene):\n    BROKEN\n"
+        with open(scene_path, "w") as f:
+            f.write(original_code)
+
+        stderr = "AttributeError: 'Scene' object has no attribute 'frobnicate'"
+        run_mock = MagicMock(
+            return_value={"success": False, "video_path": None, "stderr": stderr}
+        )
+        with patch("manimgen.validator.retry._run_and_capture", run_mock), \
+             patch("manimgen.validator.retry.apply_error_aware_fixes",
+                   return_value=(original_code, [])), \
+             patch("manimgen.validator.retry.precheck_and_autofix",
+                   return_value={"ok": True, "stderr": "", "layout_warnings": []}), \
+             patch("manimgen.validator.retry.chat",
+                   return_value=original_code) as mock_chat:
+            from manimgen.validator import retry as retry_module
+            retry_module.MAX_RETRIES = 6
+            retry_module.MAX_ERROR_LLM_FIX_CALLS = 3
+            from manimgen.validator.retry import retry_scene
+            success, video = retry_scene(self._make_section(), original_code, "TestScene", scene_path)
+
+        assert success is False
+        assert video is None
+        # The LLM is called at most once: the second time the same signature
+        # appears the loop breaks instead of re-rendering unchanged code
+        # repeatedly. Without the fix this would render up to MAX_RETRIES times.
+        assert mock_chat.call_count <= 1
+        assert run_mock.call_count <= 2
+
+    def test_layout_checker_skipped_when_frame_checker_already_flagged(self, tmp_path):
+        """Bug #3: skip the expensive LLM vision check when the zero-cost
+        frame_checker already found concrete (non-frozen) defects."""
+        scene_path = str(tmp_path / "scene.py")
+        original_code = "from manimlib import *\nclass TestScene(Scene):\n    def construct(self): pass\n"
+        with open(scene_path, "w") as f:
+            f.write(original_code)
+
+        from manimgen.validator.frame_checker import FrameCheckResult
+        with patch("manimgen.validator.retry._run_and_capture",
+                   return_value={"success": True, "video_path": "/fake/video.mp4", "stderr": ""}), \
+             patch("manimgen.validator.frame_checker.check_frames",
+                   return_value=FrameCheckResult(ok=False, issues=["Black/empty frame at 2.0s"])), \
+             patch("manimgen.validator.retry.check_layout") as mock_layout, \
+             patch("manimgen.validator.retry.chat") as mock_chat:
+            from manimgen.validator import retry as retry_module
+            retry_module.MAX_VISUAL_LLM_FIX_CALLS = 0
+            from manimgen.validator.retry import retry_scene
+            retry_scene(self._make_section(), original_code, "TestScene", scene_path)
+
+        # frame_checker found a concrete defect → the paid second opinion is
+        # skipped entirely.
+        mock_layout.assert_not_called()
+
+    def test_error_and_visual_budgets_are_independent(self, tmp_path):
+        """An exhausted error budget must NOT prevent a visual fix (and vice
+        versa). The two budgets are tracked separately."""
+        scene_path = str(tmp_path / "scene.py")
+        original_code = "from manimlib import *\nclass TestScene(Scene):\n    def construct(self): pass\n"
+        with open(scene_path, "w") as f:
+            f.write(original_code)
+
+        issues = "ISSUE: ghost | CAUSE: stale | FIX: recreate"
+        fixed_code = "from manimlib import *\nclass TestScene(Scene):\n    def construct(self):\n        self.wait(1)\n"
+
+        from manimgen.validator.frame_checker import FrameCheckResult
+        with patch("manimgen.validator.retry._run_and_capture",
+                   return_value={"success": True, "video_path": "/fake/video.mp4", "stderr": ""}), \
+             patch("manimgen.validator.frame_checker.check_frames",
+                   return_value=FrameCheckResult(ok=True)), \
+             patch("manimgen.validator.retry.check_layout",
+                   return_value={"ok": False, "issues": issues, "skipped": False}), \
+             patch("manimgen.validator.retry.chat", return_value=fixed_code) as mock_chat, \
+             patch("manimgen.validator.retry.precheck_and_autofix",
+                   return_value={"ok": True, "stderr": "", "layout_warnings": []}):
+            from manimgen.validator import retry as retry_module
+            retry_module.MAX_RETRIES = 3
+            retry_module.MAX_ERROR_LLM_FIX_CALLS = 0   # error budget fully spent
+            retry_module.MAX_VISUAL_LLM_FIX_CALLS = 1  # visual budget still available
+            from manimgen.validator.retry import retry_scene
+            retry_scene(self._make_section(), original_code, "TestScene", scene_path)
+
+        # Despite zero error budget, the visual fix path still fired.
+        mock_chat.assert_called_once()
+        assert issues in mock_chat.call_args.kwargs["user"]
