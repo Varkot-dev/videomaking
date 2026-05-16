@@ -290,6 +290,10 @@ def plan_lesson(topic: str) -> dict:
     raw = chat(system=system, user=user_message)
     plan = _cap_sections(_safe_json_loads(_strip_fencing(raw)), _MAX_SECTIONS_TOPIC)
     plan = _self_correct(plan)
+    # _self_correct wholesale-replaces `plan` with the critic LLM's output,
+    # which can re-inflate section count past the cap. Re-assert the
+    # invariant so "≤ _MAX_SECTIONS_TOPIC sections" holds unconditionally.
+    plan = _cap_sections(plan, _MAX_SECTIONS_TOPIC)
     return _extract_cues(plan)
 
 
