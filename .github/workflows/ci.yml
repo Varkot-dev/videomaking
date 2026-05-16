@@ -43,7 +43,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: System libs to build manim native deps (manimpango/pangocairo) + GL
+      - name: System libs — manim native build deps (pangocairo) + GL + FFmpeg (ffprobe)
         # manimgl pulls OpenGL/GLU; tests don't render but DO import manimlib.
         run: >
           sudo apt-get update &&
@@ -52,6 +52,7 @@ jobs:
           libpango1.0-dev
           libcairo2-dev
           libgl1 libglu1-mesa libegl1
+          ffmpeg
       - name: Install dependencies
         run: |
           pip install --upgrade pip
@@ -73,7 +74,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: System libs to build manim native deps (manimpango/pangocairo) + GL
+      - name: System libs — manim native build deps (pangocairo) + GL + FFmpeg (ffprobe)
         run: >
           sudo apt-get update &&
           sudo apt-get install -y
@@ -81,6 +82,7 @@ jobs:
           libpango1.0-dev
           libcairo2-dev
           libgl1 libglu1-mesa libegl1
+          ffmpeg
       - name: Install dependencies
         run: |
           pip install --upgrade pip
