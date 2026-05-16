@@ -298,3 +298,46 @@ class TestAutoFixTiming:
         result = verify_timing(fixed, [3.0, 5.0])
         # After fix, both should be within tolerance
         assert result["ok"]
+
+
+# -----------------------------------------------------------------------
+# apply_timing_gate — the single authoritative timing gate shared by
+# retry.py and cli.py. Non-empty returned warnings trigger the cli.py
+# zero-cost pre-render gate (skip first render, route to retry).
+# -----------------------------------------------------------------------
+
+
+class TestApplyTimingGate:
+    def test_clean_code_passes_through_no_warnings(self, tmp_path):
+        from manimgen.validator.retry import apply_timing_gate
+
+        code = textwrap.dedent("""\
+            # CUE 0 — 2.0s
+            self.play(Write(title), run_time=1.0)
+            self.wait(1.0)
+        """)
+        scene_path = str(tmp_path / "scene.py")
+        with open(scene_path, "w") as f:
+            f.write(code)
+
+        out_code, warnings = apply_timing_gate(code, scene_path, [2.0])
+        assert warnings == []
+        assert out_code == code
+
+    def test_unresolvable_issue_returns_warnings_to_trigger_gate(self, tmp_path):
+        from manimgen.validator.retry import apply_timing_gate
+
+        # run_time bound to a dynamic variable the static verifier cannot
+        # resolve — auto-fix cannot safely adjust it, so warnings persist and
+        # the cli pre-render gate will route this to the retry path.
+        code = textwrap.dedent("""\
+            # CUE 0 — 5.0s
+            rt = compute_runtime()
+            self.play(Write(title), run_time=rt)
+        """)
+        scene_path = str(tmp_path / "scene.py")
+        with open(scene_path, "w") as f:
+            f.write(code)
+
+        out_code, warnings = apply_timing_gate(code, scene_path, [5.0])
+        assert warnings, "unresolvable timing must surface warnings to gate the render"
