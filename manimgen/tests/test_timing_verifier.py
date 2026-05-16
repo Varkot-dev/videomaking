@@ -6,7 +6,9 @@ import pytest
 from manimgen.validator.timing_verifier import (
     CueTiming,
     auto_fix_timing,
+    blocking_freezes,
     verify_timing,
+    _FREEZE_BLOCK_THRESHOLD,
     _eval_constant,
     _split_into_cue_blocks,
     _time_for_statements,
@@ -341,3 +343,50 @@ class TestApplyTimingGate:
 
         out_code, warnings = apply_timing_gate(code, scene_path, [5.0])
         assert warnings, "unresolvable timing must surface warnings to gate the render"
+
+
+class TestBlockingFreezes:
+    """The hard timing gate: a cue whose animation finishes >= the threshold
+    before its narration is a multi-second dead screen that must BLOCK render
+    acceptance. Sub-threshold shortfalls and overruns must NOT block."""
+
+    def _result(self, cues):
+        # mimic verify_timing's return shape
+        return {"ok": False, "cues": cues, "warnings": []}
+
+    def test_threshold_default_is_2_5s(self):
+        assert _FREEZE_BLOCK_THRESHOLD == 2.5
+
+    def test_big_freeze_tail_is_blocking(self):
+        # animation 5.5s vs narration 9.5s -> 4.0s frozen tail (the real bug)
+        cues = [CueTiming(cue_index=0, expected=9.5, computed=5.5)]
+        blocked = blocking_freezes(self._result(cues))
+        assert len(blocked) == 1
+        assert "CUE 0" in blocked[0]
+        assert "4.00s frozen tail" in blocked[0]
+
+    def test_sub_threshold_shortfall_not_blocking(self):
+        # 1.5s short — annoying but below the 2.5s block threshold; the muxer
+        # pads it and retrying for it caused documented thrash.
+        cues = [CueTiming(cue_index=0, expected=6.0, computed=4.5)]
+        assert blocking_freezes(self._result(cues)) == []
+
+    def test_overrun_not_blocking(self):
+        # animation LONGER than narration (negative diff) — muxer trims video
+        # to audio; not a dead screen, must not block.
+        cues = [CueTiming(cue_index=1, expected=4.0, computed=9.0)]
+        assert blocking_freezes(self._result(cues)) == []
+
+    def test_only_offending_cues_reported(self):
+        cues = [
+            CueTiming(cue_index=0, expected=5.0, computed=4.8),  # fine
+            CueTiming(cue_index=1, expected=12.0, computed=3.0),  # 9s freeze
+            CueTiming(cue_index=2, expected=6.0, computed=10.0),  # overrun
+        ]
+        blocked = blocking_freezes(self._result(cues))
+        assert len(blocked) == 1
+        assert "CUE 1" in blocked[0]
+
+    def test_empty_result_is_safe(self):
+        assert blocking_freezes({"ok": True, "cues": [], "warnings": []}) == []
+        assert blocking_freezes({}) == []
