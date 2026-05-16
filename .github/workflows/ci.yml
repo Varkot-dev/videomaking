@@ -1,0 +1,100 @@
+name: CI
+
+# Hardened gate: every PR to main and every push to main must pass ALL jobs.
+# Designed so a regression cannot land silently — the failures this repo used
+# to hide behind a curated `--ignore` pytest command now fail the build.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: manimgen
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install ruff
+        run: pip install ruff==0.15.13
+      - name: ruff check (manimgen/ source — strict, ruff.toml allowlist)
+        run: ruff check manimgen/
+      - name: ruff format --check (manimgen/ source)
+        run: ruff format --check manimgen/
+
+  test:
+    name: Full test suite (no ignores)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: System libs — manim native build deps (pangocairo) + GL + FFmpeg (ffprobe)
+        # manimgl pulls OpenGL/GLU; tests don't render but DO import manimlib.
+        run: >
+          sudo apt-get update &&
+          sudo apt-get install -y
+          pkg-config
+          libpango1.0-dev
+          libcairo2-dev
+          libgl1 libglu1-mesa libegl1
+          ffmpeg
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-mock hypothesis
+          pip install -e .
+      - name: Run the ENTIRE suite — zero --ignore flags
+        # This is the core of the hardening: the previously-hidden
+        # failures (test_caps_overshooting_llm, the stale e2e test) are
+        # fixed/xfail-strict, so a green run here is an honest green.
+        # --strict-markers ensures the xfail marker can't silently rot.
+        run: python3 -m pytest tests/ -q --strict-markers --maxfail=1
+
+  smoke:
+    name: Mocked-LLM pipeline smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: System libs — manim native build deps (pangocairo) + GL + FFmpeg (ffprobe)
+        run: >
+          sudo apt-get update &&
+          sudo apt-get install -y
+          pkg-config
+          libpango1.0-dev
+          libcairo2-dev
+          libgl1 libglu1-mesa libegl1
+          ffmpeg
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-mock hypothesis
+          pip install -e .
+      - name: Pipeline contract + Director smoke (mocked LLM, zero API cost)
+        # The real behavioral signal here is test_pipeline_contracts (A/V
+        # sync invariants) + test_director (planner->Director->scene-gen
+        # wiring), all LLM/subprocess calls mocked. test_pipeline_e2e is
+        # included but is currently xfail(strict) — it contributes failure-
+        # tracking, not a positive assertion, until its 3 documented stale
+        # mock layers are repaired. A wiring regression in the contract or
+        # director tests fails here without any API key or render.
+        run: python3 -m pytest tests/test_pipeline_contracts.py tests/test_pipeline_e2e.py tests/test_director.py -q --strict-markers

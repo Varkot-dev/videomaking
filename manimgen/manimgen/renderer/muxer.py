@@ -67,19 +67,24 @@ def mux_audio_video(video_path: str, audio_path: str, output_path: str) -> str:
         logger.warning(
             "[muxer] Duration mismatch: video=%.3fs audio=%.3fs diff=%.3fs — "
             "check cue placement or scene render timing.",
-            video_dur, audio_dur, diff,
+            video_dur,
+            audio_dur,
+            diff,
         )
-        _mismatch_log.append({
-            "output_path": output_path,
-            "video_dur": video_dur,
-            "audio_dur": audio_dur,
-            "diff": diff,
-        })
+        _mismatch_log.append(
+            {
+                "output_path": output_path,
+                "video_dur": video_dur,
+                "audio_dur": audio_dur,
+                "diff": diff,
+            }
+        )
     if diff > 1.5:
         logger.warning(
             "[muxer] LARGE MISMATCH (%.3fs) — last %.1fs of this cue will be a freeze-frame. "
             "Director likely miscalculated loop timing. Check loop wait() calls in the scene.",
-            diff, diff,
+            diff,
+            diff,
         )
 
     if audio_dur > video_dur:
@@ -94,6 +99,7 @@ def mux_audio_video(video_path: str, audio_path: str, output_path: str) -> str:
 # Strategy implementations
 # ---------------------------------------------------------------------------
 
+
 def _mux_pad_audio(
     video_path: str,
     audio_path: str,
@@ -102,16 +108,24 @@ def _mux_pad_audio(
 ) -> None:
     """Mux video + audio, padding audio with silence to match video duration."""
     cmd = [
-        "ffmpeg", "-y",
-        "-i", video_path,
-        "-i", audio_path,
+        "ffmpeg",
+        "-y",
+        "-i",
+        video_path,
+        "-i",
+        audio_path,
         "-filter_complex",
         f"[1:a]apad=whole_dur={video_dur:.6f}[a]",
-        "-map", "0:v",
-        "-map", "[a]",
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-t", f"{video_dur:.6f}",
+        "-map",
+        "0:v",
+        "-map",
+        "[a]",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-t",
+        f"{video_dur:.6f}",
         output_path,
     ]
     _run(cmd, output_path)
@@ -127,17 +141,25 @@ def _mux_freeze_video(
     video_dur = _get_duration(video_path)
     pad_secs = max(0.0, audio_dur - video_dur)
     cmd = [
-        "ffmpeg", "-y",
-        "-i", video_path,
-        "-i", audio_path,
+        "ffmpeg",
+        "-y",
+        "-i",
+        video_path,
+        "-i",
+        audio_path,
         "-filter_complex",
         # tpad stop_duration = gap only, not total audio duration
         f"[0:v]tpad=stop_mode=clone:stop_duration={pad_secs:.6f}[v]",
-        "-map", "[v]",
-        "-map", "1:a",
-        "-c:v", "libx264",
-        "-c:a", "aac",
-        "-t", f"{audio_dur:.6f}",
+        "-map",
+        "[v]",
+        "-map",
+        "1:a",
+        "-c:v",
+        "libx264",
+        "-c:a",
+        "aac",
+        "-t",
+        f"{audio_dur:.6f}",
         output_path,
     ]
     _run(cmd, output_path)
@@ -147,14 +169,19 @@ def _mux_freeze_video(
 # Shared helpers
 # ---------------------------------------------------------------------------
 
+
 def _get_duration(path: str) -> float:
     """Return media duration in seconds via ffprobe."""
     try:
         result = subprocess.run(
             [
-                "ffprobe", "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "json",
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "json",
                 path,
             ],
             capture_output=True,
@@ -174,9 +201,7 @@ def _get_duration(path: str) -> float:
 def _run(cmd: list[str], output_path: str) -> None:
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        raise RuntimeError(
-            f"[muxer] ffmpeg failed for {output_path}:\n{result.stderr}"
-        )
+        raise RuntimeError(f"[muxer] ffmpeg failed for {output_path}:\n{result.stderr}")
 
 
 # ---------------------------------------------------------------------------
@@ -188,14 +213,26 @@ _MAX_PARALLEL_CUTS = min(4, (os.cpu_count() or 1))
 
 def _cut_one(video_path: str, start: float, dur: float, out_path: str, i: int) -> str:
     from manimgen import paths as _paths
+
     cmd = [
-        "ffmpeg", "-y",
-        "-i", video_path,
-        "-ss", f"{start:.6f}",
-        "-t", f"{dur:.6f}",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-        "-pix_fmt", "yuv420p",
-        "-r", str(_paths.render_fps()),
+        "ffmpeg",
+        "-y",
+        "-i",
+        video_path,
+        "-ss",
+        f"{start:.6f}",
+        "-t",
+        f"{dur:.6f}",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "18",
+        "-pix_fmt",
+        "yuv420p",
+        "-r",
+        str(_paths.render_fps()),
         "-an",
         out_path,
     ]
@@ -203,7 +240,13 @@ def _cut_one(video_path: str, start: float, dur: float, out_path: str, i: int) -
     if result.returncode != 0:
         logger.error("[cutter] FFmpeg failed for cue %d: %s", i, result.stderr[-500:])
         raise RuntimeError(f"cutter failed for cue {i}: {result.stderr[-200:]}")
-    logger.info("[cutter] Cut cue %d: %.2f–%.2f → %s", i, start, start + dur, os.path.basename(out_path))
+    logger.info(
+        "[cutter] Cut cue %d: %.2f–%.2f → %s",
+        i,
+        start,
+        start + dur,
+        os.path.basename(out_path),
+    )
     return out_path
 
 

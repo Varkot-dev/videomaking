@@ -23,7 +23,7 @@ from manimgen.types import CueSegment
 
 logger = logging.getLogger(__name__)
 
-_MIN_SEGMENT_DURATION = 0.5   # warn if a cue segment is shorter than this
+_MIN_SEGMENT_DURATION = 0.5  # warn if a cue segment is shorter than this
 
 
 def slice_audio(
@@ -82,7 +82,8 @@ def slice_audio(
             logger.warning(
                 "[slicer] Segment %d is very short (%.2fs) — "
                 "audio may sound clipped. Consider adjusting cue placement.",
-                seg.cue_index, seg.duration,
+                seg.cue_index,
+                seg.duration,
             )
 
         # Segment 0: start from 0.0 to preserve natural pre-speech silence.
@@ -106,6 +107,7 @@ def slice_audio(
 # ---------------------------------------------------------------------------
 # FFmpeg helpers
 # ---------------------------------------------------------------------------
+
 
 def _check_ffmpeg() -> None:
     """Raise RuntimeError if ffmpeg is not on PATH."""
@@ -139,40 +141,48 @@ def _ffmpeg_slice(
     assembler both expect AAC input so this is fully compatible.
     """
     cmd = [
-        "ffmpeg", "-y",
-        "-ss", f"{start:.6f}",
-        "-i", input_path,
+        "ffmpeg",
+        "-y",
+        "-ss",
+        f"{start:.6f}",
+        "-i",
+        input_path,
     ]
     if end is not None:
-        cmd += ["-t", f"{end - start:.6f}"]   # -t is duration, not end time
+        cmd += ["-t", f"{end - start:.6f}"]  # -t is duration, not end time
 
     cmd += [
-        "-c:a", "aac",
-        "-ar", "48000",
-        "-ac", "1",
-        "-avoid_negative_ts", "make_zero",
+        "-c:a",
+        "aac",
+        "-ar",
+        "48000",
+        "-ac",
+        "1",
+        "-avoid_negative_ts",
+        "make_zero",
         output_path,
     ]
 
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        raise RuntimeError(
-            f"ffmpeg slice failed for {output_path}:\n{result.stderr}"
-        )
+        raise RuntimeError(f"ffmpeg slice failed for {output_path}:\n{result.stderr}")
 
 
 def _ffmpeg_copy(input_path: str, output_path: str) -> None:
     """Re-encode a full audio file to AAC 48kHz (single-segment fast path)."""
     cmd = [
-        "ffmpeg", "-y",
-        "-i", input_path,
-        "-c:a", "aac",
-        "-ar", "48000",
-        "-ac", "1",
+        "ffmpeg",
+        "-y",
+        "-i",
+        input_path,
+        "-c:a",
+        "aac",
+        "-ar",
+        "48000",
+        "-ac",
+        "1",
         output_path,
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        raise RuntimeError(
-            f"ffmpeg encode failed for {output_path}:\n{result.stderr}"
-        )
+        raise RuntimeError(f"ffmpeg encode failed for {output_path}:\n{result.stderr}")

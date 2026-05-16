@@ -146,7 +146,9 @@ def parse_pdf(pdf_path: str) -> dict:
         try:
             text = page.extract_text() or ""
         except Exception as exc:
-            warnings.warn(f"[pdf_parser] Could not extract text from page {i + 1}: {exc}")
+            warnings.warn(
+                f"[pdf_parser] Could not extract text from page {i + 1}: {exc}"
+            )
             text = ""
 
         if not text.strip():
@@ -167,7 +169,12 @@ def parse_pdf(pdf_path: str) -> dict:
 
     if not page_texts:
         warnings.warn("[pdf_parser] No text extracted — returning page renders only.")
-        return {"raw_text": "", "chunks": [], "extracted_pages": 0, "images": all_images}
+        return {
+            "raw_text": "",
+            "chunks": [],
+            "extracted_pages": 0,
+            "images": all_images,
+        }
 
     joined = "\n\n".join(page_texts)
     raw_text = _clean_text(joined)
@@ -187,8 +194,6 @@ def parse_pdf(pdf_path: str) -> dict:
 
 
 if __name__ == "__main__":
-    import json
-
     if len(sys.argv) < 2:
         print("Usage: python pdf_parser.py <path/to/file.pdf>")
         sys.exit(1)
@@ -199,7 +204,6 @@ if __name__ == "__main__":
     print(f"Raw text length : {len(result['raw_text'])} chars")
     print("\n--- First chunk preview ---")
     print(result["chunks"][0][:500] if result["chunks"] else "(none)")
-
 
 
 # ---------------------------------------------------------------------------

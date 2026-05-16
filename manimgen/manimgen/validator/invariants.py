@@ -18,15 +18,15 @@ from typing import Callable
 
 
 class Severity(enum.Enum):
-    ERROR = "error"      # blocks render; retry LLM sees it via precheck stderr
+    ERROR = "error"  # blocks render; retry LLM sees it via precheck stderr
     WARNING = "warning"  # logged to pipeline output; surfaced to retry LLM
 
 
 @dataclass(frozen=True)
 class Invariant:
-    id: str                              # stable ID, e.g. "I1_mobject_explosion"
+    id: str  # stable ID, e.g. "I1_mobject_explosion"
     severity: Severity
-    check: Callable[[str], list[str]]    # returns [] if ok, else list of messages
+    check: Callable[[str], list[str]]  # returns [] if ok, else list of messages
 
 
 # ── Individual invariant checks ──────────────────────────────────────────────
@@ -36,10 +36,12 @@ class Invariant:
 # Canonical design-system constants. Centralized here so changing the scale
 # is a one-line edit, not a scattered grep.
 _CANONICAL_FONT_SIZES = frozenset({48, 44, 36, 28, 22, 20, 18})
-_SANCTIONED_HEXES = frozenset({
-    "#1C1C1C",   # render background (manimgl -c flag)
-    "#2a2a2a",   # STRUCT fill — design-system-sanctioned, see director_system.md
-})
+_SANCTIONED_HEXES = frozenset(
+    {
+        "#1C1C1C",  # render background (manimgl -c flag)
+        "#2a2a2a",  # STRUCT fill — design-system-sanctioned, see director_system.md
+    }
+)
 # Role constants: raw usage flagged so the Director uses role-semantic wrappers
 # (colors as roles, not raw constants). RED/GREEN/YELLOW have strong semantic
 # meaning in a design system; we want the LLM to name the role it's invoking.
@@ -160,7 +162,7 @@ def _I7_threed_fix_in_frame(code: str) -> list[str]:
         m = assign_re.match(line)
         if not m:
             continue
-        lookahead = "\n".join(lines[i + 1: i + 6])
+        lookahead = "\n".join(lines[i + 1 : i + 6])
         if ".fix_in_frame()" not in lookahead:
             warnings.append(
                 f"I7: ThreeDScene: '{m.group(1)}' (line {i + 1}) has no "
@@ -228,16 +230,15 @@ def _I2_corner_title(code: str) -> list[str]:
 INVARIANTS: tuple[Invariant, ...] = (
     # Errors — block the render
     Invariant("I1_mobject_explosion", Severity.ERROR, _I1_mobject_explosion),
-
     # Warnings — surface guidance without blocking
-    Invariant("I2_zone_grammar",       Severity.WARNING, _I2_zone_grammar),
-    Invariant("I2_corner_title",       Severity.WARNING, _I2_corner_title),
-    Invariant("I3_raw_hex",            Severity.WARNING, _I3_raw_hex),
-    Invariant("I3_role_constants",     Severity.WARNING, _I3_role_constants),
-    Invariant("I4_font_size_scale",    Severity.WARNING, _I4_font_size_scale),
+    Invariant("I2_zone_grammar", Severity.WARNING, _I2_zone_grammar),
+    Invariant("I2_corner_title", Severity.WARNING, _I2_corner_title),
+    Invariant("I3_raw_hex", Severity.WARNING, _I3_raw_hex),
+    Invariant("I3_role_constants", Severity.WARNING, _I3_role_constants),
+    Invariant("I4_font_size_scale", Severity.WARNING, _I4_font_size_scale),
     Invariant("I5_missing_final_fadeout", Severity.WARNING, _I5_missing_final_fadeout),
     Invariant("I7_threed_fix_in_frame", Severity.WARNING, _I7_threed_fix_in_frame),
-    Invariant("I9_mobject_density",    Severity.WARNING, _I9_mobject_density),
+    Invariant("I9_mobject_density", Severity.WARNING, _I9_mobject_density),
 )
 
 

@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 # Try to import PIL — fallback gracefully if not installed
 try:
     from PIL import Image, ImageStat
+
     _HAS_PIL = True
 except ImportError:
     _HAS_PIL = False
@@ -49,16 +50,17 @@ class FrameCheckResult:
 # Configuration
 # ---------------------------------------------------------------------------
 
-_BLACK_THRESHOLD = 15          # mean pixel value below this → "black frame"
-_EDGE_MARGIN_PX = 12          # pixels from edge to check for clipping
+_BLACK_THRESHOLD = 15  # mean pixel value below this → "black frame"
+_EDGE_MARGIN_PX = 12  # pixels from edge to check for clipping
 _EDGE_BRIGHTNESS_THRESHOLD = 30  # pixels brighter than this near edges → clipping risk
-_FROZEN_SIMILARITY = 0.98     # fraction of identical pixels for "frozen" detection
+_FROZEN_SIMILARITY = 0.98  # fraction of identical pixels for "frozen" detection
 _BACKGROUND_COLOR = (28, 28, 28)  # #1C1C1C — the pipeline's dark background
 
 
 # ---------------------------------------------------------------------------
 # Frame extraction
 # ---------------------------------------------------------------------------
+
 
 def _extract_frame_pil(video_path: str, timestamp: float) -> "Image.Image | None":
     """Extract a single frame as a PIL Image."""
@@ -71,11 +73,16 @@ def _extract_frame_pil(video_path: str, timestamp: float) -> "Image.Image | None
     try:
         result = subprocess.run(
             [
-                "ffmpeg", "-y",
-                "-ss", str(timestamp),
-                "-i", video_path,
-                "-frames:v", "1",
-                "-q:v", "2",
+                "ffmpeg",
+                "-y",
+                "-ss",
+                str(timestamp),
+                "-i",
+                video_path,
+                "-frames:v",
+                "1",
+                "-q:v",
+                "2",
                 tmp_path,
             ],
             capture_output=True,
@@ -85,7 +92,9 @@ def _extract_frame_pil(video_path: str, timestamp: float) -> "Image.Image | None
             return None
         return Image.open(tmp_path).convert("RGB")
     except Exception as exc:
-        logger.debug("[frame_checker] Frame extraction failed at %.2fs: %s", timestamp, exc)
+        logger.debug(
+            "[frame_checker] Frame extraction failed at %.2fs: %s", timestamp, exc
+        )
         return None
     finally:
         if os.path.exists(tmp_path):
@@ -100,9 +109,13 @@ def _get_video_duration(video_path: str) -> float | None:
     try:
         result = subprocess.run(
             [
-                "ffprobe", "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1",
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
                 video_path,
             ],
             capture_output=True,
@@ -119,6 +132,7 @@ def _get_video_duration(video_path: str) -> float | None:
 # ---------------------------------------------------------------------------
 # Individual checks
 # ---------------------------------------------------------------------------
+
 
 def _check_black_frame(img: "Image.Image", timestamp: float) -> str | None:
     """Return an issue string if the frame is effectively black."""
@@ -157,7 +171,9 @@ def _check_edge_clipping(img: "Image.Image", timestamp: float) -> str | None:
         bright_count = 0
         for r, g, b in pixels:
             # Count pixels that are significantly brighter than background
-            if (abs(r - bg_r) + abs(g - bg_g) + abs(b - bg_b)) > _EDGE_BRIGHTNESS_THRESHOLD * 3:
+            if (
+                abs(r - bg_r) + abs(g - bg_g) + abs(b - bg_b)
+            ) > _EDGE_BRIGHTNESS_THRESHOLD * 3:
                 bright_count += 1
         # If more than 5% of edge pixels are bright, something may be clipped
         if bright_count > len(pixels) * 0.05:
@@ -215,6 +231,7 @@ def _check_frozen_frames(
 # Scene-guided frame sampling
 # ---------------------------------------------------------------------------
 
+
 def _scene_guided_timestamps(video_path: str, duration: float) -> list[float]:
     """Return frame timestamps guided by detected scene cuts.
 
@@ -225,12 +242,20 @@ def _scene_guided_timestamps(video_path: str, duration: float) -> list[float]:
     """
     import re as _re
     import subprocess as _sp
+
     fallback = [duration * 0.25, duration * 0.50, duration * 0.75]
     try:
         cmd = [
-            "ffmpeg", "-i", video_path,
-            "-vf", r"select=gt(scene\,0.35),showinfo",
-            "-vsync", "vfr", "-f", "null", "-",
+            "ffmpeg",
+            "-i",
+            video_path,
+            "-vf",
+            r"select=gt(scene\,0.35),showinfo",
+            "-vsync",
+            "vfr",
+            "-f",
+            "null",
+            "-",
         ]
         result = _sp.run(cmd, capture_output=True, text=True, timeout=30)
         pts_times = [float(m) for m in _re.findall(r"pts_time:([\d.]+)", result.stderr)]
@@ -253,6 +278,7 @@ def _scene_guided_timestamps(video_path: str, duration: float) -> list[float]:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def check_frames(video_path: str) -> FrameCheckResult:
     """Run deterministic frame checks on a rendered video.
@@ -315,7 +341,9 @@ def check_frames(video_path: str) -> FrameCheckResult:
             unique_issues.append(issue)
 
     if unique_issues:
-        logger.info("[frame_checker] Found %d issue(s) in %s", len(unique_issues), video_path)
+        logger.info(
+            "[frame_checker] Found %d issue(s) in %s", len(unique_issues), video_path
+        )
         return FrameCheckResult(ok=False, issues=unique_issues)
 
     return FrameCheckResult(ok=True)

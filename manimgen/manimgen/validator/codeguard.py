@@ -4,7 +4,6 @@ from typing import Any
 
 from manimgen.validator.invariants import run_all as _run_invariants
 
-
 _CANONICAL_FONT_SIZES = (48, 44, 36, 28, 22, 20, 18)
 
 
@@ -34,20 +33,44 @@ def _fix_font_size_to_scale(code: str) -> tuple[str, list[str]]:
 
 
 _BANNED_PATTERNS: list[tuple[str, str]] = [
-    (r"\bfrom\s+manim\s+import\s+\*", "Use `from manimlib import *`, not `from manim import *`."),
+    (
+        r"\bfrom\s+manim\s+import\s+\*",
+        "Use `from manimlib import *`, not `from manim import *`.",
+    ),
     (r"\bMathTex\s*\(", "Use `Tex(...)` in ManimGL, not `MathTex(...)`."),
     (r"\bCreate\s*\(", "Use `ShowCreation(...)` in ManimGL, not `Create(...)`."),
     (r"\bself\.camera\.frame\b", "Use `self.frame`, not `self.camera.frame`."),
     (r"\btip_length\s*=", "Remove `tip_length`; ManimGL Arrow does not support it."),
     (r"\btip_width\s*=", "Remove `tip_width`; ManimGL Arrow does not support it."),
     (r"\btip_shape\s*=", "Remove `tip_shape`; ManimGL Arrow does not support it."),
-    (r"\bcorner_radius\s*=", "Remove `corner_radius`; SurroundingRectangle does not support it."),
-    (r"Arrow\(\s*ORIGIN\s*,\s*ORIGIN\s*[,)]", "Arrow start/end cannot be the same point."),
-    (r"\.get_tex_string\s*\(", "Never call .get_tex_string() to read back values — store data in a plain Python list instead (e.g. current_values = [5, 3, 8, 1]) and compare current_values[i] > current_values[j]. Never read values back from Tex/Text mobjects."),
-    (r"\.set_fill_color\s*\(", "Use .set_fill(color) not .set_fill_color(). ManimGL: obj.set_fill(RED, opacity=1)."),
-    (r"\.set_text\s*\(", "Text has no set_text() method in ManimGL. To update a counter label: create a new Text(...) and use FadeOut(old), FadeIn(new) or ReplacementTransform(old, new)."),
-    (r"\bscale_factor\s*=", "Remove `scale_factor`; FadeIn/FadeOut in ManimGL does not support it."),
-    (r"\bCircumscribe\s*\(", "Use `FlashAround(...)` in ManimGL, not `Circumscribe(...)`."),
+    (
+        r"\bcorner_radius\s*=",
+        "Remove `corner_radius`; SurroundingRectangle does not support it.",
+    ),
+    (
+        r"Arrow\(\s*ORIGIN\s*,\s*ORIGIN\s*[,)]",
+        "Arrow start/end cannot be the same point.",
+    ),
+    (
+        r"\.get_tex_string\s*\(",
+        "Never call .get_tex_string() to read back values — store data in a plain Python list instead (e.g. current_values = [5, 3, 8, 1]) and compare current_values[i] > current_values[j]. Never read values back from Tex/Text mobjects.",
+    ),
+    (
+        r"\.set_fill_color\s*\(",
+        "Use .set_fill(color) not .set_fill_color(). ManimGL: obj.set_fill(RED, opacity=1).",
+    ),
+    (
+        r"\.set_text\s*\(",
+        "Text has no set_text() method in ManimGL. To update a counter label: create a new Text(...) and use FadeOut(old), FadeIn(new) or ReplacementTransform(old, new).",
+    ),
+    (
+        r"\bscale_factor\s*=",
+        "Remove `scale_factor`; FadeIn/FadeOut in ManimGL does not support it.",
+    ),
+    (
+        r"\bCircumscribe\s*\(",
+        "Use `FlashAround(...)` in ManimGL, not `Circumscribe(...)`.",
+    ),
     (
         r"self\.frame\.\s*set_light",
         "self.frame has no set_light method. Light is on self.camera: "
@@ -111,8 +134,12 @@ _BANNED_PATTERNS: list[tuple[str, str]] = [
 ]
 
 _BANNED_KWARGS = [
-    "tip_length", "tip_width", "tip_shape", "corner_radius",
-    "scale_factor", "target_position",
+    "tip_length",
+    "tip_width",
+    "tip_shape",
+    "corner_radius",
+    "scale_factor",
+    "target_position",
 ]
 
 # Registry of known-wrong kwarg names per method.
@@ -120,14 +147,14 @@ _BANNED_KWARGS = [
 # Used by both apply_known_fixes (proactive) and apply_error_aware_fixes (reactive).
 _KWARG_NORMALIZATION_REGISTRY: dict[str, dict[str, str | None]] = {
     "arrange_in_grid": {
-        "rows":     "n_rows",
-        "cols":     "n_cols",
+        "rows": "n_rows",
+        "cols": "n_cols",
         "row_buff": "buff",
         "col_buff": "buff",
     },
     "reorient": {
         "theta_deg": "theta_degrees",
-        "phi_deg":   "phi_degrees",
+        "phi_deg": "phi_degrees",
     },
     "NumberLine": {
         "label": None,
@@ -180,7 +207,11 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
         # ManimCommunity Axes uses x_length/y_length; ManimGL uses width/height
         (r"\bx_length\s*=", "width=", "x_length -> width (ManimGL Axes)"),
         (r"\by_length\s*=", "height=", "y_length -> height (ManimGL Axes)"),
-        (r"\.get_graph_point\s*\(", ".input_to_graph_point(", "get_graph_point -> input_to_graph_point"),
+        (
+            r"\.get_graph_point\s*\(",
+            ".input_to_graph_point(",
+            "get_graph_point -> input_to_graph_point",
+        ),
         (r"\._mobjects\b", ".submobjects", "_mobjects -> submobjects"),
         (r"\.set_fill_color\s*\(", ".set_fill(", "set_fill_color -> set_fill"),
         (r"\bDARK_GREY\b", "GREY_D", "DARK_GREY -> GREY_D"),
@@ -201,17 +232,17 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
     # Palette role hex → MaminGL constant (I3). Maps the canonical hex values from
     # COLOR_PALETTE.md (CANONICAL aesthetic) to their ManimGL constant equivalents.
     _HEX_TO_CONSTANT: list[tuple[str, str, str]] = [
-        (r'"#00D9FF"', "TEAL_A",   "PRIMARY hex -> TEAL_A"),
-        (r'"#FF6B35"', "GOLD",     "SECONDARY hex -> GOLD"),
-        (r'"#3DD17B"', "GREEN",    "SUCCESS hex -> GREEN"),
-        (r'"#FFC857"', "YELLOW",   "WARNING hex -> YELLOW"),
-        (r'"#E5484D"', "RED",      "ALERT hex -> RED"),
-        (r'"#E8E8E8"', "WHITE",    "INK hex -> WHITE"),
-        (r'"#9A9A9A"', "GREY_A",   "MUTED hex -> GREY_A"),
-        (r'"#4A4A4A"', "GREY_D",   "SUBTLE hex -> GREY_D"),
-        (r'"#3A6F8A"', "GREY_B",   "STRUCT hex -> GREY_B"),
-        (r'"#58C4DD"', "TEAL_B",   "legacy TEAL hex -> TEAL_B"),
-        (r'"#1C1C1C"', "GREY_E",   "dark bg hex -> GREY_E"),
+        (r'"#00D9FF"', "TEAL_A", "PRIMARY hex -> TEAL_A"),
+        (r'"#FF6B35"', "GOLD", "SECONDARY hex -> GOLD"),
+        (r'"#3DD17B"', "GREEN", "SUCCESS hex -> GREEN"),
+        (r'"#FFC857"', "YELLOW", "WARNING hex -> YELLOW"),
+        (r'"#E5484D"', "RED", "ALERT hex -> RED"),
+        (r'"#E8E8E8"', "WHITE", "INK hex -> WHITE"),
+        (r'"#9A9A9A"', "GREY_A", "MUTED hex -> GREY_A"),
+        (r'"#4A4A4A"', "GREY_D", "SUBTLE hex -> GREY_D"),
+        (r'"#3A6F8A"', "GREY_B", "STRUCT hex -> GREY_B"),
+        (r'"#58C4DD"', "TEAL_B", "legacy TEAL hex -> TEAL_B"),
+        (r'"#1C1C1C"', "GREY_E", "dark bg hex -> GREY_E"),
     ]
     for hex_pat, const, label in _HEX_TO_CONSTANT:
         new_fixed, count = re.subn(hex_pat, const, fixed)
@@ -398,13 +429,13 @@ def _wrap_bare_rect_in_show_creation(code: str) -> tuple[str, str | None]:
             break
 
         # Check if already wrapped in ShowCreation/FadeIn/Write
-        prefix = code[m.start(0):m.start(1)]
+        prefix = code[m.start(0) : m.start(1)]
         # m.start(0) is "self.play(", m.start(1) is the rect name
         # Capture text between "self.play(" and the rect name
-        between = code[m.start(0) + len("self.play("):m.start(1)].strip()
+        between = code[m.start(0) + len("self.play(") : m.start(1)].strip()
         if between:
             # There's something already there (e.g. ShowCreation()
-            result_parts.append(code[pos:m.end(0)])
+            result_parts.append(code[pos : m.end(0)])
             pos = m.end(0)
             continue
 
@@ -413,28 +444,31 @@ def _wrap_bare_rect_in_show_creation(code: str) -> tuple[str, str | None]:
         depth = 1
         i = rect_open + 1
         while i < len(code) and depth > 0:
-            if code[i] == '(':
+            if code[i] == "(":
                 depth += 1
-            elif code[i] == ')':
+            elif code[i] == ")":
                 depth -= 1
             i += 1
         rect_close = i - 1  # index of the matching ')'
 
         # The full rect call including its closing paren
-        rect_call = code[m.start(1):rect_close + 1]
+        rect_call = code[m.start(1) : rect_close + 1]
 
         # What comes after the rect call: should be ')' to close self.play()
         # or ', run_time=...' etc. — we keep those unchanged
-        after_rect = code[rect_close + 1:]
+        after_rect = code[rect_close + 1 :]
 
-        result_parts.append(code[pos:m.start(1)])
+        result_parts.append(code[pos : m.start(1)])
         result_parts.append(f"ShowCreation({rect_call})")
         pos = rect_close + 1
         count += 1
 
     new_code = "".join(result_parts)
     if count:
-        return new_code, f"wrapped bare SurroundingRectangle/BackgroundRectangle in ShowCreation ({count})"
+        return (
+            new_code,
+            f"wrapped bare SurroundingRectangle/BackgroundRectangle in ShowCreation ({count})",
+        )
     return code, None
 
 
@@ -558,14 +592,16 @@ def _fix_become_inside_play(code: str) -> tuple[str, str | None]:
         depth = 1
         i = play_open + 1
         while i < len(code) and depth > 0:
-            if code[i] == '(':
+            if code[i] == "(":
                 depth += 1
-            elif code[i] == ')':
+            elif code[i] == ")":
                 depth -= 1
             i += 1
         play_close = i - 1  # index of the closing ) of self.play(...)
 
-        play_interior = code[play_open + 1:play_close]  # everything inside self.play(...)
+        play_interior = code[
+            play_open + 1 : play_close
+        ]  # everything inside self.play(...)
 
         # Check if interior contains var.become( but NOT var.animate.become(
         become_re = re.compile(r"(?<!\.)(?<!animate\.)(\w+)\.become\(")
@@ -573,7 +609,7 @@ def _fix_become_inside_play(code: str) -> tuple[str, str | None]:
 
         if not bm:
             # No bare .become() — leave unchanged
-            result_parts.append(code[pos:play_close + 1])
+            result_parts.append(code[pos : play_close + 1])
             pos = play_close + 1
             continue
 
@@ -584,28 +620,32 @@ def _fix_become_inside_play(code: str) -> tuple[str, str | None]:
         bdepth = 1
         bi = become_open_in_interior + 1
         while bi < len(play_interior) and bdepth > 0:
-            if play_interior[bi] == '(':
+            if play_interior[bi] == "(":
                 bdepth += 1
-            elif play_interior[bi] == ')':
+            elif play_interior[bi] == ")":
                 bdepth -= 1
             bi += 1
         become_close_in_interior = bi - 1
-        become_inner = play_interior[become_open_in_interior + 1:become_close_in_interior]
+        become_inner = play_interior[
+            become_open_in_interior + 1 : become_close_in_interior
+        ]
 
         # Extract run_time kwarg from the play_interior (after the become call)
-        after_become = play_interior[become_close_in_interior + 1:]
+        after_become = play_interior[become_close_in_interior + 1 :]
         rt_match = re.search(r"run_time\s*=\s*[\d.]+", after_become)
         rt_str = f", {rt_match.group(0)}" if rt_match else ""
 
         # Emit: become() on its own line, then self.play(ShowCreation(...))
-        result_parts.append(code[pos:m.start()])  # code before this self.play
+        result_parts.append(code[pos : m.start()])  # code before this self.play
         result_parts.append(f"{indent}{var_name}.become({become_inner})\n")
         result_parts.append(f"{indent}self.play(ShowCreation({var_name}){rt_str})")
         pos = play_close + 1
         count += 1
 
     if count:
-        return "".join(result_parts), f"self.play(obj.become(...)) -> become()+ShowCreation ({count})"
+        return "".join(
+            result_parts
+        ), f"self.play(obj.become(...)) -> become()+ShowCreation ({count})"
     return code, None
 
 
@@ -651,7 +691,10 @@ def _fix_reorient_wrong_kwargs(code: str) -> tuple[str, str | None]:
     applied = []
     fixed = code
 
-    for wrong, right in [("theta_deg=", "theta_degrees="), ("phi_deg=", "phi_degrees=")]:
+    for wrong, right in [
+        ("theta_deg=", "theta_degrees="),
+        ("phi_deg=", "phi_degrees="),
+    ]:
         new, count = re.subn(re.escape(wrong), right, fixed)
         if count:
             applied.append(f"{wrong} -> {right} ({count})")
@@ -688,7 +731,9 @@ def _fix_broken_call_args(code: str) -> tuple[str, list[str]]:
         applied.append(f"removed trailing comma in call args ({count})")
         code = new
     # reorient(, theta=X * DEGREES) → reorient() — can't salvage partial 3D args
-    new, count = re.subn(r"\.reorient\(\s*,\s*theta\s*=\s*[^)]+\)", ".reorient(-45, 70)", code)
+    new, count = re.subn(
+        r"\.reorient\(\s*,\s*theta\s*=\s*[^)]+\)", ".reorient(-45, 70)", code
+    )
     if count:
         applied.append(f"fixed broken reorient call ({count})")
         code = new
@@ -705,12 +750,16 @@ def apply_error_aware_fixes(code: str, stderr: str) -> tuple[str, list[str]]:
     applied.extend(structural_fixes)
 
     if "No such file or directory: 'latex'" in stderr or "latex: not found" in stderr:
-        new_fixed, count = re.subn(r"\bTex\(\s*str\(([^)]+)\)\s*(,[^)]*)?\)", r"Text(str(\1)\2)", fixed)
+        new_fixed, count = re.subn(
+            r"\bTex\(\s*str\(([^)]+)\)\s*(,[^)]*)?\)", r"Text(str(\1)\2)", fixed
+        )
         if count:
             applied.append(f"Tex(str(...)) -> Text(str(...)) ({count})")
             fixed = new_fixed
 
-        new_fixed, count = re.subn(r"\bTex\(\s*f?\"([0-9\.\-]+)\"\s*(,[^)]*)?\)", r'Text("\1"\2)', fixed)
+        new_fixed, count = re.subn(
+            r"\bTex\(\s*f?\"([0-9\.\-]+)\"\s*(,[^)]*)?\)", r'Text("\1"\2)', fixed
+        )
         if count:
             applied.append(f"Tex(numeric literal) -> Text(...) ({count})")
             fixed = new_fixed
@@ -718,7 +767,9 @@ def apply_error_aware_fixes(code: str, stderr: str) -> tuple[str, list[str]]:
     if "unexpected keyword argument" in stderr:
         kw_match = re.search(r"got an unexpected keyword argument '(\w+)'", stderr)
         hint_match = re.search(r"Did you mean '(\w+)'\?", stderr)
-        method_match = re.search(r"(\w+)\(\) got an unexpected keyword argument", stderr)
+        method_match = re.search(
+            r"(\w+)\(\) got an unexpected keyword argument", stderr
+        )
         if kw_match:
             bad_kw = kw_match.group(1)
             method = method_match.group(1) if method_match else None
@@ -739,7 +790,9 @@ def apply_error_aware_fixes(code: str, stderr: str) -> tuple[str, list[str]]:
                             rf"\b{re.escape(wrong)}\s*=", f"{right}=", fixed
                         )
                     if count:
-                        applied.append(f"registry fix: {wrong}= → {right or 'stripped'} ({count})")
+                        applied.append(
+                            f"registry fix: {wrong}= → {right or 'stripped'} ({count})"
+                        )
                         fixed = new_fixed
             elif hint_match:
                 # Rename, don't strip — the traceback tells us what the right name is.
@@ -763,15 +816,21 @@ def apply_error_aware_fixes(code: str, stderr: str) -> tuple[str, list[str]]:
         if name_match:
             bad_name = name_match.group(1)
             _name_fixes: dict[str, str] = {
-                "DARK_GREY": "GREY_D", "DARK_GRAY": "GREY_D",
-                "DARK_BLUE": "BLUE_D", "DARK_GREEN": "GREEN_D",
+                "DARK_GREY": "GREY_D",
+                "DARK_GRAY": "GREY_D",
+                "DARK_BLUE": "BLUE_D",
+                "DARK_GREEN": "GREEN_D",
                 "DARK_RED": "RED_D",
-                "LIGHT_GREY": "GREY_A", "LIGHT_GRAY": "GREY_A",
-                "LIGHT_BLUE": "BLUE_A", "LIGHT_GREEN": "GREEN_A",
+                "LIGHT_GREY": "GREY_A",
+                "LIGHT_GRAY": "GREY_A",
+                "LIGHT_BLUE": "BLUE_A",
+                "LIGHT_GREEN": "GREEN_A",
                 "LIGHT_RED": "RED_A",
                 "DARK_BROWN": "GREY_D",
-                "MAROON": "MAROON_B", "TEAL": "TEAL_C",
-                "PURPLE": "PURPLE_B", "PINK": "PINK",
+                "MAROON": "MAROON_B",
+                "TEAL": "TEAL_C",
+                "PURPLE": "PURPLE_B",
+                "PINK": "PINK",
                 # Common model mistake: this easing name is not present in ManimGL
                 "slow_into_fast": "smooth",
             }
@@ -793,16 +852,24 @@ def apply_error_aware_fixes(code: str, stderr: str) -> tuple[str, list[str]]:
             fixed,
         )
         if count:
-            applied.append(f"Transform -> FadeOut/FadeIn (point count mismatch) ({count})")
+            applied.append(
+                f"Transform -> FadeOut/FadeIn (point count mismatch) ({count})"
+            )
             fixed = new_fixed
 
     if "TypeError" in stderr and ".animate" in stderr:
         lines = fixed.split("\n")
         new_lines: list[str] = []
         for line in lines:
-            if ".animate" in line and ("FadeIn" in line or "FadeOut" in line) and "self.play" in line:
+            if (
+                ".animate" in line
+                and ("FadeIn" in line or "FadeOut" in line)
+                and "self.play" in line
+            ):
                 indent = re.match(r"(\s*)", line).group(1)
-                parts = re.findall(r"[^,]+\.animate\.[^,]+|FadeIn\([^)]+\)|FadeOut\([^)]+\)", line)
+                parts = re.findall(
+                    r"[^,]+\.animate\.[^,]+|FadeIn\([^)]+\)|FadeOut\([^)]+\)", line
+                )
                 if len(parts) >= 2:
                     for part in parts:
                         part = part.strip().rstrip(",").strip()
@@ -870,7 +937,7 @@ def _check_next_to_stacking(lines: list[str], warnings: list[str]) -> None:
             if m2 and m2.group(1) == anchor:
                 warnings.append(
                     f"Two .next_to({anchor}, ...) calls within {window} lines "
-                    f"(lines {i+1} and {j+1}); labels will overlap. "
+                    f"(lines {i + 1} and {j + 1}); labels will overlap. "
                     "Use VGroup(...).arrange(DOWN, buff=0.4) and place once."
                 )
                 break  # one warning per anchor is enough
@@ -915,7 +982,7 @@ def _check_top_edge_collision(lines: list[str], warnings: list[str]) -> None:
         if pending_top:
             other_names = ", ".join(n for _, n in pending_top)
             warnings.append(
-                f"Line {i+1}: '{var}' placed in title zone (UP edge / UR-UL corner) "
+                f"Line {i + 1}: '{var}' placed in title zone (UP edge / UR-UL corner) "
                 f"while prior top-edge mobject(s) ({other_names}) have not been faded out. "
                 f"The title zone holds ONE mobject at a time — add FadeOut({other_names}) "
                 f"before introducing '{var}', or both will visibly overlap."
@@ -973,7 +1040,7 @@ def _check_loop_timing_smells(code: str) -> list[str]:
             j += 1
         loop_end = j
 
-        body_text = "\n".join(lines[i + 1:loop_end])
+        body_text = "\n".join(lines[i + 1 : loop_end])
 
         if not play_with_runtime_re.search(body_text):
             i = loop_end if loop_end > i else i + 1
@@ -997,8 +1064,7 @@ def _check_loop_timing_smells(code: str) -> list[str]:
                 # wait() found — check if any accumulated var appears as a whole
                 # identifier in the wait argument (word-boundary match, not substring).
                 timing_accounted = any(
-                    re.search(rf"\b{re.escape(v)}\b", la)
-                    for v in accumulated_vars
+                    re.search(rf"\b{re.escape(v)}\b", la) for v in accumulated_vars
                 )
                 if not timing_accounted:
                     line_num = k + 1  # 1-indexed
@@ -1066,13 +1132,17 @@ def _check_layout_smells(code: str) -> list[str]:
     specific ManimGL API pitfalls, not to abstract design rules.
     """
     warnings: list[str] = []
-    if re.search(r"\bAxes\s*\(", code) and not re.search(r"\.set_width\s*\(|x_length\s*=|width\s*=|height\s*=", code):
+    if re.search(r"\bAxes\s*\(", code) and not re.search(
+        r"\.set_width\s*\(|x_length\s*=|width\s*=|height\s*=", code
+    ):
         warnings.append(
             "Axes created without .set_width(); axes will render at default internal size, "
             "producing dead space or overflow. Use .set_width(10).center() "
             "(add .shift(DOWN * 0.5) if a title is present)."
         )
-    if re.search(r"axes\.move_to\s*\(\s*ORIGIN\s*\)", code) and not re.search(r"\.set_width\s*\(", code):
+    if re.search(r"axes\.move_to\s*\(\s*ORIGIN\s*\)", code) and not re.search(
+        r"\.set_width\s*\(", code
+    ):
         warnings.append(
             "axes.move_to(ORIGIN) used without .set_width(); this does not resize axes. "
             "Replace with axes.set_width(10).center() (or .center().shift(DOWN * 0.5) with a title)."
@@ -1100,13 +1170,13 @@ def _check_layout_smells(code: str) -> list[str]:
             warnings.append(
                 "Axes missing decimal_number_config in axis_config; tick labels will render at "
                 "default font_size=36 (too large). Add "
-                "decimal_number_config={\"font_size\": 24} inside axis_config."
+                'decimal_number_config={"font_size": 24} inside axis_config.'
             )
         if re.search(r"\baxis_config\s*=\s*\{[^{}]*[\"']font_size[\"']", code):
             warnings.append(
                 "font_size passed directly in axis_config will crash (TypeError). "
                 "Nest it inside decimal_number_config: "
-                "axis_config={\"decimal_number_config\": {\"font_size\": 24}}."
+                'axis_config={"decimal_number_config": {"font_size": 24}}.'
             )
     return warnings
 
@@ -1123,7 +1193,7 @@ def _fix_y_axis_include_numbers(code: str) -> tuple[str, str | None]:
     )
     new, count = re.subn(pattern, r'\1"include_numbers": False\2', code)
     if count:
-        return new, f'forced y_axis include_numbers=False ({count})'
+        return new, f"forced y_axis include_numbers=False ({count})"
     return code, None
 
 
@@ -1139,6 +1209,7 @@ def precheck_and_autofix(code: str) -> str:
     applied_fixes = structural_fixes + applied_fixes
     if applied_fixes:
         import logging
+
         logging.getLogger(__name__).debug("[codeguard] applied: %s", applied_fixes)
     return fixed
 

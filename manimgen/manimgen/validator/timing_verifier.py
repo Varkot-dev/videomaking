@@ -57,6 +57,7 @@ _DEFAULT_PLAY_RUNTIME = 1.0  # ManimGL default when run_time= is omitted
 # AST helpers
 # ---------------------------------------------------------------------------
 
+
 def _eval_constant(node: ast.expr) -> float | None:
     """Try to evaluate an AST node to a float constant.
 
@@ -85,7 +86,11 @@ def _eval_constant(node: ast.expr) -> float | None:
                 return left / right
     if isinstance(node, ast.Call):
         # max(0.01, expr) — common guard pattern
-        if isinstance(node.func, ast.Name) and node.func.id == "max" and len(node.args) == 2:
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "max"
+            and len(node.args) == 2
+        ):
             a = _eval_constant(node.args[0])
             b = _eval_constant(node.args[1])
             if a is not None and b is not None:
@@ -138,7 +143,11 @@ def _get_for_range_count(node: ast.For) -> int | None:
     Returns None if the loop count can't be statically determined.
     """
     it = node.iter
-    if not (isinstance(it, ast.Call) and isinstance(it.func, ast.Name) and it.func.id == "range"):
+    if not (
+        isinstance(it, ast.Call)
+        and isinstance(it.func, ast.Name)
+        and it.func.id == "range"
+    ):
         return None
     args = it.args
     if len(args) == 1:
@@ -155,6 +164,7 @@ def _get_for_range_count(node: ast.For) -> int | None:
 # ---------------------------------------------------------------------------
 # Statement-level timing extractor
 # ---------------------------------------------------------------------------
+
 
 def _time_for_statements(stmts: list[ast.stmt]) -> float:
     """Sum the animation time consumed by a list of statements.
@@ -235,6 +245,7 @@ def _split_into_cue_blocks(code: str) -> list[tuple[int, str]]:
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def verify_timing(
     code: str,
     cue_durations: list[float],
@@ -253,7 +264,11 @@ def verify_timing(
     cue_blocks = _split_into_cue_blocks(code)
 
     if not cue_blocks:
-        return {"ok": True, "cues": [], "warnings": ["No CUE comments found — timing not verifiable."]}
+        return {
+            "ok": True,
+            "cues": [],
+            "warnings": ["No CUE comments found — timing not verifiable."],
+        }
 
     cue_timings: list[CueTiming] = []
 
@@ -270,11 +285,14 @@ def verify_timing(
             # The cue block may not be valid Python on its own (it's a slice
             # of a larger file). Wrap it to make it parseable.
             try:
-                tree = ast.parse("if True:\n" + "\n".join(
-                    "    " + l for l in block_code.splitlines()
-                ))
+                tree = ast.parse(
+                    "if True:\n"
+                    + "\n".join("    " + l for l in block_code.splitlines())
+                )
             except SyntaxError:
-                warnings.append(f"CUE {cue_idx}: could not parse code block — timing not verifiable.")
+                warnings.append(
+                    f"CUE {cue_idx}: could not parse code block — timing not verifiable."
+                )
                 continue
 
         computed = _time_for_statements(tree.body)
@@ -421,8 +439,11 @@ def auto_fix_timing(
 
         # Walk all statements to find the last self.wait()
         for stmt in ast.walk(tree):
-            if (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)
-                    and _is_self_wait(stmt.value)):
+            if (
+                isinstance(stmt, ast.Expr)
+                and isinstance(stmt.value, ast.Call)
+                and _is_self_wait(stmt.value)
+            ):
                 last_wait_line = stmt.lineno
                 last_wait_old_val = _get_wait_duration(stmt.value)
 
@@ -430,7 +451,9 @@ def auto_fix_timing(
             continue
 
         # Compute total time excluding the last wait
-        total_without_last_wait = _time_for_statements(all_stmts) - (last_wait_old_val or 0)
+        total_without_last_wait = _time_for_statements(all_stmts) - (
+            last_wait_old_val or 0
+        )
         expected = cue_durations[cue_idx]
         new_wait = max(0.01, expected - total_without_last_wait)
 
@@ -442,8 +465,8 @@ def auto_fix_timing(
         wait_pattern = re.compile(
             r"self\.wait\(\s*"
             r"(?:max\(\s*[\d.]+\s*,\s*)?"  # optional max(0.01,
-            r"[^)]*?"                       # the inner expression
-            r"(?:\s*\))?"                   # optional closing paren of max()
+            r"[^)]*?"  # the inner expression
+            r"(?:\s*\))?"  # optional closing paren of max()
             r"\s*\)"
         )
 
@@ -461,7 +484,11 @@ def auto_fix_timing(
             # Only replace the LAST occurrence in case the same pattern appears elsewhere
             idx = fixed_code.rfind(original_wait_text)
             if idx >= 0:
-                fixed_code = fixed_code[:idx] + new_wait_text + fixed_code[idx + len(original_wait_text):]
+                fixed_code = (
+                    fixed_code[:idx]
+                    + new_wait_text
+                    + fixed_code[idx + len(original_wait_text) :]
+                )
                 applied.append(
                     f"CUE {cue_idx}: self.wait() adjusted from "
                     f"{last_wait_old_val:.2f}s to {new_wait:.2f}s "

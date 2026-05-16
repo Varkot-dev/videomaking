@@ -1,9 +1,12 @@
-import subprocess
 import os
+import subprocess
 from datetime import datetime
-from manimgen.validator.codeguard import precheck_and_autofix_file as precheck_and_autofix
-from manimgen.validator.env import get_render_env
+
 from manimgen import paths
+from manimgen.validator.codeguard import (
+    precheck_and_autofix_file as precheck_and_autofix,
+)
+from manimgen.validator.env import get_render_env
 
 
 def _is_3d_scene(scene_path: str) -> bool:
@@ -58,6 +61,7 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
     preflight = validate_scene_inputs(scene_path)
     if not preflight["ok"]:
         import logging as _logging
+
         _logging.getLogger(__name__).error(
             "[runner] Pre-render validation failed: %s", preflight["errors"]
         )
@@ -93,7 +97,17 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
 
     try:
         result = subprocess.run(
-            ["manimgl", scene_path, class_name, "-w", paths.render_quality_flag(), "--fps", str(paths.render_fps()), "-c", "#1C1C1C"],
+            [
+                "manimgl",
+                scene_path,
+                class_name,
+                "-w",
+                paths.render_quality_flag(),
+                "--fps",
+                str(paths.render_fps()),
+                "-c",
+                "#1C1C1C",
+            ],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -130,6 +144,7 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
 def _find_rendered_video(class_name: str) -> str | None:
     """Search common ManimGL output directories for the rendered video."""
     from manimgen import paths as _paths
+
     # ManimGL writes to "videos/" relative to the scene file's directory.
     # Also check the configured output videos dir in case of prior pipeline runs.
     here = os.path.dirname(os.path.abspath(__file__))

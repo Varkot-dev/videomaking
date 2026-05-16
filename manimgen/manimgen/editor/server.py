@@ -11,13 +11,13 @@ Opens at http://localhost:5001
 import argparse
 import json
 import logging
-import os
 import subprocess
 import webbrowser
 from pathlib import Path
 from uuid import uuid4
 
 from flask import Flask, jsonify, render_template, request, send_file
+
 from manimgen import paths
 
 app = Flask(__name__)
@@ -47,12 +47,14 @@ def _get_clips() -> list[dict]:
         if p.stem.startswith("_tmp_"):
             continue
         duration = _probe_duration(p)
-        clips.append({
-            "id": p.stem,
-            "filename": p.name,
-            "path": str(p.resolve()),
-            "duration": duration,
-        })
+        clips.append(
+            {
+                "id": p.stem,
+                "filename": p.name,
+                "path": str(p.resolve()),
+                "duration": duration,
+            }
+        )
     return clips
 
 
@@ -60,9 +62,13 @@ def _probe_duration(path: Path) -> float:
     try:
         result = subprocess.run(
             [
-                "ffprobe", "-v", "quiet",
-                "-print_format", "json",
-                "-show_entries", "format=duration",
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_entries",
+                "format=duration",
                 str(path),
             ],
             capture_output=True,
@@ -76,6 +82,7 @@ def _probe_duration(path: Path) -> float:
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+
 
 @app.route("/")
 def index():
@@ -108,18 +115,20 @@ def api_exports():
         except Exception as exc:
             logger.warning("[editor] Could not stat export file %s: %s", p.name, exc)
             size = 0
-        exports.append({
-            "filename": p.name,
-            "path": str(p.resolve()),
-            "size": size,
-        })
+        exports.append(
+            {
+                "filename": p.name,
+                "path": str(p.resolve()),
+                "size": size,
+            }
+        )
     return jsonify(exports)
 
 
 @app.route("/api/export", methods=["POST"])
 def api_export():
     body = request.json
-    clips = body.get("clips", [])   # [{filename, trim_start, trim_end}, ...]
+    clips = body.get("clips", [])  # [{filename, trim_start, trim_end}, ...]
     title = body.get("title", "final_video")
 
     if not clips:
@@ -150,17 +159,30 @@ def api_export():
 
             trimmed = VIDEOS_DIR / f"_tmp_{run_id}_{i}_{src.stem}.mp4"
             cmd = [
-                "ffmpeg", "-y",
-                "-ss", str(trim_start),
-                "-i", str(src.resolve()),
-                "-t", str(max(0.1, trim_end_actual - trim_start)),
-                "-c:v", "libx264", "-c:a", "aac",
-                "-preset", "fast",
+                "ffmpeg",
+                "-y",
+                "-ss",
+                str(trim_start),
+                "-i",
+                str(src.resolve()),
+                "-t",
+                str(max(0.1, trim_end_actual - trim_start)),
+                "-c:v",
+                "libx264",
+                "-c:a",
+                "aac",
+                "-preset",
+                "fast",
                 str(trimmed),
             ]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             if result.returncode != 0:
-                return jsonify({"error": f"Trim failed for {clip['filename']}", "details": result.stderr}), 500
+                return jsonify(
+                    {
+                        "error": f"Trim failed for {clip['filename']}",
+                        "details": result.stderr,
+                    }
+                ), 500
             trimmed_paths.append(trimmed)
 
         # Write concat list
@@ -170,21 +192,29 @@ def api_export():
 
         # Concat
         concat_cmd = [
-            "ffmpeg", "-y",
-            "-f", "concat", "-safe", "0",
-            "-i", str(list_path),
-            "-c", "copy",
+            "ffmpeg",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(list_path),
+            "-c",
+            "copy",
             str(output_path),
         ]
         result = subprocess.run(concat_cmd, capture_output=True, text=True, timeout=300)
         if result.returncode != 0:
             return jsonify({"error": "Concat failed", "details": result.stderr}), 500
 
-        return jsonify({
-            "output": str(output_path),
-            "filename": output_path.name,
-            "export_dir": str(output_path.parent),
-        })
+        return jsonify(
+            {
+                "output": str(output_path),
+                "filename": output_path.name,
+                "export_dir": str(output_path.parent),
+            }
+        )
 
     finally:
         # Clean up temp files regardless of success or failure
@@ -192,15 +222,20 @@ def api_export():
             try:
                 tp.unlink()
             except Exception as exc:
-                logger.warning("[editor] Could not remove temp clip %s: %s", tp.name, exc)
+                logger.warning(
+                    "[editor] Could not remove temp clip %s: %s", tp.name, exc
+                )
         if list_path.exists():
             try:
                 list_path.unlink()
             except Exception as exc:
-                logger.warning("[editor] Could not remove concat list %s: %s", list_path.name, exc)
+                logger.warning(
+                    "[editor] Could not remove concat list %s: %s", list_path.name, exc
+                )
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
+
 
 def main():
     global VIDEOS_DIR, OUTPUT_DIR
@@ -226,19 +261,27 @@ def main():
         try:
             tmp.unlink()
         except Exception as exc:
-            logger.warning("[editor] Startup cleanup: could not remove %s: %s", tmp.name, exc)
+            logger.warning(
+                "[editor] Startup cleanup: could not remove %s: %s", tmp.name, exc
+            )
     for concat_list in VIDEOS_DIR.glob("concat_list_*.txt"):
         try:
             concat_list.unlink()
         except Exception as exc:
-            logger.warning("[editor] Startup cleanup: could not remove %s: %s", concat_list.name, exc)
+            logger.warning(
+                "[editor] Startup cleanup: could not remove %s: %s",
+                concat_list.name,
+                exc,
+            )
     # Also clean legacy concat_list.txt (pre-run-id naming)
     legacy_concat = VIDEOS_DIR / "concat_list.txt"
     if legacy_concat.exists():
         try:
             legacy_concat.unlink()
         except Exception as exc:
-            logger.warning("[editor] Startup cleanup: could not remove legacy concat list: %s", exc)
+            logger.warning(
+                "[editor] Startup cleanup: could not remove legacy concat list: %s", exc
+            )
 
     print(f"[editor] Loading clips from: {VIDEOS_DIR}")
     print(f"[editor] Exports will be saved to: {OUTPUT_DIR}")

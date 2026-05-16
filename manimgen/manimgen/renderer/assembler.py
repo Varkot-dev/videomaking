@@ -28,7 +28,7 @@ _CUE00_PATTERN = re.compile(r"_cue00\.mp4$")
 
 def _vf_scale() -> str:
     """Build the FFmpeg -vf scale filter string from config."""
-    res = paths.render_resolution()          # e.g. "1920x1080"
+    res = paths.render_resolution()  # e.g. "1920x1080"
     w, h = res.replace("x", ":").split(":")
     fps = paths.render_fps()
     return f"scale={w}:{h},fps={fps},format=yuv420p"
@@ -83,6 +83,7 @@ def assemble_video(video_paths: list[str], title: str) -> str:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _normalise_all(clip_paths: list[str], work_dir: str) -> list[str]:
     """Re-encode all clips to 1920x1080 30fps yuv420p aac."""
     norm_paths = []
@@ -90,11 +91,22 @@ def _normalise_all(clip_paths: list[str], work_dir: str) -> list[str]:
         norm = os.path.join(work_dir, f"_norm_{i:03d}.mp4")
         if _has_audio_stream(path):
             cmd = [
-                "ffmpeg", "-y",
-                "-i", path,
-                "-vf", _vf_scale(),
-                "-c:v", "libx264", "-preset", "slow", "-crf", "17",
-                "-c:a", "aac", "-ar", "48000",
+                "ffmpeg",
+                "-y",
+                "-i",
+                path,
+                "-vf",
+                _vf_scale(),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "slow",
+                "-crf",
+                "17",
+                "-c:a",
+                "aac",
+                "-ar",
+                "48000",
                 norm,
             ]
         else:
@@ -102,12 +114,28 @@ def _normalise_all(clip_paths: list[str], work_dir: str) -> list[str]:
             # Inject silent audio so concat/xfade filters always have [v][a].
             dur = _video_duration(path)
             cmd = [
-                "ffmpeg", "-y",
-                "-i", path,
-                "-f", "lavfi", "-t", str(dur), "-i", "anullsrc=r=48000:cl=stereo",
-                "-vf", _vf_scale(),
-                "-c:v", "libx264", "-preset", "slow", "-crf", "17",
-                "-c:a", "aac", "-ar", "48000",
+                "ffmpeg",
+                "-y",
+                "-i",
+                path,
+                "-f",
+                "lavfi",
+                "-t",
+                str(dur),
+                "-i",
+                "anullsrc=r=48000:cl=stereo",
+                "-vf",
+                _vf_scale(),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "slow",
+                "-crf",
+                "17",
+                "-c:a",
+                "aac",
+                "-ar",
+                "48000",
                 "-shortest",
                 norm,
             ]
@@ -198,7 +226,7 @@ def _hard_concat(paths: list[str], output_path: str) -> None:
     so stream copy is lossless and near-instant. A concat demuxer list file is
     used rather than the filter_complex concat filter to avoid re-encoding.
     """
-    import tempfile
+
     list_file = output_path + ".concat_list.txt"
     try:
         with open(list_file, "w") as f:
@@ -206,10 +234,16 @@ def _hard_concat(paths: list[str], output_path: str) -> None:
                 f.write(f"file '{os.path.abspath(p)}'\n")
         subprocess.run(
             [
-                "ffmpeg", "-y",
-                "-f", "concat", "-safe", "0",
-                "-i", list_file,
-                "-c", "copy",
+                "ffmpeg",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                list_file,
+                "-c",
+                "copy",
                 output_path,
             ],
             check=True,
@@ -224,12 +258,19 @@ def _hard_concat(paths: list[str], output_path: str) -> None:
 def _video_duration(path: str) -> float:
     result = subprocess.run(
         [
-            "ffprobe", "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
             path,
         ],
-        check=True, capture_output=True, text=True, timeout=30,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     return max(0.1, float(result.stdout.strip()))
 
@@ -238,10 +279,15 @@ def _has_audio_stream(path: str) -> bool:
     try:
         proc = subprocess.Popen(
             [
-                "ffprobe", "-v", "error",
-                "-select_streams", "a:0",
-                "-show_entries", "stream=codec_type",
-                "-of", "default=noprint_wrappers=1:nokey=1",
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=codec_type",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
                 path,
             ],
             stdout=subprocess.PIPE,
@@ -256,9 +302,11 @@ def _has_audio_stream(path: str) -> bool:
         # If probing fails, assume audio is present to use the safer encode path.
         # Log so transient probe failures are observable.
         import logging
+
         logging.getLogger(__name__).warning(
             "[assembler] Audio stream probe failed for %s: %s — assuming audio present",
-            os.path.basename(path), exc,
+            os.path.basename(path),
+            exc,
         )
         return True
 
@@ -268,17 +316,32 @@ def _xfade_pair(a: str, b: str, out: str) -> None:
     offset = max(0.0, a_dur - _XFADE_DURATION)
     subprocess.run(
         [
-            "ffmpeg", "-y",
-            "-i", a, "-i", b,
+            "ffmpeg",
+            "-y",
+            "-i",
+            a,
+            "-i",
+            b,
             "-filter_complex",
             (
                 f"[0:v][1:v]xfade=transition=fade:"
                 f"duration={_XFADE_DURATION}:offset={offset}[v];"
                 f"[0:a][1:a]acrossfade=d={_XFADE_DURATION}[a]"
             ),
-            "-map", "[v]", "-map", "[a]",
-            "-c:v", "libx264", "-preset", "slow", "-crf", "17",
-            "-c:a", "aac", "-ar", "48000",
+            "-map",
+            "[v]",
+            "-map",
+            "[a]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "slow",
+            "-crf",
+            "17",
+            "-c:a",
+            "aac",
+            "-ar",
+            "48000",
             out,
         ],
         check=True,

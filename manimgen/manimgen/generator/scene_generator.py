@@ -7,12 +7,14 @@ and asks the LLM to write one complete ManimGL Scene class per section.
 The generated scene contains self.wait() pauses at each cue boundary so the full section
 renders as a single continuous mp4. The assembler/muxer then cuts it at cue timestamps.
 """
+
 import math
 import os
 import re
-from manimgen.llm import chat
+
 from manimgen import paths
-from manimgen.utils import strip_fencing, section_class_name, load_reference_frames
+from manimgen.llm import chat
+from manimgen.utils import load_reference_frames, section_class_name, strip_fencing
 from manimgen.validator.codeguard import precheck_and_autofix, precheck_and_autofix_file
 
 _WORDS_PER_MINUTE = 130
@@ -40,7 +42,7 @@ def _index_examples() -> dict[str, list[str]]:
     if not os.path.isdir(examples_dir):
         return index
 
-    tag_re = re.compile(r'techniques:\s*(.+)', re.IGNORECASE)
+    tag_re = re.compile(r"techniques:\s*(.+)", re.IGNORECASE)
     for fname in sorted(os.listdir(examples_dir)):
         if not fname.endswith(".py"):
             continue
@@ -130,8 +132,8 @@ def _build_user_message(section: dict, cue_durations: list[float]) -> str:
         "6. `Tex()` accepts `font_size=` (e.g. `Tex(r'x^2', font_size=48)`). `Text()` also accepts it.",
         "7. Use `ShowCreation()`, `Tex()`, `self.frame` — never ManimCommunity equivalents.",
         "8. VISUAL CONTINUITY: Never show a black screen. Only FadeOut an element when something new replaces it. "
-           "If a cue has no new animation, add a relevant annotation, label, or highlight instead of waiting on empty screen. "
-           "End the scene with a gentle FadeOut only on the very last cue.",
+        "If a cue has no new animation, add a relevant annotation, label, or highlight instead of waiting on empty screen. "
+        "End the scene with a gentle FadeOut only on the very last cue.",
         "9. Use at least 2 different techniques from the Cinematic Technique Reference.",
         "10. Store all data values in plain Python variables/lists — never read state back from mobject attributes.",
         "",
@@ -165,7 +167,11 @@ def generate_scenes(
         durations = [float(duration_seconds)]
     else:
         narration = section.get("narration", "")
-        total = _estimate_duration(narration) if narration else float(section.get("duration_seconds", 30))
+        total = (
+            _estimate_duration(narration)
+            if narration
+            else float(section.get("duration_seconds", 30))
+        )
         n_cues = max(1, len(section.get("cue_word_indices", [0])))
         durations = [total / n_cues] * n_cues
 
@@ -188,11 +194,9 @@ def generate_scenes(
 
     # If any cue visual requests a 3D technique, promote Scene → ThreeDScene
     _3d_techniques = {"3d_surface", "camera_rotation"}
-    cue_visuals = " ".join(
-        c.get("visual", "").lower() for c in section.get("cues", [])
-    )
+    cue_visuals = " ".join(c.get("visual", "").lower() for c in section.get("cues", []))
     if any(t in cue_visuals for t in _3d_techniques):
-        code = re.sub(r'\bclass\s+(\w+)\(Scene\):', r'class \1(ThreeDScene):', code)
+        code = re.sub(r"\bclass\s+(\w+)\(Scene\):", r"class \1(ThreeDScene):", code)
 
     code = precheck_and_autofix(code)
 
