@@ -2,15 +2,16 @@ import logging
 import os
 import re
 import subprocess
-from manimgen.validator.env import get_render_env
+
 from manimgen import paths
+from manimgen.validator.env import get_render_env
 
 logger = logging.getLogger(__name__)
 
 # Styled title card fallback — on-brand, always renderable (I8 · reach floor).
 # Design: section number + title + subtitle rule + horizontal divider.
 # font_size values are from the canonical type scale (I4).
-FALLBACK_TEMPLATE = '''from manimlib import *
+FALLBACK_TEMPLATE = """from manimlib import *
 
 class FallbackScene(Scene):
     def construct(self):
@@ -25,7 +26,7 @@ class FallbackScene(Scene):
         self.play(FadeIn(subtitle), ShowCreation(rule), run_time=0.8)
         self.wait({hold_seconds})
         self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)
-'''
+"""
 
 
 def _estimate_hold(section: dict) -> int:
@@ -33,6 +34,7 @@ def _estimate_hold(section: dict) -> int:
     narration = section.get("narration", "")
     if narration:
         import math
+
         words = len(narration.split())
         return max(5, math.ceil(words / 130 * 60))
     return section.get("duration_seconds", 10)
@@ -45,7 +47,9 @@ def fallback_scene(section: dict) -> str | None:
 
     hold_seconds = _estimate_hold(section)
     scene_path = os.path.join(scenes_dir, f"{section['id']}_fallback.py")
-    class_name = f"{section['id'].replace('_', ' ').title().replace(' ', '')}FallbackScene"
+    class_name = (
+        f"{section['id'].replace('_', ' ').title().replace(' ', '')}FallbackScene"
+    )
     section_num = _section_num(section)
     subtitle = _fallback_subtitle(section)
     title = section["title"]
@@ -64,7 +68,17 @@ def fallback_scene(section: dict) -> str | None:
 
     try:
         result = subprocess.run(
-            ["manimgl", scene_path, class_name, "-w", paths.render_quality_flag(), "--fps", str(paths.render_fps()), "-c", "#1C1C1C"],
+            [
+                "manimgl",
+                scene_path,
+                class_name,
+                "-w",
+                paths.render_quality_flag(),
+                "--fps",
+                str(paths.render_fps()),
+                "-c",
+                "#1C1C1C",
+            ],
             capture_output=True,
             text=True,
             timeout=180,
@@ -72,6 +86,7 @@ def fallback_scene(section: dict) -> str | None:
         )
         if result.returncode == 0:
             from manimgen.validator.runner import _find_rendered_video
+
             return _find_rendered_video(class_name)
 
         # deterministic fallback has no second strategy; fail fast
@@ -86,6 +101,7 @@ def fallback_scene(section: dict) -> str | None:
 
 def _section_num(section: dict) -> str:
     import re
+
     sid = section.get("id", "")
     m = re.search(r"(\d+)", sid)
     if m:

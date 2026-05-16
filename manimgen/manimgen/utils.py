@@ -1,9 +1,9 @@
 """Shared utilities used across multiple manimgen modules."""
 
-
 import base64
 import glob
 import os
+
 
 def strip_fencing(raw: str) -> str:
     """Strip markdown code fences from an LLM response."""
@@ -24,7 +24,7 @@ def load_reference_frames() -> list[str]:
     here = os.path.dirname(__file__)
     ref_dir = os.path.join(here, "reference_frames")
     pngs = glob.glob(os.path.join(ref_dir, "*.png"))
-    
+
     frames = []
     for path in sorted(pngs):
         with open(path, "rb") as f:

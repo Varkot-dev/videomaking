@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+
 from manimgen.llm import chat
 from manimgen.planner.cue_parser import parse_cues
 
@@ -27,7 +28,9 @@ def _self_correct(plan: dict, limit: int = _SELF_CORRECT_LIMIT) -> dict:
         try:
             plan = _safe_json_loads(stripped)
         except Exception:
-            logger.warning("[planner] Self-correction returned non-JSON — keeping original plan")
+            logger.warning(
+                "[planner] Self-correction returned non-JSON — keeping original plan"
+            )
             break
     return plan
 
@@ -53,7 +56,9 @@ def _load_researcher_system_prompt() -> str:
 def _cap_sections(plan: dict, limit: int) -> dict:
     sections = plan.get("sections", [])
     if len(sections) > limit:
-        logger.warning("[planner] LLM returned %d sections, capping to %d", len(sections), limit)
+        logger.warning(
+            "[planner] LLM returned %d sections, capping to %d", len(sections), limit
+        )
         plan["sections"] = sections[:limit]
     return plan
 
@@ -104,10 +109,14 @@ def _extract_cues(plan: dict) -> dict:
                 cues_out.append(entry)
             else:
                 # Synthesise a minimal fallback so the Director never receives visual: "".
-                fallback = f"Section '{title}': animate segment {i + 1} of {n_segments}."
+                fallback = (
+                    f"Section '{title}': animate segment {i + 1} of {n_segments}."
+                )
                 logger.warning(
                     "[planner] Section '%s' cue %d has no visual description — using fallback: %r",
-                    section.get("id", "?"), i, fallback,
+                    section.get("id", "?"),
+                    i,
+                    fallback,
                 )
                 cues_out.append({"index": i, "visual": fallback})
         section["cues"] = cues_out
@@ -160,15 +169,15 @@ def _escape_bad_backslashes(s: str) -> str:
     i = 0
     while i < len(s):
         ch = s[i]
-        if ch == '\\':
+        if ch == "\\":
             if i + 1 < len(s) and s[i + 1] in valid_escapes:
-                out.append(ch)          # keep valid escape as-is
+                out.append(ch)  # keep valid escape as-is
             else:
-                out.append('\\\\')      # double-escape bare backslash
+                out.append("\\\\")  # double-escape bare backslash
         else:
             out.append(ch)
         i += 1
-    return ''.join(out)
+    return "".join(out)
 
 
 def research_topic(topic: str) -> dict:
@@ -178,15 +187,22 @@ def research_topic(topic: str) -> dict:
     worked_example, failure_modes, real_world_connections, section_suggestions.
     """
     system = _load_researcher_system_prompt()
-    raw = chat(system=system, user=f"Research this topic for an educational video: {topic}")
+    raw = chat(
+        system=system, user=f"Research this topic for an educational video: {topic}"
+    )
     try:
         brief = _safe_json_loads(_strip_fencing(raw))
-        logger.info("[planner] Research brief: %d core concepts, %d formulas",
-                    len(brief.get("core_concepts", [])),
-                    len(brief.get("key_formulas", [])))
+        logger.info(
+            "[planner] Research brief: %d core concepts, %d formulas",
+            len(brief.get("core_concepts", [])),
+            len(brief.get("key_formulas", [])),
+        )
         return brief
     except Exception as e:
-        logger.warning("[planner] Failed to parse research brief: %s — continuing without research", e)
+        logger.warning(
+            "[planner] Failed to parse research brief: %s — continuing without research",
+            e,
+        )
         return {}
 
 
@@ -280,10 +296,7 @@ def plan_lesson(topic: str) -> dict:
 
     system = _load_system_prompt()
     if research_material:
-        user_message = (
-            f"Create a visual storyboard for: {topic}\n\n"
-            f"{research_material}"
-        )
+        user_message = f"Create a visual storyboard for: {topic}\n\n{research_material}"
     else:
         user_message = f"Create a visual storyboard for: {topic}"
 
@@ -320,7 +333,9 @@ def plan_lesson_from_pdf(pdf_path: str) -> dict:
     for i, chunk in enumerate(parsed["chunks"]):
         entry = f"[Chunk {i + 1}]\n{chunk}"
         if total + len(entry) > MAX_CHARS:
-            content_parts.append(f"[... {len(parsed['chunks']) - i} additional chunks truncated ...]")
+            content_parts.append(
+                f"[... {len(parsed['chunks']) - i} additional chunks truncated ...]"
+            )
             break
         content_parts.append(entry)
         total += len(entry)

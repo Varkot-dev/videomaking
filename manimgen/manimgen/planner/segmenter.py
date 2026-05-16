@@ -54,16 +54,20 @@ def compute_segments(
             # of the first word in the next segment. This ensures the last
             # syllable of each cue is not cut off mid-word.
             last_word_idx = cue_word_indices[i + 1] - 1
-            boundary = timestamps[last_word_idx].end if last_word_idx >= 0 else starts[i + 1]
+            boundary = (
+                timestamps[last_word_idx].end if last_word_idx >= 0 else starts[i + 1]
+            )
             duration = boundary - audio_start
         else:
             duration = audio_duration - audio_start
 
-        segments.append(CueSegment(
-            cue_index=i,
-            total_cues=total,
-            start_time=start,
-            duration=max(duration, 0.1),  # guard against float rounding to negative
-        ))
+        segments.append(
+            CueSegment(
+                cue_index=i,
+                total_cues=total,
+                start_time=start,
+                duration=max(duration, 0.1),  # guard against float rounding to negative
+            )
+        )
 
     return segments

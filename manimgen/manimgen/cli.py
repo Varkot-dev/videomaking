@@ -3,18 +3,17 @@ import hashlib
 import json
 import logging
 import os
-import sys
 
 import yaml
 
+from manimgen import paths
+from manimgen.generator.scene_generator import generate_scenes
 from manimgen.input.parser import parse_input
 from manimgen.planner.lesson_planner import plan_lesson, plan_lesson_from_pdf
-from manimgen.generator.scene_generator import generate_scenes
-from manimgen.validator.runner import run_scene, _find_rendered_video
-from manimgen.validator.retry import retry_scene
-from manimgen.validator.fallback import fallback_scene
 from manimgen.renderer.assembler import assemble_video
-from manimgen import paths
+from manimgen.validator.fallback import fallback_scene
+from manimgen.validator.retry import retry_scene
+from manimgen.validator.runner import _find_rendered_video, run_scene
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +35,12 @@ def _tts_enabled(cfg: dict) -> bool:
 
 def _run_tts_for_section(section: dict, idx: int) -> tuple[str, list, float] | None:
     """Run TTS for a section. Returns (audio_path, timestamps, audio_duration) or None."""
-    from manimgen.renderer.tts import generate_narration, save_timestamps, get_audio_duration, check_audio_not_silent
+    from manimgen.renderer.tts import (
+        check_audio_not_silent,
+        generate_narration,
+        get_audio_duration,
+        save_timestamps,
+    )
 
     narration = section.get("narration", "").strip()
     if not narration:
@@ -58,13 +62,18 @@ def _run_tts_for_section(section: dict, idx: int) -> tuple[str, list, float] | N
         if not energy["ok"]:
             logger.warning(
                 "[manimgen] TTS audio for '%s' is %.0f%% silent — retrying once.",
-                section["title"], energy["silent_ratio"] * 100,
+                section["title"],
+                energy["silent_ratio"] * 100,
             )
             _, timestamps = generate_narration(narration, audio_path)
             save_timestamps(timestamps, ts_path)
             audio_duration = get_audio_duration(audio_path)
 
-        logger.info("[manimgen] %d word timestamps, %.1fs audio", len(timestamps), audio_duration)
+        logger.info(
+            "[manimgen] %d word timestamps, %.1fs audio",
+            len(timestamps),
+            audio_duration,
+        )
         return audio_path, timestamps, audio_duration
     except Exception as e:
         logger.warning("[manimgen] TTS failed for '%s': %s", section["title"], e)
@@ -88,6 +97,7 @@ def _topic_hash(topic_or_pdf: str) -> str:
 def _rendered_section_path(section: dict) -> str:
     """Path to the full (pre-cut) rendered section video from ManimGL."""
     from manimgen.utils import section_class_name
+
     return os.path.join("videos", f"{section_class_name(section)}.mp4")
 
 
@@ -113,7 +123,9 @@ def _render_is_fresh(video_path: str, topic_hash: str) -> bool:
     if stored != topic_hash:
         logger.warning(
             "[manimgen] Stale render detected: %s was built for topic hash %s, current is %s — re-rendering",
-            os.path.basename(video_path), stored, topic_hash,
+            os.path.basename(video_path),
+            stored,
+            topic_hash,
         )
         return False
     return True
@@ -127,6 +139,7 @@ def _write_hash_sidecar(video_path: str, topic_hash: str) -> None:
 # ---------------------------------------------------------------------------
 # Per-section pipeline
 # ---------------------------------------------------------------------------
+
 
 def _build_overview(plan: dict, all_section_audio: dict) -> dict:
     """Build a summary of the lesson plan enriched with TTS audio durations.
@@ -148,13 +161,15 @@ def _build_overview(plan: dict, all_section_audio: dict) -> dict:
         dur = audio.get("audio_duration", 0.0)
         cue_durations = audio.get("cue_durations", [])
         total += dur
-        sections_summary.append({
-            "id": sid,
-            "title": section.get("title", ""),
-            "position": f"{i} of {len(plan.get('sections', []))}",
-            "duration": dur,
-            "n_cues": len(cue_durations),
-        })
+        sections_summary.append(
+            {
+                "id": sid,
+                "title": section.get("title", ""),
+                "position": f"{i} of {len(plan.get('sections', []))}",
+                "duration": dur,
+                "n_cues": len(cue_durations),
+            }
+        )
 
     # Simple pacing note
     avg = total / len(sections_summary) if sections_summary else 0.0
@@ -194,7 +209,9 @@ def _run_section(
         segments = section_audio.get("segments") or None
         audio_slices = section_audio.get("audio_slices") or []
         if segments:
-            log.info("[manimgen] Using precomputed audio: %d cue segment(s)", len(segments))
+            log.info(
+                "[manimgen] Using precomputed audio: %d cue segment(s)", len(segments)
+            )
             if _all_cues_muxed(section, idx, len(segments)):
                 log.info("[manimgen] All cues already muxed, skipping section")
                 return [_muxed_path_for(section, idx, i) for i in range(len(segments))]
@@ -214,24 +231,33 @@ def _run_section(
                 return [_muxed_path_for(section, idx, i) for i in range(len(segments))]
 
             audio_slices = slice_audio(
-                audio_path, segments,
+                audio_path,
+                segments,
                 output_dir=paths.audio_dir(),
                 section_id=section_id,
             )
-            log.info("[manimgen] Audio slices: %s", [os.path.basename(p) for p in audio_slices])
+            log.info(
+                "[manimgen] Audio slices: %s",
+                [os.path.basename(p) for p in audio_slices],
+            )
 
     # --- Generate ONE scene for the whole section ---
     cue_durations = [seg.duration for seg in segments] if segments else None
 
     from manimgen.utils import section_class_name
+
     class_name = section_class_name(section)
     found_video = _find_rendered_video(class_name)
     if found_video and _render_is_fresh(found_video, current_topic_hash):
-        log.info("[manimgen] Render exists and is fresh, skipping codegen: %s", found_video)
+        log.info(
+            "[manimgen] Render exists and is fresh, skipping codegen: %s", found_video
+        )
         video_path = found_video
         success = True
     else:
-        code, class_name, scene_path = generate_scenes(section, cue_durations=cue_durations, overview=overview)
+        code, class_name, scene_path = generate_scenes(
+            section, cue_durations=cue_durations, overview=overview
+        )
         # Single authoritative timing gate (same pass retry.py uses): verify →
         # auto-fix → re-verify. If timing issues survive auto-fix, skip the
         # expensive first render entirely and go straight to the retry path,
@@ -240,7 +266,10 @@ def _run_section(
         timing_blocked = False
         if cue_durations:
             from manimgen.validator.retry import apply_timing_gate
-            code, remaining_timing_warnings = apply_timing_gate(code, scene_path, cue_durations)
+
+            code, remaining_timing_warnings = apply_timing_gate(
+                code, scene_path, cue_durations
+            )
             if remaining_timing_warnings:
                 log.warning(
                     "[manimgen] Unresolvable timing issues after auto-fix — "
@@ -255,12 +284,18 @@ def _run_section(
             success, video_path = run_scene(scene_path, class_name)
         if success and video_path:
             from manimgen.validator.render_validator import validate_render
+
             vr = validate_render(video_path, code, scene_path, cue_durations)
             if vr.severity == "hard":
-                log.warning("[manimgen] First-pass render has hard failures — forcing retry: %s", "; ".join(vr.issues))
+                log.warning(
+                    "[manimgen] First-pass render has hard failures — forcing retry: %s",
+                    "; ".join(vr.issues),
+                )
                 success = False
         if not success:
-            success, video_path = retry_scene(section, code, class_name, scene_path, cue_durations=cue_durations)
+            success, video_path = retry_scene(
+                section, code, class_name, scene_path, cue_durations=cue_durations
+            )
         if not success:
             log.info("[manimgen] All retries failed, using fallback")
             video_path = fallback_scene(section)
@@ -275,7 +310,10 @@ def _run_section(
 
     # --- Cut + mux per cue ---
     if segments and audio_slices and success:
-        from manimgen.renderer.cutter import cut_video_at_cues, cue_start_times_from_durations
+        from manimgen.renderer.cutter import (
+            cue_start_times_from_durations,
+            cut_video_at_cues,
+        )
         from manimgen.renderer.muxer import mux_audio_video
 
         cue_starts = cue_start_times_from_durations(cue_durations)
@@ -314,13 +352,15 @@ def _run_section(
 # Entry point
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(description="ManimGen: topic to 3B1B-style video")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("topic", nargs="?", help="Topic string")
     group.add_argument("--pdf", metavar="FILE", help="Path to a PDF of lecture notes")
-    parser.add_argument("--resume", action="store_true",
-                        help=f"Resume from cached plan ({_PLAN_CACHE})")
+    parser.add_argument(
+        "--resume", action="store_true", help=f"Resume from cached plan ({_PLAN_CACHE})"
+    )
     args = parser.parse_args()
 
     cfg = _load_config()
@@ -334,7 +374,9 @@ def main():
         # Recover topic hash from cached plan (stored during original run)
         current_topic_hash = lesson_plan.get("_topic_hash", "")
         if not current_topic_hash:
-            logger.warning("[manimgen] Cached plan has no _topic_hash — all renders will be treated as stale")
+            logger.warning(
+                "[manimgen] Cached plan has no _topic_hash — all renders will be treated as stale"
+            )
     elif args.pdf:
         logger.info("[manimgen] PDF input: %s", args.pdf)
         current_topic_hash = _topic_hash(os.path.abspath(args.pdf))
@@ -361,7 +403,9 @@ def main():
     # --- Global audio phase: run all TTS before any codegen ---
     all_section_audio: dict[str, dict] = {}
     if tts_on:
-        logger.info("[manimgen] Phase 1: TTS for all %d sections", len(lesson_plan["sections"]))
+        logger.info(
+            "[manimgen] Phase 1: TTS for all %d sections", len(lesson_plan["sections"])
+        )
         for idx, section in enumerate(lesson_plan["sections"], start=1):
             section_id = section.get("id", f"section_{idx:02d}")
             tts_result = _run_tts_for_section(section, idx)
@@ -371,9 +415,12 @@ def main():
 
                 audio_path, timestamps, audio_duration = tts_result
                 cue_word_indices = section.get("cue_word_indices", [0])
-                segments = compute_segments(timestamps, cue_word_indices, audio_duration)
+                segments = compute_segments(
+                    timestamps, cue_word_indices, audio_duration
+                )
                 audio_slices = slice_audio(
-                    audio_path, segments,
+                    audio_path,
+                    segments,
                     output_dir=paths.audio_dir(),
                     section_id=section_id,
                 )
@@ -400,8 +447,14 @@ def main():
         else:
             section_audio = None
         rendered_videos.extend(
-            _run_section(section, idx, tts_on, current_topic_hash,
-                         section_audio=section_audio, overview=overview)
+            _run_section(
+                section,
+                idx,
+                tts_on,
+                current_topic_hash,
+                section_audio=section_audio,
+                overview=overview,
+            )
         )
 
     output = assemble_video(rendered_videos, lesson_plan["title"])
@@ -411,4 +464,3 @@ def main():
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     main()
-

@@ -12,11 +12,12 @@ Severity:
            Caller logs issues and injects them into the next LLM retry prompt.
   "none" — ok=True, issues empty: fully clean.
 """
+
 from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 
 from manimgen.validator.frame_checker import check_frames
@@ -85,14 +86,16 @@ def validate_render(
     if has_hard_failure:
         logger.info(
             "[render_validator] Hard failure(s) in %s: %d issue(s)",
-            video_path, len(all_issues),
+            video_path,
+            len(all_issues),
         )
         return ValidationResult(ok=False, issues=all_issues, severity="hard")
 
     if all_issues:
         logger.info(
             "[render_validator] Soft issue(s) in %s: %d issue(s)",
-            video_path, len(all_issues),
+            video_path,
+            len(all_issues),
         )
         return ValidationResult(ok=True, issues=all_issues, severity="soft")
 

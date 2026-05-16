@@ -45,10 +45,16 @@ def _load_llm_config() -> dict:
             cfg = yaml.safe_load(f) or {}
         llm_cfg = cfg.get("llm", {})
         return {
-            "llm_provider":         str(cfg.get("llm_provider", _DEFAULTS["llm_provider"])).lower(),
-            "gemini_model":         llm_cfg.get("gemini_model",         _DEFAULTS["gemini_model"]),
-            "anthropic_model":      llm_cfg.get("anthropic_model",      _DEFAULTS["anthropic_model"]),
-            "anthropic_max_tokens": int(llm_cfg.get("max_tokens",       _DEFAULTS["anthropic_max_tokens"])),
+            "llm_provider": str(
+                cfg.get("llm_provider", _DEFAULTS["llm_provider"])
+            ).lower(),
+            "gemini_model": llm_cfg.get("gemini_model", _DEFAULTS["gemini_model"]),
+            "anthropic_model": llm_cfg.get(
+                "anthropic_model", _DEFAULTS["anthropic_model"]
+            ),
+            "anthropic_max_tokens": int(
+                llm_cfg.get("max_tokens", _DEFAULTS["anthropic_max_tokens"])
+            ),
         }
     except (OSError, yaml.YAMLError) as exc:
         logger.warning("[llm] Could not read config.yaml (%s) — using defaults", exc)
@@ -103,10 +109,13 @@ def _gemini(system: str, user: str, images: list[str]) -> str:
     contents: list = []
     for b64 in images:
         import base64
-        contents.append(types.Part.from_bytes(
-            data=base64.b64decode(b64),
-            mime_type="image/png",
-        ))
+
+        contents.append(
+            types.Part.from_bytes(
+                data=base64.b64decode(b64),
+                mime_type="image/png",
+            )
+        )
     contents.append(user)
 
     response = client.models.generate_content(
@@ -129,10 +138,12 @@ def _anthropic(system: str, user: str, images: list[str]) -> str:
 
     content: list = []
     for b64 in images:
-        content.append({
-            "type": "image",
-            "source": {"type": "base64", "media_type": "image/png", "data": b64},
-        })
+        content.append(
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/png", "data": b64},
+            }
+        )
     content.append({"type": "text", "text": user})
 
     message = client.messages.create(

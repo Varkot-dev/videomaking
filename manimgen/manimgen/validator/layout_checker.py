@@ -29,9 +29,13 @@ def _get_video_duration(video_path: str) -> float | None:
     try:
         result = subprocess.run(
             [
-                "ffprobe", "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1",
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
                 video_path,
             ],
             capture_output=True,
@@ -56,24 +60,35 @@ def _extract_frame(video_path: str, timestamp: float) -> str | None:
     try:
         result = subprocess.run(
             [
-                "ffmpeg", "-y",
-                "-ss", str(timestamp),
-                "-i", video_path,
-                "-frames:v", "1",
-                "-q:v", "2",
+                "ffmpeg",
+                "-y",
+                "-ss",
+                str(timestamp),
+                "-i",
+                video_path,
+                "-frames:v",
+                "1",
+                "-q:v",
+                "2",
                 tmp_path,
             ],
             capture_output=True,
             timeout=30,
         )
         if result.returncode != 0 or not os.path.exists(tmp_path):
-            logger.warning("[layout_checker] ffmpeg frame extract failed at %.2fs: %s", timestamp, result.stderr)
+            logger.warning(
+                "[layout_checker] ffmpeg frame extract failed at %.2fs: %s",
+                timestamp,
+                result.stderr,
+            )
             return None
 
         with open(tmp_path, "rb") as f:
             return base64.b64encode(f.read()).decode("utf-8")
     except Exception as exc:
-        logger.warning("[layout_checker] Frame extraction error at %.2fs: %s", timestamp, exc)
+        logger.warning(
+            "[layout_checker] Frame extraction error at %.2fs: %s", timestamp, exc
+        )
         return None
     finally:
         if os.path.exists(tmp_path):
@@ -125,7 +140,9 @@ def check_layout(video_path: str) -> dict:
     frames = _sample_frames(video_path)
 
     if not frames:
-        logger.warning("[layout_checker] Could not extract any frames from %s", video_path)
+        logger.warning(
+            "[layout_checker] Could not extract any frames from %s", video_path
+        )
         return {"ok": True, "issues": "", "skipped": True}
 
     logger.debug("[layout_checker] Checking %d frames from %s", len(frames), video_path)

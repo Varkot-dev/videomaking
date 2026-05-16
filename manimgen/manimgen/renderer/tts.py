@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 # Config helpers
 # ---------------------------------------------------------------------------
 
+
 def _load_tts_config() -> dict:
     config_path = os.path.join(os.path.dirname(__file__), "..", "..", "config.yaml")
     try:
@@ -56,16 +57,18 @@ _DEFAULT_SPEED = "+5%"
 # Data types
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class WordTimestamp:
     word: str
-    start: float   # seconds from audio start
-    end: float     # seconds from audio start
+    start: float  # seconds from audio start
+    end: float  # seconds from audio start
 
 
 # ---------------------------------------------------------------------------
 # Core TTS function
 # ---------------------------------------------------------------------------
+
 
 async def _generate_async(
     text: str,
@@ -86,11 +89,13 @@ async def _generate_async(
             # edge-tts reports offsets in 100-nanosecond units
             start_sec = chunk["offset"] / 10_000_000
             duration_sec = chunk["duration"] / 10_000_000
-            word_timestamps.append(WordTimestamp(
-                word=chunk["text"],
-                start=start_sec,
-                end=start_sec + duration_sec,
-            ))
+            word_timestamps.append(
+                WordTimestamp(
+                    word=chunk["text"],
+                    start=start_sec,
+                    end=start_sec + duration_sec,
+                )
+            )
 
     with open(output_path, "wb") as f:
         f.write(b"".join(audio_chunks))
@@ -137,7 +142,9 @@ def load_timestamps(json_path: str) -> list[WordTimestamp]:
     return [WordTimestamp(word=d["word"], start=d["start"], end=d["end"]) for d in data]
 
 
-def cue_times(timestamps: list[WordTimestamp], cue_word_indices: list[int]) -> list[float]:
+def cue_times(
+    timestamps: list[WordTimestamp], cue_word_indices: list[int]
+) -> list[float]:
     """Given a list of cue word indices (0-based), return the start time of each.
 
     Example:
@@ -162,15 +169,19 @@ def cue_times(timestamps: list[WordTimestamp], cue_word_indices: list[int]) -> l
 # Audio duration helper
 # ---------------------------------------------------------------------------
 
+
 def get_audio_duration(audio_path: str) -> float:
     """Return duration of an audio file in seconds using ffprobe."""
     try:
         result = subprocess.run(
             [
                 "ffprobe",
-                "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "json",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "json",
                 audio_path,
             ],
             capture_output=True,
@@ -196,10 +207,16 @@ def check_audio_not_silent(audio_path: str) -> dict:
     Flags as silent if >80% of momentary loudness measurements are below -60 LUFS.
     """
     import re as _re
+
     cmd = [
-        "ffmpeg", "-i", audio_path,
-        "-af", "ebur128=peak=true",
-        "-f", "null", "-",
+        "ffmpeg",
+        "-i",
+        audio_path,
+        "-af",
+        "ebur128=peak=true",
+        "-f",
+        "null",
+        "-",
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     output = result.stderr

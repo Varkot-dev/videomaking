@@ -1,17 +1,25 @@
 import enum
+import os
 import re
 import subprocess
-import os
+
+from manimgen import paths
 from manimgen.llm import chat
-from manimgen.validator.runner import _find_rendered_video, _is_3d_scene
-from manimgen.validator.codeguard import precheck_and_autofix_file as precheck_and_autofix, apply_error_aware_fixes
+from manimgen.validator.codeguard import (
+    apply_error_aware_fixes,
+)
+from manimgen.validator.codeguard import (
+    precheck_and_autofix_file as precheck_and_autofix,
+)
 from manimgen.validator.env import get_render_env
 from manimgen.validator.layout_checker import check_layout
-from manimgen.validator.timing_verifier import verify_timing, auto_fix_timing
-from manimgen import paths
+from manimgen.validator.runner import _find_rendered_video, _is_3d_scene
+from manimgen.validator.timing_verifier import auto_fix_timing, verify_timing
 
 MAX_RETRIES = paths.render_max_retries()
-MAX_LLM_FIX_CALLS = int(os.environ.get("MANIMGEN_MAX_RETRY_LLM_CALLS", str(MAX_RETRIES)))
+MAX_LLM_FIX_CALLS = int(
+    os.environ.get("MANIMGEN_MAX_RETRY_LLM_CALLS", str(MAX_RETRIES))
+)
 # Error fixes and visual fixes draw from independent budgets so an error storm
 # cannot bankrupt visual correction (and vice versa). Both default to
 # MAX_LLM_FIX_CALLS unless separately overridden.
@@ -32,20 +40,25 @@ class SceneErrorType(str, enum.Enum):
     Inherits str so instances compare equal to their string values and can be
     used transparently as dict keys without extra conversion.
     """
+
     PRECHECK_VGROUP = "precheck_vgroup"
-    SYNTAX          = "syntax"
-    IMPORT          = "import"
-    ATTRIBUTE       = "attribute"
-    TYPE            = "type"
-    RUNTIME         = "runtime"
-    TIMING          = "timing"
+    SYNTAX = "syntax"
+    IMPORT = "import"
+    ATTRIBUTE = "attribute"
+    TYPE = "type"
+    RUNTIME = "runtime"
+    TIMING = "timing"
 
 
 def _classify_error(stderr: str) -> SceneErrorType:
     # Check precheck-specific errors BEFORE generic TypeError/AttributeError —
     # precheck output contains the word "TypeError" in its explanation text,
     # which would otherwise cause a false match on the generic TypeError branch.
-    if "Precheck failed" in stderr and "VGroup" in stderr and "item assignment" in stderr:
+    if (
+        "Precheck failed" in stderr
+        and "VGroup" in stderr
+        and "item assignment" in stderr
+    ):
         return SceneErrorType.PRECHECK_VGROUP
     if "SyntaxError" in stderr:
         return SceneErrorType.SYNTAX
@@ -68,11 +81,11 @@ _FIX_GUIDANCE: dict[SceneErrorType, str] = {
         "Use box_list[k].get_center() for position lookups after swaps. "
         "Never assign into the VGroup directly. Never use boxes[i] after the first swap."
     ),
-    SceneErrorType.SYNTAX:    "Fix the Python syntax error shown in the traceback.",
-    SceneErrorType.IMPORT:    "Fix the import. Use `from manimlib import *`. Do not import from `manim`.",
+    SceneErrorType.SYNTAX: "Fix the Python syntax error shown in the traceback.",
+    SceneErrorType.IMPORT: "Fix the import. Use `from manimlib import *`. Do not import from `manim`.",
     SceneErrorType.ATTRIBUTE: "Fix the attribute error. Check the correct ManimGL method name and signature.",
-    SceneErrorType.TYPE:      "Fix the type error. Check argument types and counts for the method.",
-    SceneErrorType.RUNTIME:   "Simplify the scene logic. Reduce animations, check object creation order.",
+    SceneErrorType.TYPE: "Fix the type error. Check argument types and counts for the method.",
+    SceneErrorType.RUNTIME: "Simplify the scene logic. Reduce animations, check object creation order.",
     SceneErrorType.TIMING: (
         "Fix the animation timing. Each CUE block must have animations + self.wait() that "
         "sum exactly to the cue duration. The most common bug: loop timing — subtract the "
@@ -93,8 +106,8 @@ def _fix_guidance(error_type: SceneErrorType, stderr: str = "") -> str:
             bad = kw_m.group(1)
             hint = (
                 f" The correct kwarg name is '{hint_m.group(1)}'."
-                if hint_m else
-                f" Check the exact ManimGL signature for {method}()."
+                if hint_m
+                else f" Check the exact ManimGL signature for {method}()."
             )
             return (
                 f"Fix the TypeError: '{bad}' is not a valid keyword argument for {method}().{hint} "
@@ -188,9 +201,13 @@ def retry_scene(
     # Timing pass on the initial code — catches freeze-frame tails before the
     # first render attempt at zero cost. (I6 · stable rhythm, I10 · narration contract)
     if cue_durations:
-        code, initial_timing_warnings = apply_timing_gate(code, scene_path, cue_durations)
+        code, initial_timing_warnings = apply_timing_gate(
+            code, scene_path, cue_durations
+        )
         if initial_timing_warnings:
-            print(f"[retry] {len(initial_timing_warnings)} timing issue(s) found in initial code:")
+            print(
+                f"[retry] {len(initial_timing_warnings)} timing issue(s) found in initial code:"
+            )
             for w in initial_timing_warnings:
                 print(f"[retry]   {w}")
 
@@ -198,6 +215,7 @@ def retry_scene(
         result = _run_and_capture(scene_path, class_name)
         if result["success"]:
             from manimgen.validator.frame_checker import check_frames
+
             frame_result = check_frames(result["video_path"])
 
             # Frozen-frame detection is not a retry trigger: a static frame
@@ -205,7 +223,8 @@ def retry_scene(
             # for it was burning the retry budget on already-good renders.
             # Black frames and edge clipping are still tracked.
             frame_issues = [
-                issue for issue in (frame_result.issues or [])
+                issue
+                for issue in (frame_result.issues or [])
                 if "identical — animation appears frozen" not in issue
             ]
 
@@ -236,16 +255,25 @@ def retry_scene(
             # Scene rendered but has visual defects. Feed structured feedback
             # back into the retry loop if budget allows.
             issues_text = "\n".join(combined_issues)
-            print(f"[retry] Attempt {attempt}/{MAX_RETRIES} rendered but has visual defects:")
+            print(
+                f"[retry] Attempt {attempt}/{MAX_RETRIES} rendered but has visual defects:"
+            )
             for line in combined_issues:
                 print(f"[retry]   {line}")
 
-            if visual_llm_calls_used >= MAX_VISUAL_LLM_FIX_CALLS or attempt == MAX_RETRIES:
-                print("[retry] Accepting video despite visual issues (budget or attempt limit reached).")
+            if (
+                visual_llm_calls_used >= MAX_VISUAL_LLM_FIX_CALLS
+                or attempt == MAX_RETRIES
+            ):
+                print(
+                    "[retry] Accepting video despite visual issues (budget or attempt limit reached)."
+                )
                 return True, best_video_path or result["video_path"]
 
             print("[retry] Requesting visual fix from LLM...")
-            code = _request_visual_fix(code, "\n".join(combined_issues), system_prompt, defective_frames)
+            code = _request_visual_fix(
+                code, "\n".join(combined_issues), system_prompt, defective_frames
+            )
             visual_llm_calls_used += 1
             with open(scene_path, "w") as f:
                 f.write(code)
@@ -270,10 +298,14 @@ def retry_scene(
             code = local_fixed
             with open(scene_path, "w") as f:
                 f.write(code)
-            print(f"[retry] Attempt {attempt}/{MAX_RETRIES} applied local fixes: {', '.join(local_applied)}")
+            print(
+                f"[retry] Attempt {attempt}/{MAX_RETRIES} applied local fixes: {', '.join(local_applied)}"
+            )
             continue
 
-        print(f"[retry] Attempt {attempt}/{MAX_RETRIES} failed ({error_type}). Requesting fix...")
+        print(
+            f"[retry] Attempt {attempt}/{MAX_RETRIES} failed ({error_type}). Requesting fix..."
+        )
 
         # The remaining cases (last attempt, repeated signature, budget
         # exhausted) all mean: there is no productive LLM fix we can make.
@@ -295,7 +327,9 @@ def retry_scene(
             )
             break
 
-        prompt_stderr = _truncate_for_prompt(result["stderr"], RETRY_PROMPT_STDERR_CHARS)
+        prompt_stderr = _truncate_for_prompt(
+            result["stderr"], RETRY_PROMPT_STDERR_CHARS
+        )
         prompt_code = _truncate_for_prompt(code, RETRY_PROMPT_CODE_CHARS)
         timing_context = ""
         if pending_timing_warnings:
@@ -343,14 +377,18 @@ Original code:
             # Previously these were only printed and silently lost.
             pending_timing_warnings = timing_warnings
             if timing_warnings:
-                print(f"[retry] {len(timing_warnings)} timing warning(s) after auto-fix:")
+                print(
+                    f"[retry] {len(timing_warnings)} timing warning(s) after auto-fix:"
+                )
                 for w in timing_warnings:
                     print(f"[retry]   {w}")
 
     # All attempts exhausted. If an earlier attempt rendered successfully
     # (even with some visual defects), prefer it over the title-card fallback.
     if best_video_path:
-        print(f"[retry] All attempts exhausted — shipping best earlier render (had {best_issue_count} visual issue(s)).")
+        print(
+            f"[retry] All attempts exhausted — shipping best earlier render (had {best_issue_count} visual issue(s))."
+        )
         return True, best_video_path
     return False, None
 
@@ -360,21 +398,37 @@ def _run_and_capture(scene_path: str, class_name: str) -> dict:
     if not precheck["ok"]:
         stderr = precheck["stderr"]
         if precheck.get("layout_warnings"):
-            stderr += "\nLayout warnings:\n- " + "\n- ".join(precheck["layout_warnings"])
+            stderr += "\nLayout warnings:\n- " + "\n- ".join(
+                precheck["layout_warnings"]
+            )
         return {"success": False, "video_path": None, "stderr": stderr}
 
     # Director scenes can be long; avoid false timeout-driven fallbacks.
     timeout = 360 if _is_3d_scene(scene_path) else 240
     try:
         result = subprocess.run(
-            ["manimgl", scene_path, class_name, "-w", paths.render_quality_flag(), "--fps", str(paths.render_fps()), "-c", "#1C1C1C"],
+            [
+                "manimgl",
+                scene_path,
+                class_name,
+                "-w",
+                paths.render_quality_flag(),
+                "--fps",
+                str(paths.render_fps()),
+                "-c",
+                "#1C1C1C",
+            ],
             capture_output=True,
             text=True,
             timeout=timeout,
             env=get_render_env(),
         )
         if result.returncode == 0:
-            return {"success": True, "video_path": _find_rendered_video(class_name), "stderr": ""}
+            return {
+                "success": True,
+                "video_path": _find_rendered_video(class_name),
+                "stderr": "",
+            }
         return {"success": False, "video_path": None, "stderr": result.stderr}
     except subprocess.TimeoutExpired:
         return {"success": False, "video_path": None, "stderr": "TimeoutExpired"}
@@ -389,7 +443,9 @@ def _load_retry_system_prompt() -> str:
         here = os.path.dirname(__file__)
         root = os.path.dirname(here)
         retry_system_path = os.path.join(here, "prompts", "retry_system.md")
-        director_system_path = os.path.join(root, "generator", "prompts", "director_system.md")
+        director_system_path = os.path.join(
+            root, "generator", "prompts", "director_system.md"
+        )
         with open(retry_system_path) as f:
             system = f.read()
         with open(director_system_path) as f:
@@ -398,13 +454,15 @@ def _load_retry_system_prompt() -> str:
     return _retry_system_prompt_cache
 
 
-def _request_visual_fix(code: str, issues: str, system_prompt: str, frames: list[str]) -> str:
+def _request_visual_fix(
+    code: str, issues: str, system_prompt: str, frames: list[str]
+) -> str:
     """Ask the LLM to fix code based on structured visual feedback and defective frames."""
     from manimgen.utils import load_reference_frames
-    
+
     prompt_code = _truncate_for_prompt(code, RETRY_PROMPT_CODE_CHARS)
     ref_frames = load_reference_frames()
-    
+
     fixed = chat(
         system=system_prompt,
         user=f"""This ManimGL scene rendered successfully but has visual defects detected by frame analysis.
@@ -424,7 +482,9 @@ Original code:
     return fixed
 
 
-def _write_attempt_artifacts(logs_dir: str, class_name: str, attempt: int, code: str, stderr: str) -> None:
+def _write_attempt_artifacts(
+    logs_dir: str, class_name: str, attempt: int, code: str, stderr: str
+) -> None:
     code_path = os.path.join(logs_dir, f"{class_name}_attempt{attempt}.py")
     log_path = os.path.join(logs_dir, f"{class_name}_attempt{attempt}.log")
 
