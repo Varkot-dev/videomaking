@@ -139,7 +139,9 @@ The visual field must give the animator enough information to write exact ManimG
 - **Sorted arrays**: row of Square+Text VGroups arranged RIGHT
 - **Curves**: axes.get_graph() with color — must specify x_range and formula
 - **Highlights**: SurroundingRectangle with color
-- **Equations**: Tex() with LaTeX, but write every LaTeX backslash as the section sign `§` instead of `\`. JSON string values cannot contain a raw backslash, and a literal `\` here will corrupt or break the storyboard. Example: write `Tex(§frac{1}{x})` and `§theta_1 = 3 - 0.1 §cdot §nabla f`, NOT `Tex(\frac{1}{x})`. Use `§` for ALL LaTeX commands (§frac, §theta, §nabla, §cdot, §Rightarrow, §sum, §int, the LaTeX line break §§, etc.). The pipeline converts every `§` back to `\` before rendering, so the math renders exactly as normal LaTeX. Never put a raw `\` anywhere in a visual description.
+- **Equations**: Tex() with LaTeX. **Only inside a Tex(...) call**, write every LaTeX backslash as the section sign `§` instead of `\` — a raw `\` in a JSON string corrupts the storyboard, and the pipeline converts `§` back to `\` before rendering. Example: `Tex(§frac{1}{x})`, `Tex(§theta_1 = 3 - 0.1 §cdot §nabla f)`. Use `§` for ALL LaTeX commands inside Tex(): §frac, §theta, §nabla, §cdot, §Rightarrow, §sum, §int, the LaTeX line break §§, etc.
+- **Greek/symbols in plain labels**: For a `Text()` label or title (NOT a Tex equation), never use `§` or a backslash command — `Text()` is not LaTeX and would render `§alpha`/`\alpha` as a broken glyph box. Use the actual Unicode character directly: write `Text("Learning Rate: α")`, `Text("Gradient ∇f")`, `Text("θ update")` — α β γ θ λ α ∇ ∑ ∫ ≤ ≥ → ⇒ are all valid in Text(). Reserve `§`-notation strictly for Tex() math.
+- Never put a raw `\` anywhere in a visual description.
 - **Text reveals**: Text() objects in VGroup arranged DOWN, revealed via LaggedStart
 - **Moving dots**: ValueTracker + always_redraw Dot on a curve
 - **Area fill**: axes.get_area() with color and x_range
