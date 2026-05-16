@@ -36,35 +36,39 @@ Return ONLY a valid JSON object. No markdown, no explanation.
 
 ---
 
-## CRITICAL — cues[] array length rule
+## ⛔ THE #1 CAUSE OF BROKEN VIDEOS: too few cues
 
-If your narration contains N `[CUE]` markers, `cues[]` MUST have exactly **N + 1** entries.
+**A `[CUE]` marker is a SEPARATOR, not a segment.** N markers split the narration into **N + 1 segments**. You MUST write one `visual` per *segment*, which is **N + 1 cues** — NOT one cue per marker. Writing one cue per marker leaves the final third of the video with no visual, producing a blank/static screen. This is the single most common and most damaging error.
 
-- `index 0` = the opening segment, before the first `[CUE]`
-- `index 1` = the segment after the first `[CUE]`
-- ...
-- `index N` = the closing segment, after the last `[CUE]`
+**Mandatory self-check before you finish each section.** For every section, literally do this count:
 
-The narration above has 2 `[CUE]` markers → `cues[]` has 3 entries (index 0, 1, 2). This is correct.
+1. Count the `[CUE]` markers in that section's `narration`. Call it **M**.
+2. The `cues[]` array for that section MUST have exactly **M + 1** entries, with `index` values `0, 1, ..., M`.
+3. The text BEFORE the first `[CUE]` is segment 0 — it ALWAYS needs its own cue. The text AFTER the last `[CUE]` is segment M — it ALWAYS needs its own cue. Neither is optional.
+4. If `len(cues) != M + 1`, your section is BROKEN. Add the missing segment cues before continuing.
 
-**WRONG** — only writing one cue per `[CUE]` marker:
+**The mistake the model keeps making — DO NOT do this:**
 ```json
-"narration": "Opening. [CUE] Middle. [CUE] Closing.",
+// narration has 2 [CUE] markers (M=2) → needs 3 cues. This has only 2. BROKEN.
+"narration": "Opening idea. [CUE] Middle idea. [CUE] Closing idea.",
 "cues": [
   {"index": 0, "visual": "Middle visual"},
   {"index": 1, "visual": "Closing visual"}
 ]
 ```
+The opening idea ("Opening idea.") has NO cue → it renders as a blank screen while the narrator talks. Wrong.
 
-**CORRECT** — N+1 cues for N markers:
+**CORRECT — M=2 markers → exactly M+1=3 cues, segment 0 included:**
 ```json
-"narration": "Opening. [CUE] Middle. [CUE] Closing.",
+"narration": "Opening idea. [CUE] Middle idea. [CUE] Closing idea.",
 "cues": [
-  {"index": 0, "visual": "Opening visual — plays from the start"},
-  {"index": 1, "visual": "Middle visual — plays after first [CUE]"},
-  {"index": 2, "visual": "Closing visual — plays after second [CUE]"}
+  {"index": 0, "visual": "Opening visual — plays from the very start, before any [CUE]"},
+  {"index": 1, "visual": "Middle visual — after the 1st [CUE]"},
+  {"index": 2, "visual": "Closing visual — after the 2nd [CUE], plays to the end"}
 ]
 ```
+
+Single-marker example: `"A. [CUE] B."` → M=1 → **2 cues** (index 0 for "A.", index 1 for "B."). Zero-marker example: `"Just one beat."` → M=0 → **1 cue** (index 0).
 
 ---
 

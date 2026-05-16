@@ -74,6 +74,66 @@ class TestPlannerStoryboardOutput(unittest.TestCase):
         result = _extract_cues(plan)
         self.assertNotIn("[CUE]", result["sections"][0]["narration"])
 
+    def test_undersupplied_cues_trigger_llm_refill_with_real_content(self):
+        """The systemic bug: planner emits 1 cue per [CUE] marker (2) instead
+        of one per segment (3). The refill must re-prompt and produce real
+        per-segment visuals, NOT blank placeholders."""
+        from manimgen.planner.lesson_planner import _extract_cues
+        import json as _json
+
+        plan = {
+            "sections": [{
+                "id": "section_01",
+                "title": "Gradient",
+                "narration": "Open idea. [CUE] Middle idea. [CUE] Close idea.",
+                # 2 markers -> 3 segments, but planner supplied only 2 cues
+                "cues": [
+                    {"index": 0, "visual": "Technique: fade_reveal. middle viz"},
+                    {"index": 1, "visual": "Technique: axes_curve. close viz"},
+                ],
+            }]
+        }
+        refilled = _json.dumps([
+            {"index": 0, "visual": "Technique: fade_reveal. opening viz"},
+            {"index": 1, "visual": "Technique: stagger_reveal. middle viz"},
+            {"index": 2, "visual": "Technique: axes_curve. close viz"},
+        ])
+        with patch("manimgen.planner.lesson_planner.chat", return_value=refilled) as mock_chat:
+            result = _extract_cues(plan)
+
+        cues = result["sections"][0]["cues"]
+        mock_chat.assert_called_once()  # exactly one targeted refill call
+        self.assertEqual(len(cues), 3)
+        # Every cue has real Technique content — no "animate segment N" placeholder
+        for c in cues:
+            self.assertIn("Technique:", c["visual"])
+            self.assertNotIn("animate segment", c["visual"])
+
+    def test_refill_failure_falls_back_gracefully_no_crash(self):
+        """If the refill LLM call fails or returns the wrong count, the
+        pipeline must NOT crash — it falls back to placeholder synthesis so
+        a video still renders (degraded, but not a hard failure)."""
+        from manimgen.planner.lesson_planner import _extract_cues
+
+        plan = {
+            "sections": [{
+                "id": "section_01",
+                "title": "Gradient",
+                "narration": "Open. [CUE] Middle. [CUE] Close.",
+                "cues": [
+                    {"index": 0, "visual": "Technique: fade_reveal. a"},
+                    {"index": 1, "visual": "Technique: axes_curve. b"},
+                ],
+            }]
+        }
+        with patch("manimgen.planner.lesson_planner.chat",
+                   side_effect=Exception("LLM down")):
+            result = _extract_cues(plan)  # must not raise
+
+        cues = result["sections"][0]["cues"]
+        self.assertEqual(len(cues), 3)  # still N+1, degraded
+        self.assertTrue(all(len(c["visual"]) > 0 for c in cues))
+
     def test_extract_cues_word_indices_length_matches_cues(self):
         from manimgen.planner.lesson_planner import _extract_cues
 
