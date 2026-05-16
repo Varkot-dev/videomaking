@@ -228,14 +228,40 @@ def retry_scene(
                 if "identical — animation appears frozen" not in issue
             ]
 
-            # Gate the expensive LLM vision check: skip check_layout when the
-            # zero-cost frame_checker already found concrete defects (we have
-            # actionable issues and don't need a paid second opinion). When
-            # frames are clean, run check_layout to catch defects frames can't
-            # see. Detection is never budget-gated.
             combined_issues = list(frame_issues)
             defective_frames: list[str] = []
-            if not frame_issues:
+
+            # HARD TIMING GATE. frame_checker's binary frozen-detection was
+            # (correctly) removed as a trigger because it can't tell a brief
+            # intentional hold from a real dead screen. timing_verifier
+            # QUANTIFIES it: a cue whose animation ends >= the freeze-block
+            # threshold before its narration is a multi-second dead screen,
+            # not a hold. Such a render must NOT be accepted — feed it through
+            # the same defect→retry→best-attempt machinery as visual defects.
+            # This closes the silent-failure: the pipeline used to detect
+            # these freezes (printing "CUE N: +9.73s short") and ship anyway.
+            if cue_durations:
+                from manimgen.validator.timing_verifier import (
+                    blocking_freezes,
+                    verify_timing,
+                )
+
+                freezes = blocking_freezes(verify_timing(code, cue_durations))
+                if freezes:
+                    print(
+                        f"[retry] Attempt {attempt}/{MAX_RETRIES} has "
+                        f"{len(freezes)} blocking freeze-frame tail(s):"
+                    )
+                    for fz in freezes:
+                        print(f"[retry]   {fz}")
+                    combined_issues.extend(freezes)
+
+            # Gate the expensive LLM vision check: skip check_layout when the
+            # zero-cost frame_checker (or the timing gate) already found
+            # concrete defects (we have actionable issues and don't need a
+            # paid second opinion). When clean, run check_layout to catch
+            # defects frames can't see. Detection is never budget-gated.
+            if not combined_issues:
                 layout = check_layout(result["video_path"])
                 if not layout["ok"] and layout["issues"]:
                     combined_issues.extend(layout["issues"].splitlines())

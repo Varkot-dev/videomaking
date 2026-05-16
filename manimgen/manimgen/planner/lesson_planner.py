@@ -86,12 +86,22 @@ def _extract_cues(plan: dict) -> dict:
         if existing_cues and len(existing_cues) != n_segments:
             logger.warning(
                 "[planner] Section '%s' has %d cues[] but %d segments (%d [CUE] markers). "
-                "Planner likely omitted the opening cue (index 0). Synthesising fallbacks for missing entries.",
+                "Re-prompting planner to supply one visual per segment.",
                 section.get("id", "?"),
                 len(existing_cues),
                 n_segments,
                 n_segments - 1,
             )
+            # Targeted recovery: ask the LLM for exactly n_segments visuals,
+            # giving it the per-segment narration text. This produces real
+            # content for the missing segment(s) instead of a blank-screen
+            # placeholder. Falls through to the per-index synthesis below if
+            # it fails or still returns the wrong count — never crashes.
+            refilled = _refill_cues_via_llm(
+                section.get("title", ""), clean, indices, existing_cues
+            )
+            if refilled is not None:
+                existing_cues = refilled
 
         title = section.get("title", "")
         cues_out = []
@@ -127,6 +137,71 @@ def _extract_cues(plan: dict) -> dict:
                 section.get("id", "?"),
             )
     return plan
+
+
+def _segment_narration(clean: str, indices: list[int]) -> list[str]:
+    """Split clean narration into the N+1 segment texts using word indices.
+
+    indices[k] is the word index where segment k starts. Segment k spans
+    words[indices[k] : indices[k+1]] (last segment runs to the end).
+    """
+    words = clean.split()
+    segs: list[str] = []
+    for k, start in enumerate(indices):
+        end = indices[k + 1] if k + 1 < len(indices) else len(words)
+        segs.append(" ".join(words[start:end]).strip())
+    return segs
+
+
+def _refill_cues_via_llm(
+    title: str,
+    clean: str,
+    indices: list[int],
+    provided_cues: list[dict],
+) -> list[dict] | None:
+    """Re-prompt the planner for exactly len(indices) cues, one per segment.
+
+    Returns a cues list of the correct length, or None if the call fails or
+    still returns the wrong count (caller then uses placeholder synthesis).
+    Bounded to a single LLM call — this is a safety net, not the hot path.
+    """
+    segments = _segment_narration(clean, indices)
+    n = len(segments)
+    seg_block = "\n".join(
+        f"  segment {i} narration: {s!r}" for i, s in enumerate(segments)
+    )
+    provided_block = json.dumps([c.get("visual", "") for c in provided_cues], indent=2)
+    user = (
+        f"A section titled {title!r} has narration split into {n} segments by "
+        f"[CUE] markers. Each segment needs exactly one visual. The planner "
+        f"only supplied {len(provided_cues)} visual(s), so segments are "
+        f"misaligned.\n\nSegments:\n{seg_block}\n\n"
+        f"Visuals the planner already wrote (may be for the wrong segments):\n"
+        f"{provided_block}\n\n"
+        f"Return ONLY a JSON array of exactly {n} objects, in segment order: "
+        f'[{{"index": 0, "visual": "..."}}, ...]. Each `visual` MUST start '
+        f"with `Technique: <name>` and follow the same visual rules as the "
+        f"main planner. Reuse/adapt the provided visuals where they fit a "
+        f"segment; write new ones for segments that have none. Use § for "
+        f"LaTeX backslashes inside Tex() only."
+    )
+    try:
+        raw = chat(system=_load_system_prompt(), user=user)
+        parsed = _safe_json_loads(_strip_fencing(raw))
+    except Exception as e:
+        logger.warning("[planner] Cue refill LLM call failed: %s", e)
+        return None
+
+    cues = parsed if isinstance(parsed, list) else parsed.get("cues")
+    if not isinstance(cues, list) or len(cues) != n:
+        logger.warning(
+            "[planner] Cue refill returned %s entries, expected %d — "
+            "falling back to placeholder synthesis.",
+            len(cues) if isinstance(cues, list) else "non-list",
+            n,
+        )
+        return None
+    return cues
 
 
 from manimgen.utils import strip_fencing as _strip_fencing

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import ast
 import logging
+import os
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -50,7 +51,37 @@ _TOLERANCE = 1.0  # seconds — mismatches below this are acceptable
 # once the muxer pads/trims to audio length. Retrying for sub-1s deltas was
 # actively damaging already-good renders — the LLM would rewrite the scene to
 # shave 0.8s and end up 3s short on a different cue.
+
+# A cue whose animation finishes >= this many seconds BEFORE its narration
+# leaves a multi-second dead/frozen screen — a real quality failure, NOT a
+# brief intentional hold. Renders with such a cue must be BLOCKED (forced to
+# retry), distinct from tolerable sub-1s drift. Env-tunable while we learn the
+# right value empirically; default chosen to catch the +4.0/+6.65/+9.73s
+# freezes observed in practice while ignoring brief holds.
+_FREEZE_BLOCK_THRESHOLD = float(
+    os.environ.get("MANIMGEN_FREEZE_BLOCK_THRESHOLD", "2.5")
+)
 _DEFAULT_PLAY_RUNTIME = 1.0  # ManimGL default when run_time= is omitted
+
+
+def blocking_freezes(timing_result: dict) -> list[str]:
+    """Return human-readable descriptions of cues whose freeze-frame tail is
+    severe enough to block render acceptance (diff >= _FREEZE_BLOCK_THRESHOLD).
+
+    diff = expected - computed; a POSITIVE diff means the animation is shorter
+    than the narration → dead screen. Overruns (negative diff) are NOT blocking
+    (the muxer trims video to audio length). Sub-threshold shortfalls are NOT
+    blocking — only multi-second dead screens are.
+    """
+    out: list[str] = []
+    for ct in timing_result.get("cues", []):
+        if ct.diff >= _FREEZE_BLOCK_THRESHOLD:
+            out.append(
+                f"CUE {ct.cue_index}: {ct.diff:.2f}s frozen tail "
+                f"(animation {ct.computed:.2f}s vs narration {ct.expected:.2f}s) "
+                f"— exceeds {_FREEZE_BLOCK_THRESHOLD:.1f}s block threshold"
+            )
+    return out
 
 
 # ---------------------------------------------------------------------------

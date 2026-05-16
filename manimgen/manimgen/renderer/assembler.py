@@ -16,6 +16,7 @@
 #   Any clip that doesn't follow the cue naming scheme is treated as a
 #   section boundary (legacy single-scene clips from TTS-off mode).
 
+import logging
 import os
 import re
 import subprocess
@@ -256,23 +257,55 @@ def _hard_concat(paths: list[str], output_path: str) -> None:
 
 
 def _video_duration(path: str) -> float:
-    result = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            path,
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    return max(0.1, float(result.stdout.strip()))
+    """Best-effort clip duration in seconds (always > 0).
+
+    ffprobe returns 'N/A' (or empty) for some re-encoded/short clips when
+    the container has no format-level duration. Previously `float('N/A')`
+    crashed the whole assembly. Try format duration, then stream duration,
+    then fall back to the 0.1s floor — assembly must never die because one
+    intermediate clip lacks duration metadata.
+    """
+
+    def _probe(entries: str) -> float | None:
+        try:
+            result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    entries,
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    path,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (subprocess.SubprocessError, OSError):
+            return None
+        raw = result.stdout.strip().splitlines()
+        for line in raw:
+            line = line.strip()
+            if not line or line == "N/A":
+                continue
+            try:
+                return float(line)
+            except ValueError:
+                continue
+        return None
+
+    dur = _probe("format=duration")
+    if dur is None:
+        dur = _probe("stream=duration")
+    if dur is None:
+        logging.getLogger(__name__).warning(
+            "[assembler] No readable duration for %s — using 0.1s floor", path
+        )
+        dur = 0.1
+    return max(0.1, dur)
 
 
 def _has_audio_stream(path: str) -> bool:

@@ -70,10 +70,22 @@ class TestPlannerPromptCueIndexRule(unittest.TestCase):
     def test_has_n_plus_one_rule(self):
         self.assertIn("N + 1", self.src)
 
-    def test_has_wrong_correct_example(self):
-        self.assertIn("WRONG", self.src)
+    def test_has_wrong_correct_contrast(self):
+        # Intent: prompt shows BOTH the failure pattern and the correct
+        # pattern as copyable JSON. Asserts the contrast exists, not exact
+        # heading words (tuned for salience, may change).
+        lower = self.src.lower()
+        has_negative = any(
+            w in self.src for w in ("WRONG", "DO NOT", "BROKEN", "mistake")
+        )
+        self.assertTrue(
+            has_negative, "prompt must label the wrong/broken cue pattern"
+        )
         self.assertIn("CORRECT", self.src)
+        self.assertGreaterEqual(
+            lower.count('"index": 0'), 2, "need wrong + correct JSON examples"
+        )
 
     def test_index_zero_is_opening_segment(self):
         self.assertIn("index 0", self.src)
-        self.assertIn("opening", self.src)
+        self.assertIn("opening", self.src.lower())

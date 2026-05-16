@@ -342,3 +342,55 @@ class TestRetryVisualLoop:
         # Despite zero error budget, the visual fix path still fired.
         mock_chat.assert_called_once()
         assert issues in mock_chat.call_args.kwargs["user"]
+
+    def test_blocking_freeze_tail_forces_retry_even_when_frames_clean(self, tmp_path):
+        """The hard timing gate. A render that SUCCEEDS with clean frames AND
+        clean layout, but whose code leaves a >threshold freeze-frame tail,
+        must NOT be accepted — it must trigger an LLM fix. This is the exact
+        silent-failure the pipeline used to ship (detect 'CUE 0: +9s short',
+        accept anyway)."""
+        scene_path = str(tmp_path / "scene.py")
+        # CUE 0 narration is 10s but the scene only animates ~1.5s → ~8.5s
+        # frozen tail, far over the 2.5s block threshold.
+        frozen_code = (
+            "from manimlib import *\n"
+            "class TestScene(Scene):\n"
+            "    def construct(self):\n"
+            "        # CUE 0\n"
+            "        self.play(Write(Text('hi')), run_time=1.0)\n"
+            "        self.wait(0.5)\n"
+        )
+        with open(scene_path, "w") as f:
+            f.write(frozen_code)
+
+        fixed = (
+            "from manimlib import *\n"
+            "class TestScene(Scene):\n"
+            "    def construct(self):\n"
+            "        # CUE 0\n"
+            "        self.play(Write(Text('hi')), run_time=4.0)\n"
+            "        self.wait(6.0)\n"
+        )
+        from manimgen.validator.frame_checker import FrameCheckResult
+        with patch("manimgen.validator.retry._run_and_capture",
+                   return_value={"success": True, "video_path": "/fake/v.mp4", "stderr": ""}), \
+             patch("manimgen.validator.frame_checker.check_frames",
+                   return_value=FrameCheckResult(ok=True)), \
+             patch("manimgen.validator.retry.check_layout",
+                   return_value={"ok": True, "issues": "", "skipped": False}), \
+             patch("manimgen.validator.retry.chat", return_value=fixed) as mock_chat, \
+             patch("manimgen.validator.retry.precheck_and_autofix",
+                   return_value={"ok": True, "stderr": "", "layout_warnings": []}):
+            import manimgen.validator.retry as retry_module
+            retry_module.MAX_RETRIES = 3
+            retry_module.MAX_VISUAL_LLM_FIX_CALLS = 1
+            from manimgen.validator.retry import retry_scene
+            # cue_durations=[10.0] → 10s narration vs ~1.5s animation = freeze
+            retry_scene(
+                self._make_section(), frozen_code, "TestScene", scene_path,
+                cue_durations=[10.0],
+            )
+
+        # Frames + layout were clean, yet the freeze gate still forced a fix.
+        mock_chat.assert_called()
+        assert "frozen tail" in mock_chat.call_args.kwargs["user"]
