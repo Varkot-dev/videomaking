@@ -191,6 +191,38 @@ class TestSceneGeneratorDirector(unittest.TestCase):
 
     @patch("manimgen.generator.scene_generator.chat")
     @patch("manimgen.generator.scene_generator.paths")
+    def test_3d_technique_promotes_scene_to_threedscene(self, mock_paths, mock_chat):
+        """Regression guard (safety-review #1 risk): 3D promotion does a
+        substring match for '3d_surface' in cues[].visual. The A2 backslash-
+        free contract must NOT disturb how techniques are named in `visual`,
+        or every 3D scene silently renders as a plain Scene and crashes at
+        runtime with AttributeError on self.frame. This test fails loudly if
+        that path regresses."""
+        mock_paths.scenes_dir.return_value = "/tmp/manimgen_test_scenes"
+        os.makedirs("/tmp/manimgen_test_scenes", exist_ok=True)
+        # LLM returns a PLAIN Scene; promotion must rewrite it to ThreeDScene.
+        mock_chat.return_value = (
+            "from manimlib import *\n\n"
+            "class Section03Scene(Scene):\n"
+            "    def construct(self):\n"
+            "        self.frame.reorient(-40, 70)\n"
+            "        self.wait(5.0)\n"
+        )
+
+        from manimgen.generator.scene_generator import generate_scenes
+        section = {
+            "id": "section_03", "title": "S3",
+            "narration": "surface.", "cue_word_indices": [0],
+            # Backslash-free visual (A2 contract) that still names the 3D
+            # technique — exactly the shape the planner now emits.
+            "cues": [{"index": 0, "visual": "Technique: 3d_surface. A ParametricSurface of f(x,y)=§sin(x)§cos(y)."}],
+        }
+        code, _, _ = generate_scenes(section, cue_durations=[5.0])
+        self.assertIn("ThreeDScene", code)
+        self.assertNotIn("(Scene):", code)
+
+    @patch("manimgen.generator.scene_generator.chat")
+    @patch("manimgen.generator.scene_generator.paths")
     def test_fencing_stripped_from_llm_output(self, mock_paths, mock_chat):
         mock_paths.scenes_dir.return_value = "/tmp/manimgen_test_scenes"
         os.makedirs("/tmp/manimgen_test_scenes", exist_ok=True)
