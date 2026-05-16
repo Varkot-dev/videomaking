@@ -49,59 +49,100 @@ self.wait(3.4)
 
 ## Cue timing
 
+> ### ⛔ THE #1 CAUSE OF BROKEN VIDEOS: loop timing
+>
+> **If a cue contains ANY animation inside a `for`/`while` loop, you MUST accumulate the total animation time in a variable and subtract that variable.** A hardcoded `self.wait()` after a loop is the single most common defect in this pipeline — it leaves multi-second frozen tails on screen because it only accounts for one iteration instead of all of them.
+>
+> **The law (no exceptions):**
+>
+> ```python
+> # CUE k — D seconds, animation runs inside a loop
+> anim_time = 0.0
+> for i in range(n - 1):
+>     scan_rect.become(SurroundingRectangle(boxes[i], color=YELLOW, buff=0.05))
+>     self.play(ShowCreation(scan_rect), run_time=0.2)
+>     anim_time += 0.2                       # ← accumulate EVERY iteration
+> self.wait(max(0.01, D - anim_time))        # ← subtract the ACCUMULATED total
+> ```
+>
+> **This is WRONG and will produce a broken video — never do this:**
+>
+> ```python
+> for i in range(n - 1):
+>     self.play(ShowCreation(scan_rect), run_time=0.2)
+> self.wait(D - 0.2)   # ✗ subtracts ONE iteration, not all n-1 → frozen tail
+> ```
+>
+> Before writing the `self.wait()` for any cue, ask: *"Did any `self.play()` for this cue happen inside a loop?"* If yes → you MUST use the `anim_time` accumulator pattern above. If you cannot statically determine the iteration count, accumulate inside the loop anyway — never guess.
+>
+> Universal rule for every cue: `self.wait(max(0.01, cue_duration - total_anim_time))`. Always use `max(0.01, ...)` to guard against over-run.
+
 **Visual budget:** Each cue gets ≤7 simultaneously-visible mobjects and ≤1 structural change (create, transform, or remove). Multi-step reasoning must span multiple cues, not one long cue.
 
 You receive N cues with exact durations. For each cue: animate the visual, then `self.wait(remaining)` so that `sum(all run_time values in this cue) + remaining = cue duration`.
 
 ```python
-# CUE 0 — 4.2s
+# CUE 0 — 4.2s  (no loop: a literal wait is fine here)
 self.play(Write(title), run_time=1.5)
 self.wait(2.7)   # 1.5 + 2.7 = 4.2 ✓
 
-# CUE 1 — 6.1s
+# CUE 1 — 6.1s  (no loop: sum the explicit run_times)
 self.play(LaggedStart(*[FadeIn(b) for b in boxes], lag_ratio=0.1), run_time=2.0)
 self.play(ShowCreation(scan_rect), run_time=0.5)
 self.play(scan_rect.animate.move_to(boxes[4]), run_time=1.5)
 self.wait(2.1)   # 2.0 + 0.5 + 1.5 + 2.1 = 6.1 ✓
 ```
 
-### Loop timing — do not hardcode wait when animation count depends on data
+A literal `self.wait(number)` is acceptable **only** when every `self.play()` in the cue has a constant, statically-visible `run_time` and none of them is inside a loop. The moment a loop is involved, the accumulator law above is mandatory.
 
-If any animations are inside a loop, compute the total animation time in a variable BEFORE the wait, then subtract it:
+## Directing time & attention — what separates 3B1B from amateur
+
+The rules above keep the scene *legal*. These rules make it *directed*. A technically correct scene that ignores this section still looks amateurish. Apply all five.
+
+### 1. Motion lives under the narration — a `wait()` is a deliberate beat, not filler
+
+The narration plays continuously. The amateur instinct is "animate quickly, then `self.wait()` for the rest of the cue." That manufactures dead air. The director's instinct is the opposite: **stretch the motion across the spoken explanation so something is always evolving while the narrator talks** — a tracer still traveling, a region progressively filling, a value ticking, a slow `rate_func`'d transform.
+
+A literal `self.wait()` is correct and intentional in exactly two cases: (a) a **held beat** — total stillness landing on the payoff word of a sentence (see rule 3); (b) a short residual gap (< ~1s) after the motion resolves. A held beat and a sub-second residual are *not* defects — the timing verifier explicitly tolerates them. The defect is *unaccounted loop time* (see the loop-timing law above) and *multi-second* dead air where motion simply stopped early. Prefer `run_time=` that consumes the cue over `self.wait()` that pads it.
 
 ```python
-# WRONG — hardcoded wait only subtracts one iteration
-anim_time = 0.0
-for i in range(n - 1):
-    scan_rect.become(SurroundingRectangle(boxes[i], color=YELLOW, buff=0.05))
-    self.play(ShowCreation(scan_rect), run_time=0.2)
-self.wait(4.0 - 0.2)   # ← wrong: only subtracts one iteration, not all n-1
+# AMATEUR — animate fast, then sit
+self.play(ShowCreation(curve), run_time=1.0)
+self.wait(5.0)                                  # 5s of dead air
 
-# RIGHT — accumulate then subtract
-anim_time = 0.0
-for i in range(n - 1):
-    scan_rect.become(SurroundingRectangle(boxes[i], color=YELLOW, buff=0.05))
-    self.play(ShowCreation(scan_rect), run_time=0.2)
-    anim_time += 0.2
-self.wait(max(0.01, 4.0 - anim_time))
+# DIRECTED — the draw itself spans the explanation
+self.play(ShowCreation(curve), run_time=4.2, rate_func=smooth)
+self.wait(0.8)                                  # brief settle = held beat
 ```
 
-Rule: `self.wait(max(0.01, cue_duration - total_anim_time))` — always use `max(0.01, ...)` to guard against over-run.
+### 2. Transform, don't replace — the single biggest amateur tell
 
-## Rhythm — 4-band structure
+When a cue introduces an object related to one already on screen, **morph the existing object into it** (`ReplacementTransform`, `TransformFromCopy`, `TransformMatchingTex`) instead of `FadeOut(old)` + `FadeIn(new)`. FadeOut→FadeIn reads as "next slide." A transform reads as "the same idea evolving" — that continuity *is* the 3B1B feel. A derived object should visibly emerge **from its source's location** (`TransformFromCopy(source, derived)` or `FadeIn(derived, shift=toward_source)`), not pop in elsewhere.
 
-Every cue has four phases. Budget them explicitly before writing code.
+### 3. Sync the reveal to the spoken idea, then hold still on the payoff
 
-| Phase | What happens | Min time |
+The cue is not an opaque duration to pad — the visual should *answer the narration as it is spoken*. Front-load or stagger reveals so the key change **finishes on the emphatic word of the sentence**, then go **completely motionless** through the conclusion of the thought. Never animate during a punchline. Total stillness on the payoff is a deliberate device, not dead air.
+
+### 4. Subtractive focus — dim the irrelevant, don't just highlight the relevant
+
+One focal object per beat. When the narration focuses on a sub-part, drop everything non-focal to `set_opacity(0.25)` for the duration of that beat, then restore. Additive highlighting (`SurroundingRectangle`, `Indicate`) on a fully-bright cluttered frame is weak; subtractive focus is what makes a dense frame legible.
+
+### 5. Color tracks identity; entrances have grammar
+
+A quantity keeps its color across every cue it appears in, so the eye can follow "the same blue term" through a derivation. Entrances are not interchangeable: `Write` for text/equations, `ShowCreation` for curves/paths (drawn in reading direction), `GrowArrow`/`GrowFromCenter` for vectors and emphasis, `FadeIn(shift=...)` directed *toward* the thing it relates to.
+
+### Rhythm budget per cue
+
+Every cue still has phases — but HOLD is **sustained motion under narration**, not a freeze:
+
+| Phase | What happens | Notes |
 |---|---|---|
-| ENTER | FadeIn/Write title + axes | ≥ 0.5s |
-| BUILD | main animation (ShowCreation curves, LaggedStart elements) | ≥ 1.0s |
-| HOLD | `self.wait()` for narration | ≥ 1.5s (except final cue) |
-| EXIT | `FadeOut` all mobjects | 0.8s (last cue only) |
+| ENTER | `FadeIn`/`Write`/`Transform`-in from prior cue | ≥ 0.5s; prefer transforming an existing object over a fresh FadeIn |
+| BUILD | the main reveal — paced to land on the sentence's key word | ≥ 1.0s |
+| SUSTAIN | motion continues under the explanation (tracer, fill, slow drift) **or** a deliberate held beat on the payoff | fills the remainder; a sub-1s residual `wait()` is fine |
+| EXIT | `FadeOut` all mobjects | 0.8s, last cue only |
 
-`hold = cue_duration - enter - build - exit`
-
-If `hold < 1.5s`, cut an ENTER animation (not a BUILD or HOLD). Short cues (< 3s): ENTER + HOLD only.
+Compute the SUSTAIN duration with the loop-timing law: `self.wait(max(0.01, cue_duration - total_anim_time))` only when the motion has genuinely resolved; otherwise extend a `run_time` so motion spans the gap. Short cues (< 3s): ENTER + a single sustained BUILD.
 
 ## Layout zones
 
@@ -214,45 +255,62 @@ box_list = list(boxes)
 label_list = list(labels)
 current_values = list(values)
 
+# CUE k — D seconds. Animations run inside a loop, so we MUST accumulate
+# anim_time and subtract the TOTAL (loop-timing law). A literal self.wait()
+# here would leave a multi-second frozen tail.
+anim_time = 0.0
+
 # Scanning highlight — TEAL_A = PRIMARY (active comparison cursor)
 scan_rect = SurroundingRectangle(box_list[0], color=TEAL_A, buff=0.06, stroke_width=2.5)
 self.play(ShowCreation(scan_rect), run_time=0.3)
+anim_time += 0.3
 
-# Move scan cursor to position i
-scan_rect.become(SurroundingRectangle(box_list[i], color=TEAL_A, buff=0.06, stroke_width=2.5))
-self.play(ShowCreation(scan_rect), run_time=0.2)
+for i in range(len(box_list) - 1):
+    j = i + 1
+    # Move scan cursor to position i
+    scan_rect.become(SurroundingRectangle(box_list[i], color=TEAL_A, buff=0.06, stroke_width=2.5))
+    self.play(ShowCreation(scan_rect), run_time=0.2)
+    anim_time += 0.2
 
-# Highlight swap pair in GOLD (SECONDARY)
-self.play(
-    box_list[i].animate.set_stroke(color=GOLD, width=3),
-    box_list[j].animate.set_stroke(color=GOLD, width=3),
-    run_time=0.3,
-)
-# Animate the swap
-pos_i, pos_j = box_list[i].get_center(), box_list[j].get_center()
-self.play(
-    box_list[i].animate.move_to(pos_j),
-    box_list[j].animate.move_to(pos_i),
-    label_list[i].animate.move_to(pos_j),
-    label_list[j].animate.move_to(pos_i),
-    run_time=0.55,
-)
-box_list[i], box_list[j] = box_list[j], box_list[i]
-label_list[i], label_list[j] = label_list[j], label_list[i]
-current_values[i], current_values[j] = current_values[j], current_values[i]
+    if current_values[i] > current_values[j]:
+        # Highlight swap pair in GOLD (SECONDARY)
+        self.play(
+            box_list[i].animate.set_stroke(color=GOLD, width=3),
+            box_list[j].animate.set_stroke(color=GOLD, width=3),
+            run_time=0.3,
+        )
+        anim_time += 0.3
+        # Animate the swap
+        pos_i, pos_j = box_list[i].get_center(), box_list[j].get_center()
+        self.play(
+            box_list[i].animate.move_to(pos_j),
+            box_list[j].animate.move_to(pos_i),
+            label_list[i].animate.move_to(pos_j),
+            label_list[j].animate.move_to(pos_i),
+            run_time=0.55,
+        )
+        anim_time += 0.55
+        box_list[i], box_list[j] = box_list[j], box_list[i]
+        label_list[i], label_list[j] = label_list[j], label_list[i]
+        current_values[i], current_values[j] = current_values[j], current_values[i]
 
-# Reset to GREY_B (back to default STRUCT state)
-self.play(
-    box_list[i].animate.set_stroke(color=GREY_B, width=2.5),
-    box_list[j].animate.set_stroke(color=GREY_B, width=2.5),
-    run_time=0.2,
-)
+        # Reset to GREY_B (back to default STRUCT state)
+        self.play(
+            box_list[i].animate.set_stroke(color=GREY_B, width=2.5),
+            box_list[j].animate.set_stroke(color=GREY_B, width=2.5),
+            run_time=0.2,
+        )
+        anim_time += 0.2
 
 # Mark sorted position — GREEN fill (SUCCESS)
 self.play(
     box_list[-1].animate.set_fill(GREEN, opacity=0.35).set_stroke(color=GREEN, width=2.5),
     run_time=0.5,
 )
+anim_time += 0.5
+
+# Sustain under narration — subtract the ACCUMULATED total, never a literal
+self.wait(max(0.01, D - anim_time))
 ```
 
 ## ManimGL API — use exactly these
@@ -569,13 +627,13 @@ self.play(
     ```
     Every single text label, equation, title, annotation — call `.fix_in_frame()` before any `self.play()` that uses it.
 11. **Never chain `.next_to(prev, RIGHT)` for equation steps.** Three horizontal `.next_to(RIGHT)` calls will overflow past x=7. Stack derivation steps vertically: `step.next_to(prev_step, DOWN, buff=0.3).align_to(prev_step, LEFT)`. Combine multi-step algebra into a single Tex string when possible.
-12. **Camera is static by default.** Only move the camera (`self.frame.animate.scale`, `self.frame.animate.reorient`) when narration contains the words "notice", "zoom", "closer", "pull back", or "rotate". Never move the camera mid-cue without a matching narration cue.
+12. **Camera: subtle drift is allowed, hard moves are gated.** A *gentle* push toward the active region during a long SUSTAIN is good direction — `self.frame.animate.scale(0.92).move_to(focal_point)` with `run_time ≥ 2` and ≤10% scale change, returning before the next structural change. *Hard* moves (`reorient`, scale beyond ±10%, large pans) require a narration trigger word ("notice", "zoom", "closer", "pull back", "rotate"). Never make a hard camera move mid-cue without the trigger.
 
 ## Anti-patterns — before/after
 
 | Pattern | Bad | Fix | Rule |
 |---|---|---|---|
-| AP1 Freeze-frame tail | Last animation ends, static image for 3s before cut | Add explicit EXIT: `self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)` | rhythm / cleanup |
+| AP1 Dead-air tail | Motion stops early, static image for **multiple** seconds while narration continues | Extend a `run_time` so motion spans the gap, or add sustained motion (rule 1). A held beat or sub-1s residual is NOT this defect — only multi-second unaccounted stillness is | directing time |
 | AP2 Title touches edge | Title at y≈4.0, clipped on export | `title.to_edge(UP, buff=0.35)` | safe bounds |
 | AP3 Raw hex in scene | `color="#58C4DD"` hardcoded | Use `TEAL_B` constant | palette roles |
 | AP4 3D text not pinned | Text in ThreeDScene rotates with camera — unreadable | `label.fix_in_frame()` immediately after creation | 3D pin |
