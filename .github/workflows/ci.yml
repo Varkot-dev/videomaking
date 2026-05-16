@@ -56,7 +56,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-mock
+          pip install pytest pytest-mock hypothesis
           pip install -e .
       - name: Run the ENTIRE suite — zero --ignore flags
         # This is the core of the hardening: the previously-hidden
@@ -85,10 +85,14 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-mock
+          pip install pytest pytest-mock hypothesis
           pip install -e .
-      - name: Pipeline contract + e2e smoke (mocked LLM, zero API cost)
-        # These exercise planner -> Director -> retry/timing -> mux wiring
-        # with all LLM/subprocess calls mocked. A wiring regression fails
-        # here without any API key or render.
+      - name: Pipeline contract + Director smoke (mocked LLM, zero API cost)
+        # The real behavioral signal here is test_pipeline_contracts (A/V
+        # sync invariants) + test_director (planner->Director->scene-gen
+        # wiring), all LLM/subprocess calls mocked. test_pipeline_e2e is
+        # included but is currently xfail(strict) — it contributes failure-
+        # tracking, not a positive assertion, until its 3 documented stale
+        # mock layers are repaired. A wiring regression in the contract or
+        # director tests fails here without any API key or render.
         run: python3 -m pytest tests/test_pipeline_contracts.py tests/test_pipeline_e2e.py tests/test_director.py -q --strict-markers

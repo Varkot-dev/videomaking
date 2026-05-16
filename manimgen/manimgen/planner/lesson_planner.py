@@ -363,4 +363,8 @@ def plan_lesson_from_pdf(pdf_path: str) -> dict:
     raw = chat(system=system, user=user_message, images=images if images else None)
     plan = _cap_sections(_safe_json_loads(_strip_fencing(raw)), _MAX_SECTIONS_PDF)
     plan = _self_correct(plan)
+    # Same invariant as the topic path: _self_correct wholesale-replaces
+    # `plan` with the critic LLM's output and can re-inflate section count
+    # past the cap. Re-assert it.
+    plan = _cap_sections(plan, _MAX_SECTIONS_PDF)
     return _extract_cues(plan)

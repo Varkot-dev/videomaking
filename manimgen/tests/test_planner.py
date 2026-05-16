@@ -13,6 +13,7 @@ from manimgen.planner.lesson_planner import (
     _cap_sections,
     _strip_fencing,
     plan_lesson,
+    plan_lesson_from_pdf,
     _reconstruct_latex,
     _MAX_SECTIONS_TOPIC,
     _MAX_SECTIONS_PDF,
@@ -122,6 +123,25 @@ class TestPlanLesson:
         mock_chat.return_value = self._make_llm_response(20)
         plan = plan_lesson("some topic")
         assert len(plan["sections"]) == _MAX_SECTIONS_TOPIC
+
+    @patch("manimgen.input.pdf_parser.parse_pdf")
+    @patch("manimgen.planner.lesson_planner.chat")
+    def test_pdf_path_caps_overshooting_llm(self, mock_chat, mock_parse_pdf):
+        """Regression: plan_lesson_from_pdf had the SAME _self_correct
+        re-inflation bug as the topic path (it was fixed only on the topic
+        path originally). The critic LLM here returns 20 sections; the cap
+        must still hold after _self_correct."""
+        mock_parse_pdf.return_value = {
+            "raw_text": "Some lecture notes text.",
+            "chunks": ["Some lecture notes text."],
+            "extracted_pages": 1,
+            "images": [],
+        }
+        # return_value (not side_effect) → the _self_correct critic call
+        # also gets the 20-section payload, recreating the bug scenario.
+        mock_chat.return_value = self._make_llm_response(20)
+        plan = plan_lesson_from_pdf("notes.pdf")
+        assert len(plan["sections"]) == _MAX_SECTIONS_PDF
 
     @patch("manimgen.planner.lesson_planner.chat")
     def test_handles_json_fencing(self, mock_chat):
