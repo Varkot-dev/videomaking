@@ -17,6 +17,7 @@ from manimgen.renderer.assembler import (
     _section_boundaries,
     _hard_concat,
     _xfade_pair,
+    _video_duration,
     _XFADE_DURATION,
 )
 
@@ -272,3 +273,41 @@ class TestConstants:
 
     def test_xfade_duration_is_reasonable(self):
         assert 0.1 <= _XFADE_DURATION <= 1.0
+
+
+class TestVideoDurationRobustness:
+    """Regression: ffprobe returns 'N/A' for some re-encoded clips with no
+    format-level duration. float('N/A') used to crash the ENTIRE assembly,
+    destroying an otherwise-good render at the last step."""
+
+    def _result(self, stdout: str):
+        m = MagicMock()
+        m.returncode = 0
+        m.stdout = stdout
+        m.stderr = ""
+        return m
+
+    def test_valid_format_duration(self):
+        with patch("manimgen.renderer.assembler.subprocess.run",
+                   return_value=self._result("7.5\n")):
+            assert _video_duration("/fake.mp4") == pytest.approx(7.5)
+
+    def test_na_format_duration_does_not_crash_falls_to_floor(self):
+        # format=duration is 'N/A' AND stream=duration is 'N/A' →
+        # must return the 0.1s floor, NOT raise ValueError.
+        with patch("manimgen.renderer.assembler.subprocess.run",
+                   return_value=self._result("N/A\n")):
+            dur = _video_duration("/fake.mp4")
+        assert dur == pytest.approx(0.1)
+
+    def test_na_format_falls_back_to_stream_duration(self):
+        # First probe (format) → N/A; second probe (stream) → real value.
+        calls = [self._result("N/A\n"), self._result("4.2\n")]
+        with patch("manimgen.renderer.assembler.subprocess.run",
+                   side_effect=calls):
+            assert _video_duration("/fake.mp4") == pytest.approx(4.2)
+
+    def test_empty_output_does_not_crash(self):
+        with patch("manimgen.renderer.assembler.subprocess.run",
+                   return_value=self._result("\n")):
+            assert _video_duration("/fake.mp4") == pytest.approx(0.1)
