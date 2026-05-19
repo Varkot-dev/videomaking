@@ -10,10 +10,12 @@
 # Skipped automatically when edge-tts is not installed (CI without audio deps).
 
 import asyncio
+
 import pytest
 
 try:
     import edge_tts
+
     _EDGE_TTS_AVAILABLE = True
 except ImportError:
     _EDGE_TTS_AVAILABLE = False
@@ -27,6 +29,7 @@ pytestmark = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 async def _collect_word_boundaries(text: str) -> list[str]:
     """Stream edge-tts and return the list of words from WordBoundary events."""
@@ -49,6 +52,42 @@ def _tts_word_count(text: str) -> int:
 
 def _split_word_count(text: str) -> int:
     return len(text.split())
+
+
+def _run_or_skip_on_network(fn, *args, **kwargs):
+    """Run an edge-tts-dependent call; skip (not fail) on a network outage.
+
+    These are integration tests against the real edge-tts stream
+    (Microsoft Bing speech servers). When that service is unreachable or
+    returns 5xx, the test cannot make its assertion — that is an
+    environmental failure, not a code regression, so it must SKIP, not
+    FAIL (a red build here would falsely claim the pipeline is broken).
+
+    Only network/transport errors are converted to skips. A genuine
+    assertion failure (the str.split vs edge-tts tokenization divergence
+    this file exists to catch) still propagates and fails loudly.
+    """
+    try:
+        return fn(*args, **kwargs)
+    except Exception as exc:  # noqa: BLE001 - re-raised unless network-class
+        msg = f"{type(exc).__module__}.{type(exc).__name__}: {exc}"
+        network_markers = (
+            "WSServerHandshakeError",
+            "ClientConnectorError",
+            "ClientConnectionError",
+            "ServerDisconnectedError",
+            "ClientOSError",
+            "ClientResponseError",
+            "TimeoutError",
+            "ConnectionResetError",
+            "ConnectionRefusedError",
+            "socket.gaierror",
+            "NoConnectionsAvailable",
+            "aiohttp.client_exceptions",
+        )
+        if any(marker in msg for marker in network_markers):
+            pytest.skip(f"edge-tts service unreachable — skipping: {msg}")
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +130,7 @@ def test_word_count_matches_split(label: str, text: str) -> None:
     Tolerance of ±1 accounts for leading/trailing silence tokens that some
     TTS engines emit as zero-duration boundary events.
     """
-    tts_count = _tts_word_count(text)
+    tts_count = _run_or_skip_on_network(_tts_word_count, text)
     split_count = _split_word_count(text)
     assert abs(tts_count - split_count) <= 1, (
         f"[{label}] Word count mismatch: str.split()={split_count}, "
@@ -106,9 +145,11 @@ def test_cue_index_resolves_to_correct_word() -> None:
     Verifies the full chain: parse_cues → cue_word_indices → TTS timestamps →
     cue_times returns a timestamp that matches word N from TTS boundaries.
     """
+    import os
+    import tempfile
+
     from manimgen.planner.cue_parser import parse_cues
-    from manimgen.renderer.tts import generate_narration, cue_times
-    import tempfile, os
+    from manimgen.renderer.tts import cue_times, generate_narration
 
     narration_with_cues = (
         "Start here we go. [CUE] Now this is the next idea. [CUE] And we finish."
@@ -117,12 +158,14 @@ def test_cue_index_resolves_to_correct_word() -> None:
 
     # cue_indices should be [0, 4, 10] — word 0, word after "Start here we go.", word after "Now..."
     assert cue_indices[0] == 0, "First cue index must always be 0"
-    assert len(cue_indices) == 3, f"Expected 3 cues, got {len(cue_indices)}: {cue_indices}"
+    assert len(cue_indices) == 3, (
+        f"Expected 3 cues, got {len(cue_indices)}: {cue_indices}"
+    )
 
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
         tmp_path = f.name
     try:
-        _, timestamps = generate_narration(clean, tmp_path)
+        _, timestamps = _run_or_skip_on_network(generate_narration, clean, tmp_path)
     finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
@@ -146,10 +189,12 @@ def test_cue_index_resolves_to_correct_word() -> None:
 
 def test_short_cue_segment_not_negative() -> None:
     """A cue placed just 1 word before the end must still yield a positive duration."""
+    import os
+    import tempfile
+
     from manimgen.planner.cue_parser import parse_cues
-    from manimgen.renderer.tts import generate_narration, get_audio_duration
     from manimgen.planner.segmenter import compute_segments
-    import tempfile, os
+    from manimgen.renderer.tts import generate_narration, get_audio_duration
 
     narration = "One two three. [CUE] Four."
     clean, cue_indices = parse_cues(narration)
@@ -157,7 +202,7 @@ def test_short_cue_segment_not_negative() -> None:
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
         tmp_path = f.name
     try:
-        _, timestamps = generate_narration(clean, tmp_path)
+        _, timestamps = _run_or_skip_on_network(generate_narration, clean, tmp_path)
         audio_dur = get_audio_duration(tmp_path)
     finally:
         if os.path.exists(tmp_path):
@@ -165,4 +210,6 @@ def test_short_cue_segment_not_negative() -> None:
 
     segments = compute_segments(timestamps, cue_indices, audio_dur)
     for seg in segments:
-        assert seg.duration > 0, f"Segment {seg.cue_index} has non-positive duration: {seg.duration}"
+        assert seg.duration > 0, (
+            f"Segment {seg.cue_index} has non-positive duration: {seg.duration}"
+        )
