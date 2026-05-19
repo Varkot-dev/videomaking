@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-19
 **Source:** 7-agent whole-codebase review + 4-agent grounded research (see
-`docs/superpowers/specs/2026-05-19-codebase-analysis-roadmap-design.md`).
+`docs/roadmap/how-we-found-this.md`).
 **North Star:** #3 extensibility + #1 video quality co-primary; #4 ship-ready
 secondary; reliability/CI instrumental.
 

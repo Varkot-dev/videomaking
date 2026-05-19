@@ -73,7 +73,7 @@ learning user, not prose.
 - Ambitious prioritized **3–4 day backlog** (menu to pull from): each task =
   scope, exact files, risk, test strategy, effort, dependencies, which known
   bug it addresses, research pros/cons, North-Star tag.
-- **2-week architecture roadmap** → `docs/ARCHITECTURE_ROADMAP.md`: phased
+- **2-week architecture roadmap** → `docs/roadmap/2-week-plan.md`: phased
   milestones, the constraint-verification layer, where it sits, migration
   order, what stays LLM vs deterministic.
 
