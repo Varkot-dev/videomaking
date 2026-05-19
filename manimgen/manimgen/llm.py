@@ -187,9 +187,7 @@ def _ollama(system: str, user: str, images: list[str]) -> str:
     last_exc: Exception | None = None
     for _ in range(_REQUEST_RETRY_ATTEMPTS):
         try:
-            resp = requests.post(
-                url, json=payload, timeout=_REQUEST_TIMEOUT_SECONDS
-            )
+            resp = requests.post(url, json=payload, timeout=_REQUEST_TIMEOUT_SECONDS)
             if resp.status_code != 200:
                 raise RuntimeError(
                     f"Ollama HTTP {resp.status_code} from {url}: {resp.text}"
