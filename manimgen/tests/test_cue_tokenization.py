@@ -70,20 +70,35 @@ def _run_or_skip_on_network(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
     except Exception as exc:  # noqa: BLE001 - re-raised unless network-class
+        # A 4xx from the speech server means OUR request was malformed
+        # (e.g. a regression in the edge_tts.Communicate() params) — that
+        # is a real code bug and MUST fail loudly, never skip. Only a 5xx
+        # / transport / DNS failure is an environmental outage worth
+        # skipping. Gate the HTTP-response case on status before the
+        # generic transport-marker check below.
+        status = getattr(exc, "status", None)
+        if isinstance(status, int):
+            if 400 <= status < 500:
+                # OUR request was malformed — a real code bug. Fail loudly.
+                raise
+            if status >= 500:
+                # Server-side outage — environmental. Skip.
+                pytest.skip(f"edge-tts server error (HTTP {status}) — skipping: {exc}")
+
         msg = f"{type(exc).__module__}.{type(exc).__name__}: {exc}"
+        # Transport / connection / DNS failures only. ClientResponseError is
+        # handled above by HTTP status, not here.
         network_markers = (
             "WSServerHandshakeError",
             "ClientConnectorError",
             "ClientConnectionError",
             "ServerDisconnectedError",
             "ClientOSError",
-            "ClientResponseError",
             "TimeoutError",
             "ConnectionResetError",
             "ConnectionRefusedError",
             "socket.gaierror",
             "NoConnectionsAvailable",
-            "aiohttp.client_exceptions",
         )
         if any(marker in msg for marker in network_markers):
             pytest.skip(f"edge-tts service unreachable — skipping: {msg}")
