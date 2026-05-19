@@ -1,10 +1,16 @@
 """
-Shared LLM client. Switches between Gemini (dev/testing) and Anthropic (production).
+Shared LLM client. Switches between Ollama (free local testing), Gemini
+(dev/testing), and Anthropic (production).
 
 Provider resolution order:
   1. LLM_PROVIDER env var  (highest priority)
   2. llm_provider key in config.yaml
   3. Falls back to "gemini"
+
+The `ollama` provider talks to a local Ollama server (default
+http://localhost:11434) and needs no API key — use it to exercise pipeline
+plumbing for free. Switching back to gemini/anthropic for a real
+quality run is a one-line change (LLM_PROVIDER env var or config.yaml).
 
 Usage:
     from manimgen.llm import chat
@@ -35,6 +41,8 @@ _DEFAULTS = {
     "gemini_model": "gemini-2.5-flash",
     "anthropic_model": "claude-sonnet-4-6",
     "anthropic_max_tokens": 4096,
+    "ollama_model": "llama3.1",
+    "ollama_base_url": "http://localhost:11434",
 }
 
 
@@ -55,6 +63,10 @@ def _load_llm_config() -> dict:
             "anthropic_max_tokens": int(
                 llm_cfg.get("max_tokens", _DEFAULTS["anthropic_max_tokens"])
             ),
+            "ollama_model": llm_cfg.get("ollama_model", _DEFAULTS["ollama_model"]),
+            "ollama_base_url": str(
+                llm_cfg.get("ollama_base_url", _DEFAULTS["ollama_base_url"])
+            ).rstrip("/"),
         }
     except (OSError, yaml.YAMLError) as exc:
         logger.warning("[llm] Could not read config.yaml (%s) — using defaults", exc)
@@ -84,6 +96,8 @@ def chat(system: str, user: str, images: list[str] | None = None) -> str:
         return _gemini(system, user, images or [])
     elif provider == "anthropic":
         return _anthropic(system, user, images or [])
+    elif provider == "ollama":
+        return _ollama(system, user, images or [])
     else:
         raise ValueError(f"Unknown LLM_PROVIDER: {provider}")
 
@@ -153,3 +167,32 @@ def _anthropic(system: str, user: str, images: list[str]) -> str:
         messages=[{"role": "user", "content": content}],
     )
     return message.content[0].text.strip()
+
+
+def _ollama(system: str, user: str, images: list[str]) -> str:
+    import requests
+
+    cfg = _load_llm_config()
+    user_msg: dict = {"role": "user", "content": user}
+    if images:
+        user_msg["images"] = images
+
+    url = f"{cfg['ollama_base_url']}/api/chat"
+    payload = {
+        "model": cfg["ollama_model"],
+        "messages": [{"role": "system", "content": system}, user_msg],
+        "stream": False,
+    }
+
+    last_exc: Exception | None = None
+    for _ in range(_REQUEST_RETRY_ATTEMPTS):
+        try:
+            resp = requests.post(url, json=payload, timeout=_REQUEST_TIMEOUT_SECONDS)
+            if resp.status_code != 200:
+                raise RuntimeError(
+                    f"Ollama HTTP {resp.status_code} from {url}: {resp.text}"
+                )
+            return resp.json()["message"]["content"].strip()
+        except (requests.RequestException, RuntimeError) as exc:
+            last_exc = exc
+    raise RuntimeError(f"Ollama request to {url} failed: {last_exc}")
