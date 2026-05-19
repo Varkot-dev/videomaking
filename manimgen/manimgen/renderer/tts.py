@@ -196,6 +196,7 @@ def get_audio_duration(audio_path: str) -> float:
             capture_output=True,
             text=True,
             check=True,
+            timeout=30,
         )
     except FileNotFoundError:
         raise RuntimeError(
