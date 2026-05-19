@@ -11,6 +11,8 @@ Opens at http://localhost:5001
 import argparse
 import json
 import logging
+import os
+import secrets
 import subprocess
 import webbrowser
 from pathlib import Path
@@ -26,6 +28,74 @@ logger = logging.getLogger(__name__)
 # Resolved at startup
 VIDEOS_DIR: Path = Path(paths.videos_dir())
 OUTPUT_DIR: Path = Path(paths.exports_dir())
+
+# Shared-token guard. Read from env at startup; if unset, a random token is
+# generated in main() and printed to the console. This is a localhost dev tool,
+# so the *primary* gate for mutating requests is a same-origin check (the
+# existing editor.html UI issues plain same-origin fetches and cannot be
+# modified here). The token is an optional override for non-browser clients
+# (curl, scripts) that cannot present a trusted Origin/Referer.
+EDITOR_TOKEN: str = os.environ.get("MANIMGEN_EDITOR_TOKEN", "")
+
+
+def _safe_under(base: Path, candidate: str) -> Path | None:
+    """Resolve ``base / candidate`` and return it only if it stays under ``base``.
+
+    Rejects path-traversal (``../``) escapes and any filename containing a
+    single quote (``'``) — the latter would break the ffmpeg concat-list
+    ``file '<path>'`` syntax, and rejecting is simpler and safer than escaping.
+    Returns ``None`` when containment fails or the name is unsafe.
+    """
+    if "'" in candidate:
+        return None
+    base_resolved = base.resolve()
+    try:
+        resolved = (base_resolved / candidate).resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if not resolved.is_relative_to(base_resolved):
+        return None
+    return resolved
+
+
+def _is_same_origin() -> bool:
+    """True if the request carries an Origin/Referer matching this server's host.
+
+    Browsers send ``Origin`` on POST requests; the editor.html UI is served from
+    and posts back to the same host, so legitimate UI traffic always passes.
+    """
+    host = request.host_url.rstrip("/")
+    origin = request.headers.get("Origin")
+    if origin and origin.rstrip("/") == host:
+        return True
+    referer = request.headers.get("Referer")
+    if referer and referer.startswith(host + "/"):
+        return True
+    return False
+
+
+@app.before_request
+def _guard_mutating_requests():
+    """Light auth for state-changing methods only.
+
+    GET/HEAD/OPTIONS (clip browsing, video streaming) stay open on localhost.
+    Mutating methods (POST/PUT/PATCH/DELETE) must be same-origin OR present a
+    matching ``X-Editor-Token`` header. This blocks drive-by/CSRF-style hits
+    that trigger ffmpeg subprocesses without breaking the same-origin UI.
+    """
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return None
+    token = request.headers.get("X-Editor-Token", "")
+    if EDITOR_TOKEN and secrets.compare_digest(token, EDITOR_TOKEN):
+        return None
+    if _is_same_origin():
+        return None
+    logger.warning(
+        "[editor] Rejected %s %s: not same-origin and no valid X-Editor-Token",
+        request.method,
+        request.path,
+    )
+    return jsonify({"error": "Forbidden: same-origin or X-Editor-Token required"}), 403
 
 
 def _default_videos_dir() -> Path:
@@ -96,10 +166,12 @@ def api_clips():
 
 @app.route("/api/video/<filename>")
 def api_video(filename):
-    path = VIDEOS_DIR / filename
-    if not path.exists() or not path.suffix == ".mp4":
+    safe_path = _safe_under(VIDEOS_DIR, filename)
+    if safe_path is None:
+        return "Forbidden", 403
+    if not safe_path.exists() or safe_path.suffix != ".mp4":
         return "Not found", 404
-    return send_file(str(path.resolve()), mimetype="video/mp4")
+    return send_file(str(safe_path), mimetype="video/mp4")
 
 
 @app.route("/api/exports")
@@ -148,9 +220,12 @@ def api_export():
     trimmed_paths = []
     try:
         for i, clip in enumerate(clips):
-            src = VIDEOS_DIR / clip["filename"]
+            filename = clip["filename"]
+            src = _safe_under(VIDEOS_DIR, filename)
+            if src is None or src.suffix != ".mp4":
+                return jsonify({"error": f"Invalid filename: {filename}"}), 400
             if not src.exists():
-                return jsonify({"error": f"File not found: {clip['filename']}"}), 400
+                return jsonify({"error": f"File not found: {filename}"}), 400
 
             trim_start = float(clip.get("trim_start", 0))
             trim_end = float(clip.get("trim_end", 0))
@@ -238,7 +313,7 @@ def api_export():
 
 
 def main():
-    global VIDEOS_DIR, OUTPUT_DIR
+    global VIDEOS_DIR, OUTPUT_DIR, EDITOR_TOKEN
 
     parser = argparse.ArgumentParser(description="ManimGen Editor")
     parser.add_argument(
@@ -282,6 +357,14 @@ def main():
             logger.warning(
                 "[editor] Startup cleanup: could not remove legacy concat list: %s", exc
             )
+
+    # Shared-token guard: use env token if provided, else generate one so the
+    # operator can authenticate non-browser clients (the same-origin UI works
+    # without it). Mutating endpoints require same-origin OR this token.
+    if not EDITOR_TOKEN:
+        EDITOR_TOKEN = secrets.token_urlsafe(16)
+    print(f"[editor] Editor token (X-Editor-Token header): {EDITOR_TOKEN}")
+    print("[editor] Same-origin browser requests do not need the token.")
 
     print(f"[editor] Loading clips from: {VIDEOS_DIR}")
     print(f"[editor] Exports will be saved to: {OUTPUT_DIR}")

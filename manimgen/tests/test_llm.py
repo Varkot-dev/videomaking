@@ -109,7 +109,11 @@ class TestProviderResolution:
         monkeypatch.setenv("LLM_PROVIDER", "")
         assert _resolve_provider() in {"gemini", "anthropic"}
 
-    def test_unknown_provider_raises(self, monkeypatch):
+    def test_ollama_provider_resolves(self, monkeypatch):
         monkeypatch.setenv("LLM_PROVIDER", "ollama")
+        assert _resolve_provider() == "ollama"
+
+    def test_unknown_provider_raises(self, monkeypatch):
+        monkeypatch.setenv("LLM_PROVIDER", "nonexistent")
         with pytest.raises(ValueError, match="Unknown LLM_PROVIDER"):
             chat(system="sys", user="user")
