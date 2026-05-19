@@ -18,6 +18,8 @@ import os
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from manimgen.utils import safe_probe_duration
+
 logger = logging.getLogger(__name__)
 
 # Mismatches larger than this are logged as warnings — indicates a cue
@@ -171,7 +173,14 @@ def _mux_freeze_video(
 
 
 def _get_duration(path: str) -> float:
-    """Return media duration in seconds via ffprobe."""
+    """Return media duration in seconds via ffprobe (always > 0).
+
+    Some containers report no format-level duration ("N/A" or absent),
+    which previously crashed muxing via ``float("N/A")``. Parsing is now
+    delegated to ``utils.safe_probe_duration``; an unreadable duration
+    falls back to the 0.1s floor (mirroring ``assembler._video_duration``)
+    so muxing never dies on missing metadata.
+    """
     try:
         result = subprocess.run(
             [
@@ -187,6 +196,7 @@ def _get_duration(path: str) -> float:
             capture_output=True,
             text=True,
             check=True,
+            timeout=30,
         )
     except FileNotFoundError:
         raise RuntimeError(
@@ -194,8 +204,17 @@ def _get_duration(path: str) -> float:
             "  macOS:   brew install ffmpeg\n"
             "  Ubuntu:  sudo apt install ffmpeg"
         )
-    data = json.loads(result.stdout)
-    return float(data["format"]["duration"])
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        data = None
+    dur = safe_probe_duration(data)
+    if dur is None:
+        logging.getLogger(__name__).warning(
+            "[muxer] No readable duration for %s — using 0.1s floor", path
+        )
+        dur = 0.1
+    return max(0.1, dur)
 
 
 def _run(cmd: list[str], output_path: str) -> None:

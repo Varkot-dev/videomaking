@@ -30,6 +30,8 @@ from dataclasses import dataclass
 import edge_tts
 import yaml
 
+from manimgen.utils import safe_probe_duration
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -171,7 +173,14 @@ def cue_times(
 
 
 def get_audio_duration(audio_path: str) -> float:
-    """Return duration of an audio file in seconds using ffprobe."""
+    """Return duration of an audio file in seconds using ffprobe (always > 0).
+
+    Some containers report no format-level duration ("N/A" or absent),
+    which previously crashed via ``float("N/A")``. Parsing is delegated to
+    ``utils.safe_probe_duration``; an unreadable duration falls back to the
+    0.1s floor (mirroring ``assembler._video_duration``) so callers never
+    crash on missing metadata.
+    """
     try:
         result = subprocess.run(
             [
@@ -196,8 +205,17 @@ def get_audio_duration(audio_path: str) -> float:
             "  Windows: https://ffmpeg.org/download.html"
         )
 
-    data = json.loads(result.stdout)
-    return float(data["format"]["duration"])
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        data = None
+    dur = safe_probe_duration(data)
+    if dur is None:
+        logging.getLogger(__name__).warning(
+            "[tts] No readable duration for %s — using 0.1s floor", audio_path
+        )
+        dur = 0.1
+    return max(0.1, dur)
 
 
 def check_audio_not_silent(audio_path: str) -> dict:

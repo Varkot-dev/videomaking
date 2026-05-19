@@ -83,7 +83,7 @@ def _extract_cues(plan: dict) -> dict:
         # opening segment at index 0, before the first [CUE]).
         existing_cues = section.get("cues", [])
         n_segments = len(indices)
-        if existing_cues and len(existing_cues) != n_segments:
+        if len(existing_cues) != n_segments:
             logger.warning(
                 "[planner] Section '%s' has %d cues[] but %d segments (%d [CUE] markers). "
                 "Re-prompting planner to supply one visual per segment.",
