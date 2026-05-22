@@ -1,0 +1,39 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const i=JSON.parse(d);const p=i.tool_input?.file_path||'';if(/\\/manim\\//.test(p)&&!/\\/manimgen\\//.test(p)){console.error('[Hook] BLOCKED: manim/ is the read-only ManimGL install \\u2014 edit manimgen/ instead');process.exit(2)}process.exit(0)})\"",
+            "description": "Protect the read-only manim/ ManimGL install from edits"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "for f in $CLAUDE_FILE_PATHS; do case \"$f\" in *.py) ruff format \"$f\" >/dev/null 2>&1; ruff check --fix \"$f\" >/dev/null 2>&1; if ! python3 -m py_compile \"$f\" 2>/tmp/manimgen_pycompile_err; then echo \"[Hook] SYNTAX ERROR in $f:\"; cat /tmp/manimgen_pycompile_err; fi; if ! ruff check \"$f\" >/tmp/manimgen_ruff_err 2>&1; then echo \"[Hook] ruff still reports issues in $f after autofix:\"; cat /tmp/manimgen_ruff_err; fi;; esac; done",
+            "description": "Auto-format/fix edited Python files, then loudly report any remaining syntax errors or unfixable lint issues"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '[Hook] Work unit done. Before considering this finished, run /python-review on the changed Python files for a deep agent review (the per-edit hook only catches syntax + lint, not logic/design).'",
+            "description": "Remind to run the deep python-reviewer agent at the end of a work unit"
+          }
+        ]
+      }
+    ]
+  }
+}
