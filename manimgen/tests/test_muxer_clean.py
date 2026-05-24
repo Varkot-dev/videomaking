@@ -242,3 +242,36 @@ class TestErrorHandling:
         with p1, p2, patch("os.makedirs"):
             result = mux_audio_video("v.mp4", "a.mp3", out)
         assert result == out
+
+    def test_ffmpeg_timeout_raises_runtime_error(self, tmp_path):
+        """A wedged ffmpeg must be reaped by the 300s timeout, not hang."""
+        import subprocess as _sp
+
+        with patch("manimgen.renderer.muxer._get_duration",
+                   side_effect=[10.0, 7.0]), \
+             patch("manimgen.renderer.muxer.subprocess.run",
+                   side_effect=_sp.TimeoutExpired(cmd="ffmpeg", timeout=300)), \
+             patch("os.makedirs"):
+            with pytest.raises(RuntimeError, match="timed out"):
+                mux_audio_video("v.mp4", "a.mp3", str(tmp_path / "out.mp4"))
+
+    def test_run_passes_timeout_to_subprocess(self, tmp_path):
+        """_run must pass a finite timeout to subprocess.run."""
+        from manimgen.renderer.muxer import _FFMPEG_TIMEOUT_SECONDS
+
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured.update(kwargs)
+            m = MagicMock()
+            m.returncode = 0
+            m.stderr = ""
+            return m
+
+        with patch("manimgen.renderer.muxer._get_duration",
+                   side_effect=[10.0, 7.0]), \
+             patch("manimgen.renderer.muxer.subprocess.run",
+                   side_effect=fake_run), \
+             patch("os.makedirs"):
+            mux_audio_video("v.mp4", "a.mp3", str(tmp_path / "out.mp4"))
+        assert captured.get("timeout") == _FFMPEG_TIMEOUT_SECONDS

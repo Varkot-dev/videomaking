@@ -117,7 +117,7 @@ async def _generate_async(
 def generate_narration(
     text: str,
     output_path: str,
-    voice: str = None,
+    voice: str | None = None,
 ) -> tuple[str, list[WordTimestamp]]:
     """Generate narration audio from text using edge-tts.
 
