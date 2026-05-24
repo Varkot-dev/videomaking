@@ -13,6 +13,7 @@ from manimgen.input.parser import parse_input
 from manimgen.planner.lesson_planner import plan_lesson, plan_lesson_from_pdf
 from manimgen.renderer.assembler import assemble_video
 from manimgen.types import CueMuxResult, MuxStatus
+from manimgen.utils import safe_section_id
 from manimgen.validator.fallback import fallback_scene
 from manimgen.validator.retry import retry_scene
 from manimgen.validator.runner import _find_rendered_video, run_scene

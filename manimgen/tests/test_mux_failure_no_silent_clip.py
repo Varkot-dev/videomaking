@@ -17,6 +17,9 @@ Zero LLM calls, zero subprocess calls — mux_audio_video is mocked.
 import logging
 from unittest.mock import MagicMock
 
+import pytest
+
+import manimgen.cli as cli
 from manimgen.cli import _mux_one_cue
 from manimgen.types import CueMuxResult, MuxStatus
 
@@ -25,6 +28,19 @@ SECTION = {"id": "section_01", "title": "Intro"}
 
 def _log() -> logging.LoggerAdapter:
     return logging.LoggerAdapter(logging.getLogger("test"), {"section": "section_01"})
+
+
+@pytest.fixture(autouse=True)
+def _isolate_muxed_dir(tmp_path, monkeypatch):
+    """Point the muxed output dir at tmp_path.
+
+    _mux_one_cue computes the muxed output path via paths.muxed_dir() and
+    short-circuits to SUCCESS if that file already exists. Without this
+    isolation the tests collide with real artifacts left in the actual
+    manimgen/output/muxed/ dir from prior pipeline runs (e.g. a stale
+    section_01_cue00.mp4), making the mock mux never run.
+    """
+    monkeypatch.setattr(cli.paths, "muxed_dir", lambda: str(tmp_path))
 
 
 class TestMuxOneCueRetry:
@@ -37,9 +53,7 @@ class TestMuxOneCueRetry:
         audio.write_bytes(b"a")
         mux = MagicMock(return_value="out.mp4")
 
-        result = _mux_one_cue(
-            SECTION, 1, 0, str(clip), str(audio), mux, _log()
-        )
+        result = _mux_one_cue(SECTION, 1, 0, str(clip), str(audio), mux, _log())
 
         assert result.status is MuxStatus.SUCCESS
         assert result.ok
@@ -54,15 +68,15 @@ class TestMuxOneCueRetry:
         audio.write_bytes(b"a")
         mux = MagicMock(side_effect=[RuntimeError("ffmpeg boom"), "out.mp4"])
 
-        result = _mux_one_cue(
-            SECTION, 1, 0, str(clip), str(audio), mux, _log()
-        )
+        result = _mux_one_cue(SECTION, 1, 0, str(clip), str(audio), mux, _log())
 
         assert result.status is MuxStatus.RETRIED_OK
         assert result.ok
         assert mux.call_count == 2
 
-    def test_mux_raises_both_attempts_marks_failed_no_silent_clip(self, tmp_path, caplog):
+    def test_mux_raises_both_attempts_marks_failed_no_silent_clip(
+        self, tmp_path, caplog
+    ):
         clip = tmp_path / "section_01_cue00_video.mp4"
         clip.write_bytes(b"v")
         audio = tmp_path / "section_01_cue00.m4a"
@@ -70,9 +84,7 @@ class TestMuxOneCueRetry:
         mux = MagicMock(side_effect=RuntimeError("ffmpeg always fails"))
 
         with caplog.at_level(logging.ERROR):
-            result = _mux_one_cue(
-                SECTION, 1, 0, str(clip), str(audio), mux, _log()
-            )
+            result = _mux_one_cue(SECTION, 1, 0, str(clip), str(audio), mux, _log())
 
         # (a) silent clip is NOT carried forward
         assert result.status is MuxStatus.FAILED
@@ -93,9 +105,7 @@ class TestMuxOneCueRetry:
         mux = MagicMock()
 
         with caplog.at_level(logging.ERROR):
-            result = _mux_one_cue(
-                SECTION, 1, 0, str(clip), missing_audio, mux, _log()
-            )
+            result = _mux_one_cue(SECTION, 1, 0, str(clip), missing_audio, mux, _log())
 
         assert result.status is MuxStatus.FAILED
         assert not result.ok
