@@ -12,7 +12,7 @@ from manimgen.generator.scene_generator import generate_scenes
 from manimgen.input.parser import parse_input
 from manimgen.planner.lesson_planner import plan_lesson, plan_lesson_from_pdf
 from manimgen.renderer.assembler import assemble_video
-from manimgen.types import CueMuxResult, MuxStatus
+from manimgen.types import CueMuxResult, GateResult, MuxStatus
 from manimgen.utils import safe_section_id
 from manimgen.validator.fallback import fallback_scene
 from manimgen.validator.retry import retry_scene
@@ -215,6 +215,19 @@ def _write_hash_sidecar(video_path: str, topic_hash: str) -> None:
         f.write(topic_hash)
 
 
+def _code_blocking_freezes(code: str, cue_durations: list[float]) -> list[str]:
+    """Single authoritative freeze-frame gate over a scene's source code.
+
+    Both the fresh-render path and the render-cache fast-path route through this
+    one helper so the timing freeze check can never drift between them (#24/#31).
+    Returns the list of blocking freeze-frame tails (empty when clean; post-#23
+    UNKNOWN/dynamic-duration cues are never reported as freezes).
+    """
+    from manimgen.validator.timing_verifier import blocking_freezes, verify_timing
+
+    return blocking_freezes(verify_timing(code, cue_durations))
+
+
 def _cached_scene_blocking_freezes(
     section: dict, cue_durations: list[float]
 ) -> list[str]:
@@ -238,9 +251,191 @@ def _cached_scene_blocking_freezes(
     except OSError:
         return []
 
-    from manimgen.validator.timing_verifier import blocking_freezes, verify_timing
+    return _code_blocking_freezes(code, cue_durations)
 
-    return blocking_freezes(verify_timing(code, cue_durations))
+
+# ---------------------------------------------------------------------------
+# Per-section pipeline seams (#31)
+#
+# _run_section was a 160+ line function doing six jobs; the render-cache
+# fast-path bypassed the timing freeze gate that the codegen path runs. It is
+# now decomposed into three pure-ish seams with explicit signatures:
+#
+#   _generate_and_gate  — codegen + zero-cost timing gate  → GateResult
+#   _render_with_retry  — first render + validate + retry + fallback → (ok, path)
+#   _cut_and_mux        — cut into per-cue clips + mux narration → [clip paths]
+#
+# Behavior is identical to the prior inline version; the cache freeze check and
+# the render-path freeze check now both route through _code_blocking_freezes so
+# the two can never drift (#24/#31).
+# ---------------------------------------------------------------------------
+
+
+def _generate_and_gate(
+    section: dict,
+    cue_durations: list[float] | None,
+    overview: dict | None,
+) -> GateResult:
+    """Codegen one scene for the section and run the zero-cost timing gate.
+
+    Generates the scene, then runs the single authoritative timing gate (the
+    same pass retry.py uses): verify → auto-fix → re-verify. If timing issues
+    survive auto-fix, ``timing_blocked`` is True so the caller skips the
+    expensive first render and routes straight to the retry path (which can
+    apply an LLM fix with the timing warnings in context).
+    """
+    code, class_name, scene_path = generate_scenes(
+        section, cue_durations=cue_durations, overview=overview
+    )
+
+    timing_blocked = False
+    if cue_durations:
+        from manimgen.validator.retry import apply_timing_gate
+
+        code, remaining_timing_warnings = apply_timing_gate(
+            code, scene_path, cue_durations
+        )
+        if remaining_timing_warnings:
+            logger.warning(
+                "[manimgen] Unresolvable timing issues after auto-fix — "
+                "skipping first render, routing to retry: %s",
+                "; ".join(remaining_timing_warnings),
+            )
+            timing_blocked = True
+
+    return GateResult(
+        code=code,
+        class_name=class_name,
+        scene_path=scene_path,
+        timing_blocked=timing_blocked,
+    )
+
+
+def _render_with_retry(
+    section: dict,
+    gate: GateResult,
+    cue_durations: list[float] | None,
+    log: logging.LoggerAdapter | logging.Logger,
+) -> tuple[bool, str | None]:
+    """Render a gated scene, forcing the retry/fallback path on any failure.
+
+    The first render is skipped entirely when ``gate.timing_blocked`` is set.
+    A successful first render is still re-checked for hard visual failures
+    (validate_render) and blocking freeze-frame tails — either forces the retry
+    path. If retries fail, the styled fallback scene is used. Returns
+    (success, video_path); video_path is None only if the fallback also failed.
+    """
+    if gate.timing_blocked:
+        success, video_path = False, None
+    else:
+        success, video_path = run_scene(gate.scene_path, gate.class_name)
+
+    if success and video_path:
+        from manimgen.validator.render_validator import validate_render
+
+        vr = validate_render(video_path, gate.code, gate.scene_path, cue_durations)
+        if vr.severity == "hard":
+            log.warning(
+                "[manimgen] First-pass render has hard failures — forcing retry: %s",
+                "; ".join(vr.issues),
+            )
+            success = False
+
+        # #24: validate_render covers frames/layout but NOT timing freezes.
+        # The first-pass render could still ship a multi-second freeze-frame
+        # tail. Run the same freeze gate retry.py uses (post-#23: UNKNOWN cues
+        # never block) and treat a real freeze as a hard failure → retry path.
+        if success and cue_durations:
+            freezes = _code_blocking_freezes(gate.code, cue_durations)
+            if freezes:
+                log.warning(
+                    "[manimgen] First-pass render has %d blocking "
+                    "freeze-frame tail(s) — forcing retry: %s",
+                    len(freezes),
+                    "; ".join(freezes),
+                )
+                success = False
+
+    if not success:
+        success, video_path = retry_scene(
+            section,
+            gate.code,
+            gate.class_name,
+            gate.scene_path,
+            cue_durations=cue_durations,
+        )
+
+    if not success:
+        log.info("[manimgen] All retries failed, using fallback")
+        video_path = fallback_scene(section)
+        success = bool(video_path)
+
+    return success, video_path
+
+
+def _cut_and_mux(
+    section: dict,
+    idx: int,
+    video_path: str,
+    segments: list,
+    audio_slices: list[str],
+    cue_durations: list[float],
+    log: logging.LoggerAdapter | logging.Logger,
+) -> list[str]:
+    """Cut a rendered section into per-cue clips and mux narration onto each.
+
+    Returns the ordered list of muxed clip paths. If ANY cue fails to mux with
+    narration, the whole section is dropped (returns []) and logged loudly — a
+    silent clip must never reach the assembler (#28). A FAILED cue's silent
+    video is deliberately never appended to the produced list.
+    """
+    from manimgen.renderer.cutter import (
+        cue_start_times_from_durations,
+        cut_video_at_cues,
+    )
+    from manimgen.renderer.muxer import mux_audio_video
+
+    section_id = safe_section_id(section, idx)
+    cue_starts = cue_start_times_from_durations(cue_durations)
+    cue_video_clips = cut_video_at_cues(
+        video_path,
+        cue_starts,
+        cue_durations,
+        output_dir=paths.muxed_dir(),
+        section_id=section_id,
+    )
+
+    produced: list[str] = []
+    failed: list[CueMuxResult] = []
+    for i, (cue_clip, audio_slice) in enumerate(zip(cue_video_clips, audio_slices)):
+        result = _mux_one_cue(
+            section, idx, i, cue_clip, audio_slice, mux_audio_video, log
+        )
+        if result.ok and result.path:
+            produced.append(result.path)
+        else:
+            failed.append(result)
+
+    if failed:
+        # A failed cue means a narration-less (silent) clip. We must NOT ship
+        # it: the assembler cannot distinguish a silent clip from a real one,
+        # so it would incorporate animation with no voice into the final
+        # video. Mark the whole section failed and surface it loudly. The
+        # silent cue_clip is deliberately never appended to `produced`.
+        log.error(
+            "[manimgen] Section %d (%s) FAILED: %d/%d cue(s) could not be "
+            "muxed with narration — dropping section to avoid shipping "
+            "silent video. Failed cues: %s",
+            idx,
+            section_id,
+            len(failed),
+            len(cue_video_clips),
+            "; ".join(
+                f"cue {r.cue_index} ({r.status.value}: {r.error})" for r in failed
+            ),
+        )
+        return []
+    return produced
 
 
 # ---------------------------------------------------------------------------
@@ -383,72 +578,8 @@ def _run_section(
         video_path = found_video
         success = True
     else:
-        code, class_name, scene_path = generate_scenes(
-            section, cue_durations=cue_durations, overview=overview
-        )
-        # Single authoritative timing gate (same pass retry.py uses): verify →
-        # auto-fix → re-verify. If timing issues survive auto-fix, skip the
-        # expensive first render entirely and go straight to the retry path,
-        # which can apply an LLM fix with the timing warnings in context.
-        # This is the zero-cost pre-render gate for freeze-frame tails.
-        timing_blocked = False
-        if cue_durations:
-            from manimgen.validator.retry import apply_timing_gate
-
-            code, remaining_timing_warnings = apply_timing_gate(
-                code, scene_path, cue_durations
-            )
-            if remaining_timing_warnings:
-                log.warning(
-                    "[manimgen] Unresolvable timing issues after auto-fix — "
-                    "skipping first render, routing to retry: %s",
-                    "; ".join(remaining_timing_warnings),
-                )
-                timing_blocked = True
-
-        if timing_blocked:
-            success, video_path = False, None
-        else:
-            success, video_path = run_scene(scene_path, class_name)
-        if success and video_path:
-            from manimgen.validator.render_validator import validate_render
-
-            vr = validate_render(video_path, code, scene_path, cue_durations)
-            if vr.severity == "hard":
-                log.warning(
-                    "[manimgen] First-pass render has hard failures — forcing retry: %s",
-                    "; ".join(vr.issues),
-                )
-                success = False
-
-            # #24: validate_render covers frames/layout but NOT timing freezes.
-            # The first-pass render could still ship a multi-second freeze-frame
-            # tail. Run the same blocking_freezes gate retry.py uses and treat a
-            # real freeze (post-#23: UNKNOWN cues never block) as a hard failure
-            # that routes into the retry path.
-            if success and cue_durations:
-                from manimgen.validator.timing_verifier import (
-                    blocking_freezes,
-                    verify_timing,
-                )
-
-                freezes = blocking_freezes(verify_timing(code, cue_durations))
-                if freezes:
-                    log.warning(
-                        "[manimgen] First-pass render has %d blocking "
-                        "freeze-frame tail(s) — forcing retry: %s",
-                        len(freezes),
-                        "; ".join(freezes),
-                    )
-                    success = False
-        if not success:
-            success, video_path = retry_scene(
-                section, code, class_name, scene_path, cue_durations=cue_durations
-            )
-        if not success:
-            log.info("[manimgen] All retries failed, using fallback")
-            video_path = fallback_scene(section)
-            success = bool(video_path)
+        gate = _generate_and_gate(section, cue_durations, overview)
+        success, video_path = _render_with_retry(section, gate, cue_durations, log)
         # Write hash sidecar after any successful render (including fallback)
         if success and video_path and os.path.exists(video_path):
             _write_hash_sidecar(video_path, current_topic_hash)
@@ -459,52 +590,9 @@ def _run_section(
 
     # --- Cut + mux per cue ---
     if segments and audio_slices and success:
-        from manimgen.renderer.cutter import (
-            cue_start_times_from_durations,
-            cut_video_at_cues,
+        return _cut_and_mux(
+            section, idx, video_path, segments, audio_slices, cue_durations, log
         )
-        from manimgen.renderer.muxer import mux_audio_video
-
-        cue_starts = cue_start_times_from_durations(cue_durations)
-        cue_video_clips = cut_video_at_cues(
-            video_path,
-            cue_starts,
-            cue_durations,
-            output_dir=paths.muxed_dir(),
-            section_id=section_id,
-        )
-
-        produced: list[str] = []
-        failed: list[CueMuxResult] = []
-        for i, (cue_clip, audio_slice) in enumerate(zip(cue_video_clips, audio_slices)):
-            result = _mux_one_cue(
-                section, idx, i, cue_clip, audio_slice, mux_audio_video, log
-            )
-            if result.ok and result.path:
-                produced.append(result.path)
-            else:
-                failed.append(result)
-
-        if failed:
-            # A failed cue means a narration-less (silent) clip. We must NOT ship
-            # it: the assembler cannot distinguish a silent clip from a real one,
-            # so it would incorporate animation with no voice into the final
-            # video. Mark the whole section failed and surface it loudly. The
-            # silent cue_clip is deliberately never appended to `produced`.
-            log.error(
-                "[manimgen] Section %d (%s) FAILED: %d/%d cue(s) could not be "
-                "muxed with narration — dropping section to avoid shipping "
-                "silent video. Failed cues: %s",
-                idx,
-                section_id,
-                len(failed),
-                len(cue_video_clips),
-                "; ".join(
-                    f"cue {r.cue_index} ({r.status.value}: {r.error})" for r in failed
-                ),
-            )
-            return []
-        return produced
 
     # TTS off — use the full section video directly
     return [video_path]
