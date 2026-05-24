@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 import os
+from collections.abc import Callable
 
 import yaml
 
@@ -11,6 +12,7 @@ from manimgen.generator.scene_generator import generate_scenes
 from manimgen.input.parser import parse_input
 from manimgen.planner.lesson_planner import plan_lesson, plan_lesson_from_pdf
 from manimgen.renderer.assembler import assemble_video
+from manimgen.types import CueMuxResult, MuxStatus
 from manimgen.validator.fallback import fallback_scene
 from manimgen.validator.retry import retry_scene
 from manimgen.validator.runner import _find_rendered_video, run_scene
@@ -87,6 +89,74 @@ def _muxed_path_for(section: dict, idx: int, cue_index: int) -> str:
 
 def _all_cues_muxed(section: dict, idx: int, n_cues: int) -> bool:
     return all(os.path.exists(_muxed_path_for(section, idx, i)) for i in range(n_cues))
+
+
+def _mux_one_cue(
+    section: dict,
+    idx: int,
+    cue_index: int,
+    cue_clip: str,
+    audio_slice: str,
+    mux_fn: Callable[[str, str, str], str],
+    log: logging.LoggerAdapter | logging.Logger,
+) -> CueMuxResult:
+    """Mux one cue's narration onto its video, retrying once on failure.
+
+    Returns a CueMuxResult. A FAILED result NEVER carries the silent ``cue_clip``
+    in ``path`` — the caller must drop it rather than ship narration-less video
+    (issue #28). On a missing audio slice or a mux that fails even after one
+    retry, the failure is logged loudly with the cue index, section, and error.
+    """
+    section_id = section.get("id", f"section_{idx:02d}")
+    muxed = _muxed_path_for(section, idx, cue_index)
+
+    if os.path.exists(muxed):
+        log.info("[manimgen] Skipping cue %d (already muxed)", cue_index)
+        return CueMuxResult(cue_index, MuxStatus.SUCCESS, muxed)
+
+    if not os.path.exists(audio_slice):
+        msg = f"audio slice missing: {audio_slice}"
+        log.error(
+            "[manimgen] Mux FAILED cue %d (section %s): %s — refusing to ship "
+            "narration-less clip.",
+            cue_index,
+            section_id,
+            msg,
+        )
+        return CueMuxResult(cue_index, MuxStatus.FAILED, None, error=msg)
+
+    # First attempt, then exactly one retry before giving up.
+    last_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            mux_fn(cue_clip, audio_slice, muxed)
+            status = MuxStatus.SUCCESS if attempt == 0 else MuxStatus.RETRIED_OK
+            log.info(
+                "[manimgen] Muxed cue %d (%s): %s",
+                cue_index,
+                status.value,
+                os.path.basename(muxed),
+            )
+            return CueMuxResult(cue_index, status, muxed)
+        except Exception as e:
+            last_error = e
+            if attempt == 0:
+                log.warning(
+                    "[manimgen] Mux failed cue %d (section %s): %s — retrying once.",
+                    cue_index,
+                    section_id,
+                    e,
+                )
+
+    msg = str(last_error)
+    log.error(
+        "[manimgen] Mux FAILED cue %d (section %s) after retry: %s — refusing "
+        "to ship narration-less clip.",
+        cue_index,
+        section_id,
+        msg,
+    )
+    return CueMuxResult(cue_index, MuxStatus.FAILED, None, error=msg)
 
 
 def _topic_hash(topic_or_pdf: str) -> str:
@@ -326,22 +396,35 @@ def _run_section(
         )
 
         produced: list[str] = []
+        failed: list[CueMuxResult] = []
         for i, (cue_clip, audio_slice) in enumerate(zip(cue_video_clips, audio_slices)):
-            muxed = _muxed_path_for(section, idx, i)
-            if os.path.exists(muxed):
-                log.info("[manimgen] Skipping cue %d (already muxed)", i)
-                produced.append(muxed)
-                continue
-            if os.path.exists(audio_slice):
-                try:
-                    mux_audio_video(cue_clip, audio_slice, muxed)
-                    log.info("[manimgen] Muxed cue %d: %s", i, os.path.basename(muxed))
-                    produced.append(muxed)
-                except Exception as e:
-                    logger.warning("[manimgen] Mux failed cue %d: %s", i, e)
-                    produced.append(cue_clip)
+            result = _mux_one_cue(
+                section, idx, i, cue_clip, audio_slice, mux_audio_video, log
+            )
+            if result.ok and result.path:
+                produced.append(result.path)
             else:
-                produced.append(cue_clip)
+                failed.append(result)
+
+        if failed:
+            # A failed cue means a narration-less (silent) clip. We must NOT ship
+            # it: the assembler cannot distinguish a silent clip from a real one,
+            # so it would incorporate animation with no voice into the final
+            # video. Mark the whole section failed and surface it loudly. The
+            # silent cue_clip is deliberately never appended to `produced`.
+            log.error(
+                "[manimgen] Section %d (%s) FAILED: %d/%d cue(s) could not be "
+                "muxed with narration — dropping section to avoid shipping "
+                "silent video. Failed cues: %s",
+                idx,
+                section_id,
+                len(failed),
+                len(cue_video_clips),
+                "; ".join(
+                    f"cue {r.cue_index} ({r.status.value}: {r.error})" for r in failed
+                ),
+            )
+            return []
         return produced
 
     # TTS off — use the full section video directly
