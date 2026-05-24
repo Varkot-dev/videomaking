@@ -16,6 +16,7 @@ install) the symbol set is ``None`` and the shadow check returns nothing.
 import ast
 import builtins
 import logging
+import sys
 from functools import lru_cache
 
 logger = logging.getLogger(__name__)
@@ -44,15 +45,24 @@ def load_manimlib_symbols() -> frozenset[str] | None:
     caller must treat ``None`` as "allowlist unavailable, do nothing". Cached
     so the (potentially heavy) import happens at most once per process.
     """
+    # manimlib parses sys.argv at import time (manimlib/config.py parse_cli).
+    # Under a test runner / any host process, sys.argv carries flags manimlib's
+    # argparse rejects, raising SystemExit (NOT an Exception subclass). Blank
+    # argv across the import so introspection can't consume the host's CLI, and
+    # catch SystemExit defensively in addition to ImportError/GL init failures.
+    saved_argv = sys.argv
     try:
+        sys.argv = [saved_argv[0] if saved_argv else "manimgen"]
         import manimlib  # noqa: PLC0415  (deferred on purpose — heavy/optional)
-    except Exception as exc:  # ImportError, or GL/display init failure
+    except (Exception, SystemExit) as exc:  # ImportError, GL init, argv parse
         logger.info(
             "[codeguard][allowlist-shadow] manimlib unavailable (%s) — "
             "allowlist check disabled this run",
             exc,
         )
         return None
+    finally:
+        sys.argv = saved_argv
 
     return frozenset(name for name in dir(manimlib) if not name.startswith("_"))
 
