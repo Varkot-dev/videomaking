@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import subprocess
+import warnings
 from dataclasses import dataclass
 
 import edge_tts
@@ -45,7 +46,15 @@ def _load_tts_config() -> dict:
         with open(config_path) as f:
             cfg = yaml.safe_load(f) or {}
         return cfg.get("tts", {})
-    except Exception:
+    except Exception as e:
+        # Runs at import time before logging is configured. A malformed config
+        # silently falls back to default voice/speed — surface it via warn().
+        warnings.warn(
+            f"Failed to load TTS config {config_path} ({e}) — "
+            f"using default voice/speed settings",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         return {}
 
 
@@ -249,7 +258,12 @@ def check_audio_not_silent(audio_path: str) -> dict:
 
     try:
         duration = get_audio_duration(audio_path)
-    except Exception:
+    except Exception as e:
+        logger.warning(
+            "[tts] Could not probe duration for %s (%s) — reporting 0.0",
+            audio_path,
+            e,
+        )
         duration = 0.0
 
     return {"ok": ratio < 0.8, "silent_ratio": ratio, "duration": duration}

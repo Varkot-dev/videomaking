@@ -1,9 +1,11 @@
+import hashlib
 import json
 import logging
 import os
 
 from manimgen.llm import chat
 from manimgen.planner.cue_parser import parse_cues
+from manimgen.utils import sanitize_section_id
 
 logger = logging.getLogger(__name__)
 
@@ -63,15 +65,52 @@ def _cap_sections(plan: dict, limit: int) -> dict:
     return plan
 
 
+def _sanitize_section_ids(plan: dict) -> dict:
+    """Sanitize every ``section['id']`` in place at the parse boundary.
+
+    This is the single trust boundary for the LLM-controlled planner JSON.
+    Each id is coerced to a path/class-name-safe slug (see
+    ``utils.sanitize_section_id``). When two sanitized ids collide (e.g. an
+    attacker submits both ``a/b`` and ``a_b``, or two sections legitimately
+    slug to the same value), a short content hash is appended so downstream
+    file paths stay unique and one section cannot overwrite another's render.
+
+    Sanitizing here means every downstream sink (TTS audio path, scene file,
+    fallback file, muxed clip, render cache) receives an already-safe id; the
+    per-sink ``safe_section_id`` calls are pure defense-in-depth for resume
+    paths that bypass this function.
+    """
+    seen: set[str] = set()
+    for idx, section in enumerate(plan.get("sections", []), start=1):
+        if not isinstance(section, dict):
+            continue
+        raw = section.get("id")
+        safe = sanitize_section_id(raw, idx)
+        if safe in seen:
+            suffix = hashlib.sha256(str(raw).encode()).hexdigest()[:6]
+            safe = f"{safe[: 64 - 7]}_{suffix}"
+        seen.add(safe)
+        if safe != raw:
+            logger.warning(
+                "[planner] Sanitized section id %r -> %r (idx %d)", raw, safe, idx
+            )
+        section["id"] = safe
+    return plan
+
+
 def _extract_cues(plan: dict) -> dict:
     """Parse [CUE] markers from narration and merge with the cues[] storyboard array.
 
     After this runs each section has:
+      - section["id"]                 sanitized, path/class-name-safe slug
       - section["narration"]          clean text (no [CUE] tags), ready for TTS
       - section["cue_word_indices"]   [0, 9, 23, ...] word indices from narration
       - section["cues"]               list of {index, visual} dicts from planner
                                       (synthesised from narration if planner omitted them)
     """
+    # Security: sanitize untrusted LLM-controlled ids BEFORE they reach any
+    # filesystem sink (path traversal → arbitrary .py write + manimgl exec).
+    plan = _sanitize_section_ids(plan)
     for section in plan.get("sections", []):
         raw = section.get("narration", "")
         clean, indices = parse_cues(raw)

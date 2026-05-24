@@ -4,6 +4,7 @@ import re
 import subprocess
 
 from manimgen import paths
+from manimgen.utils import safe_section_id
 from manimgen.validator.env import get_render_env
 
 logger = logging.getLogger(__name__)
@@ -46,10 +47,12 @@ def fallback_scene(section: dict) -> str | None:
     os.makedirs(scenes_dir, exist_ok=True)
 
     hold_seconds = _estimate_hold(section)
-    scene_path = os.path.join(scenes_dir, f"{section['id']}_fallback.py")
-    class_name = (
-        f"{section['id'].replace('_', ' ').title().replace(' ', '')}FallbackScene"
-    )
+    # Defense in depth: sanitize the id again at this filesystem sink. The
+    # resume path can load a plan.json that bypassed parse-time sanitization,
+    # and this sink writes a .py file manimgl then executes.
+    safe_id = safe_section_id(section)
+    scene_path = os.path.join(scenes_dir, f"{safe_id}_fallback.py")
+    class_name = f"{safe_id.replace('_', ' ').title().replace(' ', '')}FallbackScene"
     section_num = _section_num(section)
     subtitle = _fallback_subtitle(section)
     title = section["title"]

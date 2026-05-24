@@ -7,6 +7,7 @@ from manimgen.validator.codeguard import (
     precheck_and_autofix_file as precheck_and_autofix,
 )
 from manimgen.validator.env import get_render_env
+from manimgen.validator.scene_ast_gate import inspect_scene_file
 
 
 def _is_3d_scene(scene_path: str) -> bool:
@@ -90,6 +91,28 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
             f.write(precheck["stderr"])
             f.write("\n")
         return False, None
+
+    # Pre-execution AST gate (#27): manimgl imports the scene module, running
+    # every top-level statement before the Scene is instantiated. Inspect the
+    # exact file we are about to execute for disallowed top-level statements
+    # (shelling out, importing os/subprocess, exec/eval, second class, ...).
+    #
+    # Warning-only by design: codeguard's banned-pattern denylist already
+    # blocks the known exec/eval/shell primitives outright, and hard-breaking
+    # here would regress any scene that emits a benign extra top-level
+    # statement. We log findings loudly so they are visible in the run log.
+    # TODO(#27): once Director output is constrained enough that findings are
+    # reliably malicious, hard-block here (return False, None) instead of only
+    # warning.
+    gate = inspect_scene_file(scene_path)
+    if not gate.ok:
+        import logging as _logging
+
+        _logging.getLogger(__name__).warning(
+            "[runner] AST gate findings for %s (warning-only, render continues): %s",
+            class_name,
+            "; ".join(gate.findings),
+        )
 
     # Director scenes can be long (multiple cue beats in one section file).
     # Use a larger timeout to avoid false "runtime" failures.

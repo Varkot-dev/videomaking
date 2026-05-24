@@ -4,6 +4,7 @@
 # Override any path by editing the output: block in config.yaml.
 
 import os
+import warnings
 
 import yaml
 
@@ -51,7 +52,16 @@ def _load() -> tuple[dict, dict]:
             ),
         }
         return paths, rendering
-    except Exception:
+    except Exception as e:
+        # Runs at import time before logging is configured, so warn() instead
+        # of logging. A malformed config silently routing to default output
+        # dirs is exactly the failure this surfaces.
+        warnings.warn(
+            f"Failed to load config {_CONFIG_PATH} ({e}) — "
+            f"falling back to default output paths and rendering settings",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         return dict(_DEFAULTS), dict(_RENDER_DEFAULTS)
 
 
