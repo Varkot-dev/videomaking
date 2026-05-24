@@ -343,15 +343,22 @@ class TestRetryVisualLoop:
         mock_chat.assert_called_once()
         assert issues in mock_chat.call_args.kwargs["user"]
 
-    def test_blocking_freeze_tail_forces_retry_even_when_frames_clean(self, tmp_path):
-        """The hard timing gate. A render that SUCCEEDS with clean frames AND
-        clean layout, but whose code leaves a >threshold freeze-frame tail,
-        must NOT be accepted — it must trigger an LLM fix. This is the exact
-        silent-failure the pipeline used to ship (detect 'CUE 0: +9s short',
-        accept anyway)."""
+    def test_blocking_freeze_tail_resolved_deterministically_no_llm(self, tmp_path):
+        """REWRITTEN for issue #22 (timing_verifier is now authoritative).
+
+        Previously this asserted that a >threshold freeze-frame tail must route
+        to the LLM (chat) for a fix. That encoded the architectural inversion
+        #22 removes: the deterministic timing gate KNOWS the exact residual, so
+        it now adjusts the cue's self.wait() to close the freeze BEFORE any
+        render — no LLM call. The render is then accepted with corrected code.
+
+        A freeze that the deterministic layer can resolve must NOT burn an LLM
+        call. The contract is preserved (the freeze never ships unchecked); the
+        mechanism changed from advisory-hint-to-LLM to authoritative-self-heal.
+        """
         scene_path = str(tmp_path / "scene.py")
-        # CUE 0 narration is 10s but the scene only animates ~1.5s → ~8.5s
-        # frozen tail, far over the 2.5s block threshold.
+        # CUE 0 narration is 10s but the scene only animates 1.5s (1.0 play +
+        # 0.5 wait) → 8.5s frozen tail, far over the 2.5s block threshold.
         frozen_code = (
             "from manimlib import *\n"
             "class TestScene(Scene):\n"
@@ -363,14 +370,6 @@ class TestRetryVisualLoop:
         with open(scene_path, "w") as f:
             f.write(frozen_code)
 
-        fixed = (
-            "from manimlib import *\n"
-            "class TestScene(Scene):\n"
-            "    def construct(self):\n"
-            "        # CUE 0\n"
-            "        self.play(Write(Text('hi')), run_time=4.0)\n"
-            "        self.wait(6.0)\n"
-        )
         from manimgen.validator.frame_checker import FrameCheckResult
         with patch("manimgen.validator.retry._run_and_capture",
                    return_value={"success": True, "video_path": "/fake/v.mp4", "stderr": ""}), \
@@ -378,19 +377,27 @@ class TestRetryVisualLoop:
                    return_value=FrameCheckResult(ok=True)), \
              patch("manimgen.validator.retry.check_layout",
                    return_value={"ok": True, "issues": "", "skipped": False}), \
-             patch("manimgen.validator.retry.chat", return_value=fixed) as mock_chat, \
+             patch("manimgen.validator.retry.chat") as mock_chat, \
              patch("manimgen.validator.retry.precheck_and_autofix",
                    return_value={"ok": True, "stderr": "", "layout_warnings": []}):
             import manimgen.validator.retry as retry_module
             retry_module.MAX_RETRIES = 3
             retry_module.MAX_VISUAL_LLM_FIX_CALLS = 1
             from manimgen.validator.retry import retry_scene
-            # cue_durations=[10.0] → 10s narration vs ~1.5s animation = freeze
-            retry_scene(
+            # cue_durations=[10.0] → 10s narration vs 1.5s animation = freeze
+            success, _ = retry_scene(
                 self._make_section(), frozen_code, "TestScene", scene_path,
                 cue_durations=[10.0],
             )
 
-        # Frames + layout were clean, yet the freeze gate still forced a fix.
-        mock_chat.assert_called()
-        assert "frozen tail" in mock_chat.call_args.kwargs["user"]
+        # The deterministic timing gate closed the freeze before rendering, so
+        # NO LLM fix was requested.
+        mock_chat.assert_not_called()
+        # The scene file on disk now has the corrected wait (~9.0s) and the
+        # render was accepted.
+        from manimgen.validator.timing_verifier import blocking_freezes, verify_timing
+        with open(scene_path) as f:
+            final_code = f.read()
+        assert "self.wait(9.00)" in final_code
+        assert blocking_freezes(verify_timing(final_code, [10.0])) == []
+        assert success

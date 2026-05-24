@@ -10,12 +10,15 @@ _render_is_fresh() must:
 Zero LLM calls, zero subprocess calls.
 """
 
-import os
-import tempfile
+import textwrap
 
-import pytest
-
-from manimgen.cli import _render_is_fresh, _write_hash_sidecar, _topic_hash
+from manimgen import cli
+from manimgen.cli import (
+    _cached_scene_blocking_freezes,
+    _render_is_fresh,
+    _topic_hash,
+    _write_hash_sidecar,
+)
 
 
 class TestRenderIsFresh:
@@ -61,3 +64,71 @@ class TestTopicHash:
 
     def test_returns_8_chars(self):
         assert len(_topic_hash("any topic")) == 8
+
+
+class TestCachedSceneBlockingFreezes:
+    """#24: the render-cache / --resume shortcut bypasses every quality gate.
+    _cached_scene_blocking_freezes re-runs the zero-cost freeze check on the
+    cached scene .py so a cached section with a multi-second freeze invalidates
+    the cache instead of shipping unchecked."""
+
+    def _write_scene(self, tmp_path, monkeypatch, body: str) -> dict:
+        scenes_dir = tmp_path / "scenes"
+        scenes_dir.mkdir()
+        monkeypatch.setattr(cli.paths, "scenes_dir", lambda: str(scenes_dir))
+        section = {"id": "section_01"}
+        (scenes_dir / "section_01.py").write_text(textwrap.dedent(body))
+        return section
+
+    def test_real_freeze_in_cached_scene_is_detected(self, tmp_path, monkeypatch):
+        # animation 2.0s vs narration 10.0s → 8s frozen tail
+        section = self._write_scene(
+            tmp_path,
+            monkeypatch,
+            """\
+            # CUE 0 — 10.0s
+            self.play(ShowCreation(curve), run_time=2.0)
+            self.wait(0.01)
+            """,
+        )
+        freezes = _cached_scene_blocking_freezes(section, [10.0])
+        assert len(freezes) == 1
+        assert "CUE 0" in freezes[0]
+
+    def test_clean_cached_scene_has_no_freezes(self, tmp_path, monkeypatch):
+        section = self._write_scene(
+            tmp_path,
+            monkeypatch,
+            """\
+            # CUE 0 — 3.0s
+            self.play(Write(title), run_time=1.0)
+            self.wait(2.0)
+            """,
+        )
+        assert _cached_scene_blocking_freezes(section, [3.0]) == []
+
+    def test_dynamic_cached_scene_does_not_block(self, tmp_path, monkeypatch):
+        # post-#23: a cached scene using run_time=variable is UNKNOWN, never a
+        # freeze — must not invalidate an otherwise-fresh cache.
+        section = self._write_scene(
+            tmp_path,
+            monkeypatch,
+            """\
+            # CUE 0 — 9.5s
+            rt = 7.5
+            self.play(ShowCreation(curve), run_time=rt)
+            self.wait(2.0)
+            """,
+        )
+        assert _cached_scene_blocking_freezes(section, [9.5]) == []
+
+    def test_missing_scene_file_fails_open(self, tmp_path, monkeypatch):
+        scenes_dir = tmp_path / "scenes"
+        scenes_dir.mkdir()
+        monkeypatch.setattr(cli.paths, "scenes_dir", lambda: str(scenes_dir))
+        # no file written → unverifiable cache is honored (returns [])
+        assert _cached_scene_blocking_freezes({"id": "section_01"}, [10.0]) == []
+
+    def test_missing_id_fails_open(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cli.paths, "scenes_dir", lambda: str(tmp_path))
+        assert _cached_scene_blocking_freezes({}, [10.0]) == []

@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 import os
+from collections.abc import Callable
 
 import yaml
 
@@ -11,7 +12,7 @@ from manimgen.generator.scene_generator import generate_scenes
 from manimgen.input.parser import parse_input
 from manimgen.planner.lesson_planner import plan_lesson, plan_lesson_from_pdf
 from manimgen.renderer.assembler import assemble_video
-from manimgen.utils import safe_section_id
+from manimgen.types import CueMuxResult, MuxStatus
 from manimgen.validator.fallback import fallback_scene
 from manimgen.validator.retry import retry_scene
 from manimgen.validator.runner import _find_rendered_video, run_scene
@@ -98,6 +99,74 @@ def _all_cues_muxed(section: dict, idx: int, n_cues: int) -> bool:
     return all(os.path.exists(_muxed_path_for(section, idx, i)) for i in range(n_cues))
 
 
+def _mux_one_cue(
+    section: dict,
+    idx: int,
+    cue_index: int,
+    cue_clip: str,
+    audio_slice: str,
+    mux_fn: Callable[[str, str, str], str],
+    log: logging.LoggerAdapter | logging.Logger,
+) -> CueMuxResult:
+    """Mux one cue's narration onto its video, retrying once on failure.
+
+    Returns a CueMuxResult. A FAILED result NEVER carries the silent ``cue_clip``
+    in ``path`` — the caller must drop it rather than ship narration-less video
+    (issue #28). On a missing audio slice or a mux that fails even after one
+    retry, the failure is logged loudly with the cue index, section, and error.
+    """
+    section_id = section.get("id", f"section_{idx:02d}")
+    muxed = _muxed_path_for(section, idx, cue_index)
+
+    if os.path.exists(muxed):
+        log.info("[manimgen] Skipping cue %d (already muxed)", cue_index)
+        return CueMuxResult(cue_index, MuxStatus.SUCCESS, muxed)
+
+    if not os.path.exists(audio_slice):
+        msg = f"audio slice missing: {audio_slice}"
+        log.error(
+            "[manimgen] Mux FAILED cue %d (section %s): %s — refusing to ship "
+            "narration-less clip.",
+            cue_index,
+            section_id,
+            msg,
+        )
+        return CueMuxResult(cue_index, MuxStatus.FAILED, None, error=msg)
+
+    # First attempt, then exactly one retry before giving up.
+    last_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            mux_fn(cue_clip, audio_slice, muxed)
+            status = MuxStatus.SUCCESS if attempt == 0 else MuxStatus.RETRIED_OK
+            log.info(
+                "[manimgen] Muxed cue %d (%s): %s",
+                cue_index,
+                status.value,
+                os.path.basename(muxed),
+            )
+            return CueMuxResult(cue_index, status, muxed)
+        except Exception as e:
+            last_error = e
+            if attempt == 0:
+                log.warning(
+                    "[manimgen] Mux failed cue %d (section %s): %s — retrying once.",
+                    cue_index,
+                    section_id,
+                    e,
+                )
+
+    msg = str(last_error)
+    log.error(
+        "[manimgen] Mux FAILED cue %d (section %s) after retry: %s — refusing "
+        "to ship narration-less clip.",
+        cue_index,
+        section_id,
+        msg,
+    )
+    return CueMuxResult(cue_index, MuxStatus.FAILED, None, error=msg)
+
+
 def _topic_hash(topic_or_pdf: str) -> str:
     """Stable 8-char hash of the input (topic string or pdf path)."""
     return hashlib.sha256(topic_or_pdf.encode()).hexdigest()[:8]
@@ -143,6 +212,34 @@ def _render_is_fresh(video_path: str, topic_hash: str) -> bool:
 def _write_hash_sidecar(video_path: str, topic_hash: str) -> None:
     with open(_sidecar_hash_path(video_path), "w") as f:
         f.write(topic_hash)
+
+
+def _cached_scene_blocking_freezes(
+    section: dict, cue_durations: list[float]
+) -> list[str]:
+    """Return blocking freeze-frame tails for a section's CACHED scene source.
+
+    The render-cache / --resume path skips codegen, so it never runs the
+    timing freeze gate that retry.py applies. This reads the on-disk scene
+    .py (deterministic path: scenes_dir/<section id>.py) and runs the same
+    zero-cost static check. Returns [] when the scene file is missing/unreadable
+    (fail-open: an unverifiable cache is honored, not the place to hard-fail) or
+    when there are no real freezes. Post-#23, cues with dynamic (UNKNOWN)
+    durations are never reported as freezes.
+    """
+    section_id = section.get("id", "")
+    scene_path = os.path.join(paths.scenes_dir(), f"{section_id}.py")
+    if not section_id or not os.path.exists(scene_path):
+        return []
+    try:
+        with open(scene_path) as f:
+            code = f.read()
+    except OSError:
+        return []
+
+    from manimgen.validator.timing_verifier import blocking_freezes, verify_timing
+
+    return blocking_freezes(verify_timing(code, cue_durations))
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +354,28 @@ def _run_section(
 
     class_name = section_class_name(section)
     found_video = _find_rendered_video(class_name)
-    if found_video and _render_is_fresh(found_video, current_topic_hash):
+    cache_is_usable = bool(found_video) and _render_is_fresh(
+        found_video, current_topic_hash
+    )
+    # #24: the render-cache / --resume shortcut bypasses EVERY quality gate.
+    # A cached section with a multi-second freeze-frame tail would ship
+    # unchecked. Re-run the zero-cost timing freeze check against the cached
+    # scene source before honoring the cache. A real freeze (post-#23: UNKNOWN
+    # cues never block) invalidates the cache and forces full regeneration +
+    # retry. No render happens here — this is a static AST check on the .py.
+    if cache_is_usable and cue_durations:
+        cached_freezes = _cached_scene_blocking_freezes(section, cue_durations)
+        if cached_freezes:
+            log.warning(
+                "[manimgen] Cached render for %s has %d blocking freeze-frame "
+                "tail(s) — invalidating cache, regenerating: %s",
+                class_name,
+                len(cached_freezes),
+                "; ".join(cached_freezes),
+            )
+            cache_is_usable = False
+
+    if cache_is_usable:
         log.info(
             "[manimgen] Render exists and is fresh, skipping codegen: %s", found_video
         )
@@ -301,6 +419,27 @@ def _run_section(
                     "; ".join(vr.issues),
                 )
                 success = False
+
+            # #24: validate_render covers frames/layout but NOT timing freezes.
+            # The first-pass render could still ship a multi-second freeze-frame
+            # tail. Run the same blocking_freezes gate retry.py uses and treat a
+            # real freeze (post-#23: UNKNOWN cues never block) as a hard failure
+            # that routes into the retry path.
+            if success and cue_durations:
+                from manimgen.validator.timing_verifier import (
+                    blocking_freezes,
+                    verify_timing,
+                )
+
+                freezes = blocking_freezes(verify_timing(code, cue_durations))
+                if freezes:
+                    log.warning(
+                        "[manimgen] First-pass render has %d blocking "
+                        "freeze-frame tail(s) — forcing retry: %s",
+                        len(freezes),
+                        "; ".join(freezes),
+                    )
+                    success = False
         if not success:
             success, video_path = retry_scene(
                 section, code, class_name, scene_path, cue_durations=cue_durations
@@ -335,22 +474,35 @@ def _run_section(
         )
 
         produced: list[str] = []
+        failed: list[CueMuxResult] = []
         for i, (cue_clip, audio_slice) in enumerate(zip(cue_video_clips, audio_slices)):
-            muxed = _muxed_path_for(section, idx, i)
-            if os.path.exists(muxed):
-                log.info("[manimgen] Skipping cue %d (already muxed)", i)
-                produced.append(muxed)
-                continue
-            if os.path.exists(audio_slice):
-                try:
-                    mux_audio_video(cue_clip, audio_slice, muxed)
-                    log.info("[manimgen] Muxed cue %d: %s", i, os.path.basename(muxed))
-                    produced.append(muxed)
-                except Exception as e:
-                    logger.warning("[manimgen] Mux failed cue %d: %s", i, e)
-                    produced.append(cue_clip)
+            result = _mux_one_cue(
+                section, idx, i, cue_clip, audio_slice, mux_audio_video, log
+            )
+            if result.ok and result.path:
+                produced.append(result.path)
             else:
-                produced.append(cue_clip)
+                failed.append(result)
+
+        if failed:
+            # A failed cue means a narration-less (silent) clip. We must NOT ship
+            # it: the assembler cannot distinguish a silent clip from a real one,
+            # so it would incorporate animation with no voice into the final
+            # video. Mark the whole section failed and surface it loudly. The
+            # silent cue_clip is deliberately never appended to `produced`.
+            log.error(
+                "[manimgen] Section %d (%s) FAILED: %d/%d cue(s) could not be "
+                "muxed with narration — dropping section to avoid shipping "
+                "silent video. Failed cues: %s",
+                idx,
+                section_id,
+                len(failed),
+                len(cue_video_clips),
+                "; ".join(
+                    f"cue {r.cue_index} ({r.status.value}: {r.error})" for r in failed
+                ),
+            )
+            return []
         return produced
 
     # TTS off — use the full section video directly
