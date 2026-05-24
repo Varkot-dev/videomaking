@@ -354,6 +354,28 @@ def _split_into_cue_blocks(code: str) -> list[tuple[int, str]]:
 # ---------------------------------------------------------------------------
 
 
+def _parse_cue_block(block_code: str) -> ast.Module | None:
+    """Parse a cue-block slice into an AST.
+
+    A cue block is a slice of a larger file, so it may be indented (it lives
+    inside ``construct``). A bare ``ast.parse`` raises IndentationError on such
+    a slice; wrapping it in ``if True:`` makes it parseable while preserving the
+    statement structure (``_time_for_statements`` treats the wrapping If as a
+    single-branch block of identical duration). Returns None if it still won't
+    parse.
+    """
+    try:
+        return ast.parse(block_code)
+    except (SyntaxError, IndentationError):
+        try:
+            return ast.parse(
+                "if True:\n"
+                + "\n".join("    " + line for line in block_code.splitlines())
+            )
+        except (SyntaxError, IndentationError):
+            return None
+
+
 def verify_timing(
     code: str,
     cue_durations: list[float],
@@ -387,21 +409,12 @@ def verify_timing(
             )
             continue
 
-        try:
-            tree = ast.parse(block_code)
-        except SyntaxError:
-            # The cue block may not be valid Python on its own (it's a slice
-            # of a larger file). Wrap it to make it parseable.
-            try:
-                tree = ast.parse(
-                    "if True:\n"
-                    + "\n".join("    " + l for l in block_code.splitlines())
-                )
-            except SyntaxError:
-                warnings.append(
-                    f"CUE {cue_idx}: could not parse code block — timing not verifiable."
-                )
-                continue
+        tree = _parse_cue_block(block_code)
+        if tree is None:
+            warnings.append(
+                f"CUE {cue_idx}: could not parse code block — timing not verifiable."
+            )
+            continue
 
         computed, has_unknown = _time_for_statements(tree.body)
         expected = cue_durations[cue_idx]
@@ -517,6 +530,65 @@ def _strip_phantom_cue_blocks(
     return "".join(out_lines), note
 
 
+_MIN_INSERT_RESIDUAL = _TOLERANCE
+# Only insert a missing wait when the shortfall exceeds the tolerance band.
+# Below tolerance the muxer's pad/trim already covers the drift and inserting a
+# sub-second wait would be churn for no visible benefit.
+
+
+def _last_meaningful_line(block_code: str) -> tuple[str, str] | None:
+    """Return (line_text_without_newline, indent) of the last code line in a
+    cue block — the line a synthetic wait should be inserted *after*.
+
+    Skips trailing blank lines and pure-comment lines. Returns None when the
+    block has no code line to anchor to.
+    """
+    for raw in reversed(block_code.splitlines()):
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = raw[: len(raw) - len(raw.lstrip())]
+        return raw, indent
+    return None
+
+
+def _insert_missing_wait(
+    fixed_code: str,
+    block_code: str,
+    cue_idx: int,
+    residual: float,
+) -> tuple[str, str | None]:
+    """Insert ``self.wait(residual)`` at the end of a cue block that has NO
+    ``self.wait()`` at all (issue #22 — the deterministic residual resolver).
+
+    ``auto_fix_timing`` previously no-op'd on these blocks, leaving the exact
+    computed shortfall as a freeze-frame tail and handing the problem to the
+    LLM as an advisory hint. The verifier already knows the precise residual;
+    this makes it authoritative by inserting the wait at the correct boundary.
+
+    Anchors on the last meaningful line of the block (located via rfind so the
+    reverse-order processing in auto_fix_timing stays offset-safe). Returns
+    ``(new_code, applied_message_or_None)``.
+    """
+    anchor = _last_meaningful_line(block_code)
+    if anchor is None:
+        return fixed_code, None
+    anchor_line, indent = anchor
+
+    insert_idx = fixed_code.rfind(anchor_line)
+    if insert_idx < 0:
+        return fixed_code, None
+    insert_at = insert_idx + len(anchor_line)
+
+    wait_line = f"\n{indent}self.wait({residual:.2f})  # CUE_FILL auto-inserted"
+    new_code = fixed_code[:insert_at] + wait_line + fixed_code[insert_at:]
+    msg = (
+        f"CUE {cue_idx}: inserted self.wait({residual:.2f}) at cue boundary "
+        f"(no existing wait; closing a {residual:.2f}s freeze-frame tail)"
+    )
+    return new_code, msg
+
+
 def auto_fix_timing(
     code: str,
     cue_durations: list[float],
@@ -525,6 +597,11 @@ def auto_fix_timing(
 
     Strategy: for each cue block, find the LAST ``self.wait(X)`` call and
     adjust its argument so the total block time matches the expected duration.
+    When a cue block has NO ``self.wait()`` at all but falls short of its
+    expected duration by more than the tolerance, INSERT ``self.wait(residual)``
+    at the cue boundary (issue #22 — deterministic residual resolver). The
+    verifier knows the exact residual, so it writes it directly instead of
+    handing the LLM a hint.
 
     This handles the common case where the Director's wait arithmetic is wrong
     but the animation structure is correct.
@@ -550,9 +627,8 @@ def auto_fix_timing(
         if cue_idx >= len(cue_durations):
             continue
 
-        try:
-            tree = ast.parse(block_code)
-        except SyntaxError:
+        tree = _parse_cue_block(block_code)
+        if tree is None:
             continue
 
         # Find the total animation time excluding the LAST self.wait()
@@ -571,6 +647,24 @@ def auto_fix_timing(
                 last_wait_old_val = _get_wait_duration(stmt.value)
 
         if last_wait_line is None:
+            # #22: no self.wait() in this cue block. If the animations fall
+            # short of the expected duration by more than tolerance, INSERT a
+            # self.wait(residual) at the boundary — the deterministic resolver.
+            # Skip when the block has any dynamic duration (residual unknowable,
+            # #23) or when the block is on-time / overruns (nothing to fill).
+            block_total, block_unknown = _time_for_statements(all_stmts)
+            if block_unknown:
+                continue
+            expected = cue_durations[cue_idx]
+            residual = expected - block_total
+            if residual <= _MIN_INSERT_RESIDUAL:
+                continue
+            new_code, msg = _insert_missing_wait(
+                fixed_code, block_code, cue_idx, residual
+            )
+            if msg:
+                fixed_code = new_code
+                applied.append(msg)
             continue
 
         # If the LAST wait's duration is itself dynamic (UNKNOWN), we cannot

@@ -323,6 +323,129 @@ class TestAutoFixTiming:
 
 
 # -----------------------------------------------------------------------
+# auto_fix_timing — issue #22: deterministic insert-missing-wait resolver.
+# When a cue block falls short of its expected duration and has NO self.wait()
+# to adjust, the verifier inserts self.wait(residual) at the cue boundary
+# instead of no-op'ing and handing the LLM an advisory hint.
+# -----------------------------------------------------------------------
+
+
+class TestInsertMissingWait:
+    def test_inserts_wait_when_none_exists(self):
+        code = textwrap.dedent("""\
+            # CUE 0 — 10.0s
+            self.play(ShowCreation(curve), run_time=2.0)
+        """)
+        fixed, applied = auto_fix_timing(code, [10.0])
+        assert len(applied) == 1
+        assert "inserted self.wait" in applied[0]
+        assert "self.wait(8.00)" in fixed
+        # The fix is authoritative: re-verify is now within tolerance.
+        assert verify_timing(fixed, [10.0])["ok"]
+
+    def test_insert_preserves_indentation(self):
+        # 8-space construct-body indentation (after dedent strips the common
+        # leading whitespace). The inserted wait must match it, not column 0.
+        code = textwrap.dedent("""\
+            class S(Scene):
+                def construct(self):
+                    # CUE 0 — 10.0s
+                    self.play(Write(title), run_time=2.0)
+            """)
+        fixed, applied = auto_fix_timing(code, [10.0])
+        assert len(applied) == 1
+        assert "        self.wait(8.00)" in fixed
+        # No column-0 wait was emitted.
+        assert "\nself.wait(8.00)" not in fixed
+        assert verify_timing(fixed, [10.0])["ok"]
+
+    def test_no_insert_when_on_time(self):
+        # 1.0s animation, 1.0s expected — no shortfall, nothing to insert.
+        code = textwrap.dedent("""\
+            # CUE 0 — 1.0s
+            self.play(Write(x), run_time=1.0)
+        """)
+        fixed, applied = auto_fix_timing(code, [1.0])
+        assert applied == []
+        assert fixed == code
+
+    def test_no_insert_below_tolerance(self):
+        # 0.6s short — within the 1.0s tolerance band; the muxer pads it and
+        # inserting a sub-second wait would be churn.
+        code = textwrap.dedent("""\
+            # CUE 0 — 1.6s
+            self.play(Write(x), run_time=1.0)
+        """)
+        fixed, applied = auto_fix_timing(code, [1.6])
+        assert applied == []
+        assert fixed == code
+
+    def test_no_insert_when_dynamic_duration(self):
+        # Dynamic run_time → residual unknowable (#23). Must NOT fabricate a
+        # wait that could over/undershoot a deliberate dynamic animation.
+        code = textwrap.dedent("""\
+            # CUE 0 — 10.0s
+            self.play(ShowCreation(curve), run_time=rt)
+        """)
+        fixed, applied = auto_fix_timing(code, [10.0])
+        assert applied == []
+        assert fixed == code
+
+    def test_no_insert_when_overrun(self):
+        # animations already exceed expected — nothing to fill.
+        code = textwrap.dedent("""\
+            # CUE 0 — 1.0s
+            self.play(Write(x), run_time=2.0)
+            self.play(Grow(y), run_time=2.0)
+        """)
+        fixed, applied = auto_fix_timing(code, [1.0])
+        assert applied == []
+        assert fixed == code
+
+    def test_insert_does_not_create_phantom_cue_block(self):
+        # The CUE_FILL comment must not be parsed as a new "# CUE N" boundary.
+        code = textwrap.dedent("""\
+            # CUE 0 — 10.0s
+            self.play(ShowCreation(curve), run_time=2.0)
+
+            # CUE 1 — 4.0s
+            self.play(Write(label), run_time=1.0)
+            self.wait(3.0)
+        """)
+        fixed, _ = auto_fix_timing(code, [10.0, 4.0])
+        assert len(_split_into_cue_blocks(fixed)) == 2
+        assert verify_timing(fixed, [10.0, 4.0])["ok"]
+
+    def test_insert_in_earlier_block_keeps_later_block_intact(self):
+        # Reverse-order processing + rfind anchoring must not corrupt offsets:
+        # both short no-wait cues should be filled and re-verify clean.
+        code = textwrap.dedent("""\
+            # CUE 0 — 8.0s
+            self.play(ShowCreation(a), run_time=1.0)
+
+            # CUE 1 — 6.0s
+            self.play(ShowCreation(b), run_time=1.5)
+        """)
+        fixed, applied = auto_fix_timing(code, [8.0, 6.0])
+        assert len(applied) == 2
+        assert verify_timing(fixed, [8.0, 6.0])["ok"]
+
+    def test_existing_wait_path_still_adjusts_not_inserts(self):
+        # Sanity: when a wait DOES exist, we adjust it (one fix) rather than
+        # inserting a second wait.
+        code = textwrap.dedent("""\
+            # CUE 0 — 6.0s
+            self.play(Write(title), run_time=1.0)
+            self.wait(2.0)
+        """)
+        fixed, applied = auto_fix_timing(code, [6.0])
+        assert len(applied) == 1
+        assert "adjusted" in applied[0]
+        assert "inserted" not in applied[0]
+        assert fixed.count("self.wait") == 1
+
+
+# -----------------------------------------------------------------------
 # apply_timing_gate — the single authoritative timing gate shared by
 # retry.py and cli.py. Non-empty returned warnings trigger the cli.py
 # zero-cost pre-render gate (skip first render, route to retry).
