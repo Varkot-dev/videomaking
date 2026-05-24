@@ -11,6 +11,10 @@ from unittest.mock import patch, MagicMock
 
 from manimgen.planner.lesson_planner import (
     _cap_sections,
+    _escape_bad_backslashes,
+    _is_valid_unicode_escape,
+    _safe_json_loads,
+    _safe_json_loads_any,
     _strip_fencing,
     plan_lesson,
     plan_lesson_from_pdf,
@@ -224,3 +228,84 @@ class TestPlanLessonLatexRoundTrip:
         assert r"\frac{dL}{d\theta}" in visuals[1]
         # Technique prefix preserved (load-bearing for example selection / 3D).
         assert visuals[0].startswith("Technique: equation_morph")
+
+
+class TestSafeJsonLoadsDictGuard:
+    """#38(a): _safe_json_loads is annotated -> dict and feeds callers that
+    immediately call .get(). json.loads can legitimately return a list/str/int
+    when the LLM ignores the schema. The guard must fail fast with a clear
+    error rather than letting `result.get(...)` raise AttributeError far away.
+    """
+
+    def test_object_returns_dict(self):
+        assert _safe_json_loads('{"title": "x"}') == {"title": "x"}
+
+    def test_top_level_array_raises_valueerror(self):
+        with pytest.raises(ValueError, match="JSON object"):
+            _safe_json_loads('[{"index": 0}]')
+
+    def test_top_level_scalar_raises_valueerror(self):
+        with pytest.raises(ValueError, match="JSON object"):
+            _safe_json_loads("42")
+
+    def test_caller_get_would_have_crashed_without_guard(self):
+        # Demonstrates the bug class: a raw list has no .get().
+        with pytest.raises(ValueError):
+            _safe_json_loads('["a", "b"]')
+
+    def test_any_variant_passes_list_through(self):
+        # _safe_json_loads_any is the lenient sibling used by _refill_cues_via_llm,
+        # which intentionally accepts a top-level array.
+        assert _safe_json_loads_any('[{"index": 0}]') == [{"index": 0}]
+
+    def test_any_variant_tolerates_bare_latex_backslash(self):
+        # A bare LaTeX backslash that is NOT a valid JSON escape (\a) still
+        # parses via the escape-repair pass. (\t, \n etc. are valid JSON escapes
+        # and would decode to control chars on the first attempt — \alpha is the
+        # realistic LaTeX case that breaks json.loads without the repair.)
+        raw = r'{"v": "\alpha"}'
+        assert _safe_json_loads_any(raw) == {"v": r"\alpha"}
+
+
+class TestUnicodeEscapeGuard:
+    r"""#38(b): _escape_bad_backslashes must only pass `\u` through when it is
+    followed by EXACTLY four hex digits. LaTeX like `\underbrace` / `\union`
+    starts with `\u` too — leaving those unescaped makes json.loads choke on a
+    malformed `\uXXXX`.
+    """
+
+    # Use "\\u..." literals so the test data is an explicit backslash + u + ...
+    # text stream (NOT a Python-decoded unicode character).
+
+    def test_valid_unicode_escape_detected(self):
+        # The text  \ u 0 0 e 9  is a valid escape at index 0.
+        assert _is_valid_unicode_escape("\\u00e9 rest", 0) is True
+
+    def test_uppercase_hex_is_valid(self):
+        assert _is_valid_unicode_escape("\\u00E9", 0) is True
+
+    def test_non_hex_after_u_is_invalid(self):
+        # \uZZZZ — Z is not hex.
+        assert _is_valid_unicode_escape("\\uZZZZ", 0) is False
+
+    def test_truncated_unicode_escape_is_invalid(self):
+        assert _is_valid_unicode_escape("\\u12", 0) is False
+
+    def test_latex_underbrace_gets_escaped_and_parses(self):
+        # \underbrace must NOT be treated as a \uXXXX escape; it gets doubled
+        # so the resulting JSON parses and round-trips the literal backslash.
+        raw = r'{"v": "\underbrace{x}"}'
+        fixed = _escape_bad_backslashes(raw)
+        assert json.loads(fixed) == {"v": r"\underbrace{x}"}
+
+    def test_real_unicode_escape_preserved(self):
+        # A genuine é escape must survive untouched and decode to 'é'.
+        raw = '{"v": "caf\\u00e9"}'
+        fixed = _escape_bad_backslashes(raw)
+        assert json.loads(fixed) == {"v": "café"}
+
+    def test_latex_union_word_boundary_escaped(self):
+        # \union (LaTeX-ish) starts with \u but is not a 4-hex escape.
+        raw = r'{"v": "A \union B"}'
+        fixed = _escape_bad_backslashes(raw)
+        assert json.loads(fixed) == {"v": r"A \union B"}

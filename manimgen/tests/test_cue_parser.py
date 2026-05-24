@@ -5,7 +5,7 @@ parse_cues() and inject_cues() — no LLM calls, pure string processing.
 """
 
 import pytest
-from manimgen.planner.cue_parser import parse_cues, inject_cues
+from manimgen.planner.cue_parser import align_cue_indices, parse_cues, inject_cues
 
 
 # ---------------------------------------------------------------------------
@@ -139,3 +139,66 @@ class TestInjectCues:
         clean = "one two three"
         result = inject_cues(clean, [0])
         assert "[CUE]" not in result
+
+
+# ---------------------------------------------------------------------------
+# align_cue_indices — #36: re-derive cue indices against the CANONICAL
+# edge-tts WordBoundary tokenization (str.split can diverge silently).
+# Deterministic: edge-tts token stream is passed in directly (no network).
+# ---------------------------------------------------------------------------
+
+class TestAlignCueIndices:
+
+    def test_matching_token_counts_is_noop(self):
+        # When str.split() and edge-tts agree, indices pass through unchanged.
+        clean = "Binary search cuts the problem in half"
+        tts = clean.split()  # identical tokenization
+        assert align_cue_indices(clean, [0, 3], tts) == [0, 3]
+
+    def test_contraction_shifts_index_to_correct_onset(self):
+        # str.split keeps "you'll" as one token; edge-tts splits "you" + "'ll".
+        # A cue before "you'll" (split index 4) must resolve to the onset of
+        # "you" in the edge-tts stream — NOT the in-range-but-wrong token.
+        clean = "It's a classic that you'll use"
+        tts = ["It", "'s", "a", "classic", "that", "you", "'ll", "use"]
+        aligned = align_cue_indices(clean, [0, 4], tts)
+        assert tts[aligned[1]] == "you"
+        # Without alignment, raw index 4 would point at "that" — the bug.
+        assert tts[4] == "that"
+
+    def test_hyphenated_word_split_by_tts(self):
+        # str.split keeps "well-known" as one token; edge-tts emits two.
+        clean = "This well-known method works here"
+        tts = ["This", "well", "known", "method", "works", "here"]
+        aligned = align_cue_indices(clean, [0, 2], tts)  # cue before "method"
+        assert tts[aligned[1]] == "method"
+
+    def test_number_token_count_drift(self):
+        # edge-tts can expand "16" or attach punctuation, drifting the count.
+        clean = "The array has 16 elements so we compare"
+        tts = ["The", "array", "has", "16", "elements", "so", "we", "compare"]
+        # Same count → fast path, no drift.
+        assert align_cue_indices(clean, [0, 4], tts) == [0, 4]
+        # Now a real drift: edge-tts splits "16" into "sixteen" as 1 but adds a
+        # trailing punctuation token, making it 9 vs 8.
+        tts_drift = ["The", "array", "has", "16", "elements", "so", "we", "compare", "."]
+        aligned = align_cue_indices(clean, [0, 4], tts_drift)
+        assert tts_drift[aligned[1]] == "elements"
+
+    def test_result_is_non_decreasing_and_in_range(self):
+        clean = "a b c d e f g"
+        tts = ["a", "b'", "c", "d", "e", "f", "g", "extra"]  # count mismatch (8 vs 7)
+        aligned = align_cue_indices(clean, [0, 2, 5], tts)
+        assert aligned == sorted(aligned)  # non-decreasing
+        assert all(0 <= i < len(tts) for i in aligned)
+        assert aligned[0] == 0
+
+    def test_boundary_index_past_last_word_clamps(self):
+        clean = "a b c"
+        tts = ["a", "b", "c", "d"]  # mismatch forces re-derivation
+        aligned = align_cue_indices(clean, [0, 3], tts)  # 3 == len(split)
+        assert all(0 <= i < len(tts) for i in aligned)
+
+    def test_empty_tts_stream_does_not_crash(self):
+        aligned = align_cue_indices("a b c", [0, 2], [])
+        assert aligned == [0, 0]  # nothing to align against; safe default
