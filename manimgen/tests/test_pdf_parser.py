@@ -166,3 +166,40 @@ class TestParsePdfStructure:
         from manimgen.input.pdf_parser import parse_pdf
         with pytest.raises(Exception):
             parse_pdf("/tmp/definitely_does_not_exist_12345.pdf")
+
+    def test_missing_file_raises_filenotfound(self):
+        from manimgen.input.pdf_parser import parse_pdf
+        with pytest.raises(FileNotFoundError):
+            parse_pdf("/tmp/nope_does_not_exist_98765.pdf")
+
+    def test_non_pdf_extension_raises_valueerror(self):
+        import tempfile
+        from manimgen.input.pdf_parser import parse_pdf
+
+        path = tempfile.mktemp(suffix=".txt")
+        with open(path, "w") as f:
+            f.write("not a pdf")
+        with pytest.raises(ValueError, match="Expected a .pdf"):
+            parse_pdf(path)
+
+    def _make_multipage_pdf(self, n_pages: int) -> str:
+        import tempfile
+        from pypdf import PdfWriter
+
+        writer = PdfWriter()
+        for _ in range(n_pages):
+            writer.add_blank_page(width=612, height=792)
+        path = tempfile.mktemp(suffix=".pdf")
+        with open(path, "wb") as f:
+            writer.write(f)
+        return path
+
+    def test_page_count_is_capped(self):
+        from manimgen.input import pdf_parser
+
+        cap = pdf_parser._MAX_PDF_PAGES
+        path = self._make_multipage_pdf(cap + 5)
+        with pytest.warns(UserWarning, match="capping at"):
+            result = pdf_parser.parse_pdf(path)
+        # Never render/parse more than the cap regardless of total pages.
+        assert len(result["images"]) <= cap

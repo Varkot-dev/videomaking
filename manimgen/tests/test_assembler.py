@@ -18,6 +18,7 @@ from manimgen.renderer.assembler import (
     _hard_concat,
     _xfade_pair,
     _video_duration,
+    _has_audio_stream,
     _XFADE_DURATION,
 )
 
@@ -263,6 +264,40 @@ class TestXfadePair:
             _xfade_pair(a, b, out)
         cmd = " ".join(mock_run.call_args[0][0])
         assert f"offset={expected_offset}" in cmd
+
+    def test_tiny_first_clip_does_not_offset_zero(self, tmp_path):
+        """Regression: a 0.1s floor first clip must NOT produce offset=0,
+        which would cross-dissolve the entire first section from frame one."""
+        a, b = _make_clips(tmp_path, ["a.mp4", "b.mp4"])
+        out = str(tmp_path / "out.mp4")
+        with patch("manimgen.renderer.assembler.subprocess.run",
+                   return_value=_ok()) as mock_run, \
+             patch("manimgen.renderer.assembler._video_duration",
+                   return_value=0.1):
+            _xfade_pair(a, b, out)
+        # The filtergraph is the second element of the ffmpeg command list.
+        cmd_list = mock_run.call_args[0][0]
+        filtergraph = cmd_list[cmd_list.index("-filter_complex") + 1]
+        # Parse the actual offset value: it must be strictly positive, never 0,
+        # which would cross-dissolve the entire first section from frame one.
+        offset_str = filtergraph.split("offset=")[1].split("[")[0]
+        assert float(offset_str) > 0.0, (
+            f"offset must stay positive for a 0.1s clip, got {offset_str}"
+        )
+        # The transition shrinks to half the clip (0.1 - 0.1/2 = 0.05).
+        assert abs(float(offset_str) - 0.05) < 1e-6
+
+
+class TestHasAudioStream:
+    """Regression: probe failure must fail safe to False so the silent-audio
+    injection path runs (always valid), rather than claiming audio is present
+    and producing an ffmpeg `-c:a aac` map that aborts on a video-only clip."""
+
+    def test_probe_failure_returns_false(self, tmp_path):
+        a = _make_clips(tmp_path, ["a.mp4"])[0]
+        with patch("manimgen.renderer.assembler.subprocess.Popen",
+                   side_effect=OSError("ffprobe blew up")):
+            assert _has_audio_stream(a) is False
 
 
 # ---------------------------------------------------------------------------
