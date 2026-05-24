@@ -27,7 +27,15 @@ def _load_config() -> dict:
     try:
         with open(config_path) as f:
             return yaml.safe_load(f) or {}
-    except Exception:
+    except Exception as e:
+        # A malformed/unreadable config.yaml silently disables TTS and can
+        # route output to default dirs — make the failure visible.
+        logger.warning(
+            "[manimgen] Failed to load config %s (%s) — using empty config "
+            "(TTS may be disabled, defaults applied)",
+            config_path,
+            e,
+        )
         return {}
 
 
@@ -48,7 +56,7 @@ def _run_tts_for_section(section: dict, idx: int) -> tuple[str, list, float] | N
     if not narration:
         return None
 
-    section_id = section.get("id", f"section_{idx:02d}")
+    section_id = safe_section_id(section, idx)
     audio_dir = paths.audio_dir()
     os.makedirs(audio_dir, exist_ok=True)
     audio_path = os.path.join(audio_dir, f"{section_id}.mp3")
@@ -83,7 +91,7 @@ def _run_tts_for_section(section: dict, idx: int) -> tuple[str, list, float] | N
 
 
 def _muxed_path_for(section: dict, idx: int, cue_index: int) -> str:
-    section_id = section.get("id", f"section_{idx:02d}")
+    section_id = safe_section_id(section, idx)
     return os.path.join(paths.muxed_dir(), f"{section_id}_cue{cue_index:02d}.mp4")
 
 
@@ -254,7 +262,7 @@ def _build_overview(plan: dict, all_section_audio: dict) -> dict:
     sections_summary = []
     total = 0.0
     for i, section in enumerate(plan.get("sections", []), start=1):
-        sid = section.get("id", f"section_{i:02d}")
+        sid = safe_section_id(section, i)
         audio = all_section_audio.get(sid, {})
         dur = audio.get("audio_duration", 0.0)
         cue_durations = audio.get("cue_durations", [])
@@ -294,7 +302,7 @@ def _run_section(
     Handles TTS, codegen, render, retry, fallback, audio-slice, and per-cue muxing.
     Returns the ordered list of clip paths produced (may be empty if section is skipped).
     """
-    section_id = section.get("id", f"section_{idx:02d}")
+    section_id = safe_section_id(section, idx)
     log = logging.LoggerAdapter(logger, {"section": section_id})
     log.info("[manimgen] Section %d: %s", idx, section["title"])
 
@@ -560,7 +568,7 @@ def main():
             "[manimgen] Phase 1: TTS for all %d sections", len(lesson_plan["sections"])
         )
         for idx, section in enumerate(lesson_plan["sections"], start=1):
-            section_id = section.get("id", f"section_{idx:02d}")
+            section_id = safe_section_id(section, idx)
             tts_result = _run_tts_for_section(section, idx)
             if tts_result:
                 from manimgen.planner.segmenter import compute_segments
@@ -592,7 +600,7 @@ def main():
     # --- Phase 2: codegen + render for all sections ---
     rendered_videos: list[str] = []
     for idx, section in enumerate(lesson_plan["sections"], start=1):
-        section_id = section.get("id", f"section_{idx:02d}")
+        section_id = safe_section_id(section, idx)
         # When tts_on, always pass section_audio (even {} for failed TTS) so
         # _run_section doesn't re-attempt TTS — global phase already ran it.
         if tts_on:

@@ -14,7 +14,12 @@ import re
 
 from manimgen import paths
 from manimgen.llm import chat
-from manimgen.utils import load_reference_frames, section_class_name, strip_fencing
+from manimgen.utils import (
+    load_reference_frames,
+    safe_section_id,
+    section_class_name,
+    strip_fencing,
+)
 from manimgen.validator.codeguard import precheck_and_autofix, precheck_and_autofix_file
 
 _WORDS_PER_MINUTE = 130
@@ -202,7 +207,9 @@ def generate_scenes(
 
     scenes_dir = paths.scenes_dir()
     os.makedirs(scenes_dir, exist_ok=True)
-    scene_path = os.path.join(scenes_dir, f"{section['id']}.py")
+    # Defense in depth: sanitize the id again at this filesystem sink — the
+    # written file is executed by manimgl, so a traversal id here is RCE.
+    scene_path = os.path.join(scenes_dir, f"{safe_section_id(section)}.py")
     with open(scene_path, "w") as f:
         f.write(code)
 
