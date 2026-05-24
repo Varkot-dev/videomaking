@@ -56,9 +56,7 @@ def get_render_env() -> dict[str, str]:
     """
     extra = _extra_allowed_names()
     env = {
-        name: value
-        for name, value in os.environ.items()
-        if _is_allowed(name, extra)
+        name: value for name, value in os.environ.items() if _is_allowed(name, extra)
     }
 
     tex_bin = "/usr/local/texlive/2026basic/bin/universal-darwin"
