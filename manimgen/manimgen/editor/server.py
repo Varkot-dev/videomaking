@@ -12,6 +12,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import secrets
 import subprocess
 import webbrowser
@@ -21,6 +22,11 @@ from uuid import uuid4
 from flask import Flask, jsonify, render_template, request, send_file
 
 from manimgen import paths
+from manimgen.utils import safe_probe_duration
+
+# Mutating-export safety bounds.
+_MAX_TITLE_LEN = 120
+_DEFAULT_TITLE = "final_video"
 
 app = Flask(__name__)
 logger = logging.getLogger(__name__)
@@ -128,7 +134,16 @@ def _get_clips() -> list[dict]:
     return clips
 
 
-def _probe_duration(path: Path) -> float:
+def _probe_duration(path: Path) -> float | None:
+    """Probe a clip's duration via ffprobe.
+
+    Returns the duration in seconds, or ``None`` when ffprobe is missing,
+    times out, fails, or emits an unreadable/``"N/A"`` duration. Parsing is
+    delegated to ``utils.safe_probe_duration`` (the same tolerant parser the
+    renderer uses) instead of a bare ``float(...)`` that silently collapses
+    every failure to ``0.0`` — a real failure is now logged and surfaced as
+    ``None`` so the UI can show "unknown" rather than a fabricated ``0.0s``.
+    """
     try:
         result = subprocess.run(
             [
@@ -145,10 +160,23 @@ def _probe_duration(path: Path) -> float:
             text=True,
             timeout=10,
         )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("[editor] ffprobe failed for %s: %s", path.name, exc)
+        return None
+
+    try:
         data = json.loads(result.stdout)
-        return round(float(data["format"]["duration"]), 2)
-    except Exception:
-        return 0.0
+    except (ValueError, TypeError) as exc:
+        logger.warning(
+            "[editor] ffprobe returned unparseable output for %s: %s", path.name, exc
+        )
+        return None
+
+    duration = safe_probe_duration(data)
+    if duration is None:
+        logger.warning("[editor] No usable duration for %s", path.name)
+        return None
+    return round(duration, 2)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -199,14 +227,25 @@ def api_exports():
 
 @app.route("/api/export", methods=["POST"])
 def api_export():
-    body = request.json
+    # request.json raises (415/AttributeError→500) when the Content-Type is
+    # wrong/absent or the body is empty. Parse defensively and reject a
+    # non-object body with a 400 instead of crashing.
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "Request body must be a JSON object"}), 400
+
     clips = body.get("clips", [])  # [{filename, trim_start, trim_end}, ...]
-    title = body.get("title", "final_video")
+    title = body.get("title", _DEFAULT_TITLE)
 
     if not clips:
         return jsonify({"error": "No clips provided"}), 400
 
-    safe_title = title.lower().replace(" ", "_").replace("/", "-")
+    # Build a filesystem-safe output name: collapse anything outside [A-Za-z0-9_-]
+    # (spaces, slashes, backslashes, null bytes, dots, unicode) to "_", cap the
+    # length so a giant title can't blow the path limit, and fall back to a
+    # default when the result is empty. The cap+slug also neutralizes traversal
+    # ("../") and the null-byte truncation trick.
+    safe_title = re.sub(r"[^\w\-]", "_", str(title))[:_MAX_TITLE_LEN] or _DEFAULT_TITLE
 
     # Exports go into a dedicated subdirectory so they don't appear as source clips
     exports_dir = VIDEOS_DIR / "exports"
