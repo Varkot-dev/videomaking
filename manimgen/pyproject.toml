@@ -1,0 +1,18 @@
+# Pytest configuration — the single source of truth for how the suite runs.
+#
+# GOAL: local == CI. The historically-documented local command used a curated
+# `--ignore` trio (test_scene_generator.py / test_planner.py /
+# test_pipeline_e2e.py). Those files are FULLY MOCKED (zero real LLM/network
+# cost), so ignoring them only hid the local↔CI divergence — a regression in
+# them passed locally but failed CI. This config makes a bare `pytest` (or
+# `python3 -m pytest`) run the EXACT set CI runs: tests/, no ignores, strict
+# markers. Do not reintroduce default `--ignore` flags here.
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+addopts = "--strict-markers"
+markers = [
+    "unit: isolated function/utility/component tests (no I/O, no subprocess)",
+    "integration: cross-module wiring with all LLM/subprocess seams mocked",
+    "security: input-validation / traversal / XSS / auth-boundary tests",
+]
