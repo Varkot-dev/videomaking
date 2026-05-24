@@ -107,6 +107,14 @@ def _validate_ollama_url(url: str) -> str:
 
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
+        # 0.0.0.0 / :: are classified is_private by ipaddress but are
+        # unspecified (not a real loopback); reject them explicitly so the
+        # guard means "a local Ollama is actually reachable here".
+        if ip.is_unspecified:
+            raise ValueError(
+                f"ollama_base_url {url!r} resolves to unspecified address {ip} — "
+                "use 127.0.0.1 or localhost explicitly (SSRF guard)."
+            )
         if not (ip.is_loopback or ip.is_private or ip.is_link_local):
             raise ValueError(
                 f"ollama_base_url {url!r} resolves to non-local address {ip} — "
