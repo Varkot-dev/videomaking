@@ -151,8 +151,14 @@ def _extract_cues(plan: dict) -> dict:
         segment_texts = _segment_narration(clean, indices)
         cues_out = []
         for i in range(n_segments):
-            has_visual = i < len(existing_cues) and isinstance(
-                existing_cues[i].get("visual"), str
+            # A visual counts as present only if it's a non-empty string.
+            # An empty/whitespace-only "visual" would otherwise reach the
+            # Director as-is and yield a content-free scene; fall through to
+            # the narration-derived visual instead.
+            has_visual = (
+                i < len(existing_cues)
+                and isinstance(existing_cues[i].get("visual"), str)
+                and existing_cues[i]["visual"].strip() != ""
             )
             if has_visual:
                 entry = dict(existing_cues[i])
