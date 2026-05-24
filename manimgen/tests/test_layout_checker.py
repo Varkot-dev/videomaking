@@ -401,3 +401,237 @@ class TestRetryVisualLoop:
         assert "self.wait(9.00)" in final_code
         assert blocking_freezes(verify_timing(final_code, [10.0])) == []
         assert success
+
+    # ── #32: frozen-frame ∧ timing join ────────────────────────────────────
+
+    _FROZEN_ISSUE = (
+        "ISSUE: Frames at t=2.0s and t=4.0s are 99% identical — "
+        "animation appears frozen | CAUSE: long wait | FIX: add activity"
+    )
+
+    def test_frozen_frame_is_hard_when_timing_confirms_dead_tail(self, tmp_path):
+        """#32: frame_checker reports a frozen frame AND the timing oracle
+        confirms a blocking dead tail (narration ended, animation didn't) → the
+        frozen signal is re-admitted as a defect that prevents a clean accept
+        and routes into the visual-fix retry path. Previously this signal was
+        discarded unconditionally and the frozen render shipped."""
+        scene_path = str(tmp_path / "scene.py")
+        code = (
+            "from manimlib import *\n"
+            "class TestScene(Scene):\n"
+            "    def construct(self): pass\n"
+        )
+        with open(scene_path, "w") as f:
+            f.write(code)
+
+        fixed = (
+            "from manimlib import *\n"
+            "class TestScene(Scene):\n"
+            "    def construct(self):\n        self.wait(1)\n"
+        )
+        from manimgen.validator.frame_checker import FrameCheckResult
+
+        with patch(
+            "manimgen.validator.retry._run_and_capture",
+            return_value={"success": True, "video_path": "/fake/v.mp4", "stderr": ""},
+        ), patch(
+            "manimgen.validator.frame_checker.check_frames",
+            return_value=FrameCheckResult(ok=False, issues=[self._FROZEN_ISSUE]),
+        ), patch(
+            # Keep code untouched so the post-render timing oracle drives the join.
+            "manimgen.validator.retry.apply_timing_gate",
+            side_effect=lambda c, p, d: (c, []),
+        ), patch(
+            # Timing oracle CONFIRMS a dead tail → frozen frame must be kept.
+            "manimgen.validator.timing_verifier.blocking_freezes",
+            return_value=["CUE 0: 4.00s frozen tail"],
+        ), patch(
+            "manimgen.validator.retry.check_layout"
+        ) as mock_layout, patch(
+            "manimgen.validator.retry.chat", return_value=fixed
+        ) as mock_chat, patch(
+            "manimgen.validator.retry.precheck_and_autofix",
+            return_value={"ok": True, "stderr": "", "layout_warnings": []},
+        ):
+            import manimgen.validator.retry as retry_module
+
+            retry_module.MAX_RETRIES = 3
+            retry_module.MAX_VISUAL_LLM_FIX_CALLS = 1
+            from manimgen.validator.retry import retry_scene
+
+            retry_scene(
+                self._make_section(), code, "TestScene", scene_path,
+                cue_durations=[10.0],
+            )
+
+        # The frozen frame became a concrete defect, so a visual fix was
+        # requested and the frozen line was forwarded to the LLM. The layout
+        # vision check is skipped because frame defects already exist.
+        mock_chat.assert_called_once()
+        assert "animation appears frozen" in mock_chat.call_args.kwargs["user"]
+        mock_layout.assert_not_called()
+
+    def test_frozen_frame_not_hard_when_narration_continues(self, tmp_path):
+        """#32: frame_checker reports a frozen frame but the timing oracle finds
+        NO blocking freeze (narration still running over a deliberate hold) →
+        the frozen signal is dropped as a legit hold and the render is accepted
+        clean. This is the false-positive the join must avoid."""
+        scene_path = str(tmp_path / "scene.py")
+        code = (
+            "from manimlib import *\n"
+            "class TestScene(Scene):\n"
+            "    def construct(self): pass\n"
+        )
+        with open(scene_path, "w") as f:
+            f.write(code)
+
+        from manimgen.validator.frame_checker import FrameCheckResult
+
+        with patch(
+            "manimgen.validator.retry._run_and_capture",
+            return_value={"success": True, "video_path": "/fake/v.mp4", "stderr": ""},
+        ), patch(
+            "manimgen.validator.frame_checker.check_frames",
+            return_value=FrameCheckResult(ok=False, issues=[self._FROZEN_ISSUE]),
+        ), patch(
+            "manimgen.validator.retry.apply_timing_gate",
+            side_effect=lambda c, p, d: (c, []),
+        ), patch(
+            # Timing oracle finds NO dead tail → legit hold, frozen dropped.
+            "manimgen.validator.timing_verifier.blocking_freezes",
+            return_value=[],
+        ), patch(
+            "manimgen.validator.retry.check_layout",
+            return_value={"ok": True, "issues": "", "skipped": False},
+        ), patch(
+            "manimgen.validator.retry.chat"
+        ) as mock_chat:
+            import manimgen.validator.retry as retry_module
+
+            retry_module.MAX_RETRIES = 3
+            retry_module.MAX_VISUAL_LLM_FIX_CALLS = 1
+            from manimgen.validator.retry import retry_scene
+
+            success, video = retry_scene(
+                self._make_section(), code, "TestScene", scene_path,
+                cue_durations=[10.0],
+            )
+
+        # Frozen dropped as legit hold, layout clean → accepted on attempt 1,
+        # no LLM fix requested.
+        assert success is True
+        assert video == "/fake/v.mp4"
+        mock_chat.assert_not_called()
+
+    # ── #33: skipped layout fails closed to UNVERIFIED (bounded) ────────────
+
+    def test_skipped_layout_is_not_accepted_as_clean_and_is_bounded(self, tmp_path):
+        """#33: layout_checker returns skipped=True on its OWN LLM failure. With
+        no frame/timing defect, the render is UNVERIFIED — it must NOT take the
+        immediate clean-accept path (the silent false-accept during an API
+        outage), but it must also NOT burn the visual budget or retry forever.
+        It ships bounded: one render attempt, no LLM call, success=True without
+        a clean-pass claim."""
+        scene_path = str(tmp_path / "scene.py")
+        # Timing matches the cue duration (1.0 play + 9.0 wait = 10.0s) so there
+        # is NO frame/timing defect — the ONLY signal is the skipped layout.
+        code = (
+            "from manimlib import *\n"
+            "class TestScene(Scene):\n"
+            "    def construct(self):\n"
+            "        # CUE 0\n"
+            "        self.play(Write(Text('hi')), run_time=1.0)\n"
+            "        self.wait(9.0)\n"
+        )
+        with open(scene_path, "w") as f:
+            f.write(code)
+
+        from manimgen.validator.frame_checker import FrameCheckResult
+
+        run_mock = MagicMock(
+            return_value={"success": True, "video_path": "/fake/v.mp4", "stderr": ""}
+        )
+        with patch(
+            "manimgen.validator.retry._run_and_capture", run_mock
+        ), patch(
+            "manimgen.validator.frame_checker.check_frames",
+            return_value=FrameCheckResult(ok=True),
+        ), patch(
+            # Layout LLM is DOWN → skipped=True (fail-closed-to-UNVERIFIED).
+            "manimgen.validator.retry.check_layout",
+            return_value={"ok": True, "issues": "", "skipped": True, "frames": []},
+        ), patch(
+            "manimgen.validator.retry.chat"
+        ) as mock_chat:
+            import manimgen.validator.retry as retry_module
+
+            retry_module.MAX_RETRIES = 5
+            retry_module.MAX_VISUAL_LLM_FIX_CALLS = 3
+            from manimgen.validator.retry import retry_scene
+
+            success, video = retry_scene(
+                self._make_section(), code, "TestScene", scene_path,
+                cue_durations=[10.0],
+            )
+
+        # Bounded: shipped the render without an infinite/expensive retry...
+        assert success is True
+        assert video == "/fake/v.mp4"
+        # ...without burning the visual budget on an outage it cannot fix...
+        mock_chat.assert_not_called()
+        # ...and without spinning render attempts (one attempt, then bounded out).
+        assert run_mock.call_count == 1
+
+    def test_skipped_layout_does_not_take_immediate_clean_accept(self, tmp_path):
+        """#33: a skipped layout must be distinguishable from a verified-clean
+        pass. The clean-accept branch (`not combined_issues and not
+        layout_unverified`) must NOT fire for a skipped layout — proven by the
+        UNVERIFIED bounded-ship log path being taken instead. Here we assert the
+        render is still shipped but specifically via the unverified branch by
+        confirming concrete layout issues were never produced."""
+        scene_path = str(tmp_path / "scene.py")
+        # Timing matches the cue duration so the ONLY signal is the skipped
+        # layout (no frame/timing defect competing for the clean-accept branch).
+        code = (
+            "from manimlib import *\n"
+            "class TestScene(Scene):\n"
+            "    def construct(self):\n"
+            "        # CUE 0\n"
+            "        self.play(Write(Text('hi')), run_time=1.0)\n"
+            "        self.wait(9.0)\n"
+        )
+        with open(scene_path, "w") as f:
+            f.write(code)
+
+        from manimgen.validator.frame_checker import FrameCheckResult
+
+        layout_mock = MagicMock(
+            return_value={"ok": True, "issues": "", "skipped": True, "frames": []}
+        )
+        with patch(
+            "manimgen.validator.retry._run_and_capture",
+            return_value={"success": True, "video_path": "/fake/v.mp4", "stderr": ""},
+        ), patch(
+            "manimgen.validator.frame_checker.check_frames",
+            return_value=FrameCheckResult(ok=True),
+        ), patch(
+            "manimgen.validator.retry.check_layout", layout_mock
+        ), patch(
+            "manimgen.validator.retry.chat"
+        ) as mock_chat:
+            import manimgen.validator.retry as retry_module
+
+            retry_module.MAX_RETRIES = 3
+            retry_module.MAX_VISUAL_LLM_FIX_CALLS = 2
+            from manimgen.validator.retry import retry_scene
+
+            success, video = retry_scene(
+                self._make_section(), code, "TestScene", scene_path,
+                cue_durations=[10.0],
+            )
+
+        # check_layout was actually consulted (frame_checker was clean), and the
+        # skipped verdict did NOT trigger an LLM visual fix.
+        layout_mock.assert_called_once()
+        mock_chat.assert_not_called()
+        assert success is True

@@ -215,59 +215,74 @@ def retry_scene(
         result = _run_and_capture(scene_path, class_name)
         if result["success"]:
             from manimgen.validator.frame_checker import check_frames
+            from manimgen.validator.timing_verifier import (
+                blocking_freezes,
+                join_frozen_with_timing,
+                verify_timing,
+            )
 
             frame_result = check_frames(result["video_path"])
 
-            # Frozen-frame detection is not a retry trigger: a static frame
-            # during a narration HOLD phase is correct behavior, and retrying
-            # for it was burning the retry budget on already-good renders.
-            # Black frames and edge clipping are still tracked.
-            frame_issues = [
-                issue
-                for issue in (frame_result.issues or [])
-                if "identical — animation appears frozen" not in issue
-            ]
+            # HARD TIMING GATE (computed first so the frozen-frame join below
+            # can consult it). timing_verifier QUANTIFIES freeze-frame tails:
+            # a cue whose resolvable animation ends >= the freeze-block
+            # threshold before its narration is a multi-second dead screen,
+            # not a hold. UNKNOWN cues never block. Such a render must NOT be
+            # accepted — feed it through the same defect→retry→best-attempt
+            # machinery as visual defects. This closes the silent-failure: the
+            # pipeline used to detect these freezes and ship anyway.
+            freezes: list[str] = []
+            if cue_durations:
+                freezes = blocking_freezes(verify_timing(code, cue_durations))
+
+            # #32: re-admit frame_checker's frozen-frame signal SAFELY by
+            # joining it with the timing oracle. A frozen frame is a HARD
+            # failure IFF timing confirms a dead tail (blocking freeze present);
+            # for a legit final hold (narration still running over a static
+            # visual) timing reports no freeze and the frozen signal is dropped.
+            # Black frames / edge clipping always pass through. Previously every
+            # frozen line was discarded unconditionally — the signal was
+            # computed by frame_checker then silently thrown away.
+            frame_issues = join_frozen_with_timing(
+                frame_result.issues or [],
+                timing_freeze_confirmed=bool(freezes),
+            )
 
             combined_issues = list(frame_issues)
             defective_frames: list[str] = []
 
-            # HARD TIMING GATE. frame_checker's binary frozen-detection was
-            # (correctly) removed as a trigger because it can't tell a brief
-            # intentional hold from a real dead screen. timing_verifier
-            # QUANTIFIES it: a cue whose animation ends >= the freeze-block
-            # threshold before its narration is a multi-second dead screen,
-            # not a hold. Such a render must NOT be accepted — feed it through
-            # the same defect→retry→best-attempt machinery as visual defects.
-            # This closes the silent-failure: the pipeline used to detect
-            # these freezes (printing "CUE N: +9.73s short") and ship anyway.
-            if cue_durations:
-                from manimgen.validator.timing_verifier import (
-                    blocking_freezes,
-                    verify_timing,
+            if freezes:
+                print(
+                    f"[retry] Attempt {attempt}/{MAX_RETRIES} has "
+                    f"{len(freezes)} blocking freeze-frame tail(s):"
                 )
-
-                freezes = blocking_freezes(verify_timing(code, cue_durations))
-                if freezes:
-                    print(
-                        f"[retry] Attempt {attempt}/{MAX_RETRIES} has "
-                        f"{len(freezes)} blocking freeze-frame tail(s):"
-                    )
-                    for fz in freezes:
-                        print(f"[retry]   {fz}")
-                    combined_issues.extend(freezes)
+                for fz in freezes:
+                    print(f"[retry]   {fz}")
+                combined_issues.extend(freezes)
 
             # Gate the expensive LLM vision check: skip check_layout when the
             # zero-cost frame_checker (or the timing gate) already found
             # concrete defects (we have actionable issues and don't need a
             # paid second opinion). When clean, run check_layout to catch
             # defects frames can't see. Detection is never budget-gated.
+            #
+            # #33: layout_checker fails CLOSED. On its own LLM failure / empty
+            # response it returns skipped=True — the render is UNVERIFIED, not
+            # verified-clean. An UNVERIFIED render must NOT short-circuit to an
+            # immediate clean acceptance (that is the silent false-accept during
+            # an API outage), but it also has no concrete defect to fix, so it
+            # must NOT burn the visual-fix budget or retry forever. We therefore
+            # fall through to the bounded best-render acceptance below.
+            layout_unverified = False
             if not combined_issues:
                 layout = check_layout(result["video_path"])
-                if not layout["ok"] and layout["issues"]:
+                if layout.get("skipped"):
+                    layout_unverified = True
+                elif not layout["ok"] and layout["issues"]:
                     combined_issues.extend(layout["issues"].splitlines())
                 defective_frames = layout.get("frames", [])
 
-            if not combined_issues:
+            if not combined_issues and not layout_unverified:
                 return True, result["video_path"]
 
             # Record this render as the best-so-far if it has fewer issues
@@ -277,6 +292,21 @@ def retry_scene(
             if issue_count < best_issue_count:
                 best_video_path = result["video_path"]
                 best_issue_count = issue_count
+
+            # #33: UNVERIFIED render (layout LLM was down) with NO concrete
+            # frame/timing defect. There is nothing actionable to feed an LLM
+            # fix, and re-rendering will keep hitting the same outage, so
+            # spending the visual budget or retrying is pure churn. Bound it:
+            # ship this render as the best-so-far WITHOUT claiming it passed the
+            # layout gate. This avoids both the false-accept (we never returned
+            # the immediate clean True above) and an infinite/expensive retry.
+            if not combined_issues and layout_unverified:
+                print(
+                    f"[retry] Attempt {attempt}/{MAX_RETRIES}: layout check "
+                    "UNVERIFIED (LLM unavailable) and no frame/timing defects — "
+                    "shipping render unverified (bounded, no clean-pass claim)."
+                )
+                return True, best_video_path or result["video_path"]
 
             # Scene rendered but has visual defects. Feed structured feedback
             # back into the retry loop if budget allows.
