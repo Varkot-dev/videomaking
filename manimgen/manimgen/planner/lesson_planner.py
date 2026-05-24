@@ -143,9 +143,18 @@ def _extract_cues(plan: dict) -> dict:
                 existing_cues = refilled
 
         title = section.get("title", "")
+        # The per-segment narration is the PRIMARY, always-answerable input for
+        # any missing visual: every segment has its own words, so a content-free
+        # "animate segment N of M" placeholder is never needed. This eliminates
+        # the count-mismatch failure mode at its source — the Director always
+        # receives a visual grounded in the exact narration it must animate over.
+        segment_texts = _segment_narration(clean, indices)
         cues_out = []
         for i in range(n_segments):
-            if i < len(existing_cues):
+            has_visual = i < len(existing_cues) and isinstance(
+                existing_cues[i].get("visual"), str
+            )
+            if has_visual:
                 entry = dict(existing_cues[i])
                 entry["index"] = i
                 # Reconstruct real LaTeX from the backslash-free `§` notation
@@ -153,16 +162,18 @@ def _extract_cues(plan: dict) -> dict:
                 # way a raw \ does). Single point where every cue is
                 # normalized before any downstream consumer (Director prompt
                 # build, example selection, 3D promotion) sees it.
-                if isinstance(entry.get("visual"), str):
-                    entry["visual"] = _reconstruct_latex(entry["visual"])
+                entry["visual"] = _reconstruct_latex(entry["visual"])
                 cues_out.append(entry)
             else:
-                # Synthesise a minimal fallback so the Director never receives visual: "".
-                fallback = (
-                    f"Section '{title}': animate segment {i + 1} of {n_segments}."
+                # No planner-supplied visual for this segment. Derive one from
+                # the segment's OWN narration so the Director animates the
+                # actual spoken words rather than a generic placeholder.
+                fallback = _narration_derived_visual(
+                    title, segment_texts[i] if i < len(segment_texts) else ""
                 )
                 logger.warning(
-                    "[planner] Section '%s' cue %d has no visual description — using fallback: %r",
+                    "[planner] Section '%s' cue %d has no visual — deriving from "
+                    "segment narration: %r",
                     section.get("id", "?"),
                     i,
                     fallback,
@@ -176,6 +187,28 @@ def _extract_cues(plan: dict) -> dict:
                 section.get("id", "?"),
             )
     return plan
+
+
+def _narration_derived_visual(title: str, segment_text: str) -> str:
+    """Build a content-bearing cue visual from a segment's own narration.
+
+    Replaces the old content-free ``"animate segment N of M"`` placeholder.
+    The Director receives the exact words it must animate over, so even when
+    the planner omits a cue the visual is still specific to the narration —
+    never generic. Falls back to a section-level hint only when the segment
+    text is empty (e.g. a bare [CUE] with no words after it).
+    """
+    text = segment_text.strip()
+    if not text:
+        return (
+            f"Technique: title_reveal. Display the section title "
+            f"{title!r} prominently while the narrator speaks."
+        )
+    return (
+        f"Technique: narration_visual. Visualize this narration with a clear, "
+        f"specific animation that illustrates exactly what is being said: "
+        f"{text!r}"
+    )
 
 
 def _segment_narration(clean: str, indices: list[int]) -> list[str]:
@@ -226,7 +259,9 @@ def _refill_cues_via_llm(
     )
     try:
         raw = chat(system=_load_system_prompt(), user=user)
-        parsed = _safe_json_loads(_strip_fencing(raw))
+        # This path INTENTIONALLY accepts a top-level JSON array (the cue list),
+        # so use the lenient parser rather than the dict-guaranteeing wrapper.
+        parsed = _safe_json_loads_any(_strip_fencing(raw))
     except Exception as e:
         logger.warning("[planner] Cue refill LLM call failed: %s", e)
         return None
@@ -262,11 +297,35 @@ def _reconstruct_latex(visual: str) -> str:
     return visual.replace(_LATEX_BACKSLASH_SENTINEL, "\\")
 
 
-def _safe_json_loads(raw: str) -> dict:
+def _safe_json_loads_any(raw: str):
+    """Parse LLM JSON, tolerating bare LaTeX backslashes. Returns whatever
+    type the JSON encodes (dict, list, str, ...).
+
+    The planner sometimes emits a top-level JSON array (e.g. a cue list from
+    ``_refill_cues_via_llm``). Callers that need a specific shape must check
+    it themselves; ``_safe_json_loads`` is the dict-guaranteeing wrapper.
+    """
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
         return json.loads(_escape_bad_backslashes(raw))
+
+
+def _safe_json_loads(raw: str) -> dict:
+    """Parse LLM JSON and guarantee a ``dict`` for ``.get()``-style callers.
+
+    ``json.loads`` can legitimately return a list, str, int, etc. — e.g. when
+    the LLM ignores the schema and emits a top-level JSON array. Returning that
+    unchecked would let callers' ``result.get(...)`` raise ``AttributeError``
+    far from the cause. We fail fast here with a clear message instead.
+    """
+    result = _safe_json_loads_any(raw)
+    if not isinstance(result, dict):
+        raise ValueError(
+            f"Expected a JSON object, got {type(result).__name__} "
+            f"(LLM returned a non-object top-level JSON value)"
+        )
+    return result
 
 
 def _escape_bad_backslashes(s: str) -> str:
@@ -277,21 +336,50 @@ def _escape_bad_backslashes(s: str) -> str:
     \\theta, \\nabla, \\alpha etc. which are invalid JSON escapes.
     We walk the string and double-escape any backslash not followed by a
     valid JSON escape character.
+
+    ``\\u`` is only a valid JSON escape when followed by EXACTLY four hex
+    digits. LaTeX such as ``\\underbrace`` or ``\\union`` starts with ``\\u``
+    too, and passing those through unescaped leaves ``json.loads`` to choke on
+    the malformed ``\\uXXXX`` form. So ``\\u`` is treated as valid only when the
+    next four characters are hex; otherwise it is double-escaped like any other
+    bare backslash.
     """
-    valid_escapes = set('"\\\/bfnrtu')
+    # Single-char escapes that are always valid after a backslash. ``u`` is
+    # handled separately because it requires a 4-hex-digit suffix.
+    simple_escapes = set('"\\\\/bfnrt')
     out = []
     i = 0
     while i < len(s):
         ch = s[i]
         if ch == "\\":
-            if i + 1 < len(s) and s[i + 1] in valid_escapes:
-                out.append(ch)  # keep valid escape as-is
+            nxt = s[i + 1] if i + 1 < len(s) else ""
+            if nxt in simple_escapes:
+                out.append(ch)  # keep valid single-char escape as-is
+            elif nxt == "u" and _is_valid_unicode_escape(s, i):
+                out.append(ch)  # keep valid \\uXXXX as-is
             else:
                 out.append("\\\\")  # double-escape bare backslash
         else:
             out.append(ch)
         i += 1
     return "".join(out)
+
+
+_HEX_DIGITS = set("0123456789abcdefABCDEF")
+
+
+def _is_valid_unicode_escape(s: str, backslash_idx: int) -> bool:
+    """True if ``s[backslash_idx:]`` begins a valid ``\\uXXXX`` escape.
+
+    Requires a backslash at ``backslash_idx``, a ``u`` at the next position,
+    and exactly four hex digits after that. ``\\uZZZZ`` or a truncated
+    ``\\u12`` are rejected so the bare backslash gets escaped instead.
+    """
+    hex_start = backslash_idx + 2  # skip "\u"
+    hex_end = hex_start + 4
+    if hex_end > len(s):
+        return False
+    return all(c in _HEX_DIGITS for c in s[hex_start:hex_end])
 
 
 def research_topic(topic: str) -> dict:
