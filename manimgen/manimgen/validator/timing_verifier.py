@@ -36,6 +36,14 @@ class CueTiming:
     cue_index: int
     expected: float
     computed: float
+    # Tri-state flag (issue #23). True when the cue's animation/wait durations
+    # could not be statically resolved (e.g. run_time bound to a variable, a
+    # wait() whose argument is a dynamic expression, an undeterminable loop
+    # count). When the duration is UNKNOWN the ``computed`` total is a lower
+    # bound only — it must NEVER be treated as an authoritative shortfall, or a
+    # correct scene that uses ``run_time=rt`` gets falsely flagged as a
+    # multi-second freeze and forced into a destructive retry.
+    has_unknown: bool = False
 
     @property
     def diff(self) -> float:
@@ -43,6 +51,11 @@ class CueTiming:
 
     @property
     def ok(self) -> bool:
+        # An UNKNOWN cue cannot be asserted mismatched — its computed total is
+        # incomplete, so we conservatively treat it as acceptable rather than
+        # fabricate a shortfall.
+        if self.has_unknown:
+            return True
         return abs(self.diff) < _TOLERANCE
 
 
@@ -64,6 +77,30 @@ _FREEZE_BLOCK_THRESHOLD = float(
 _DEFAULT_PLAY_RUNTIME = 1.0  # ManimGL default when run_time= is omitted
 
 
+class _Unknown:
+    """Tri-state sentinel for a statically-unresolvable duration (issue #23).
+
+    Distinct from both 0.0 and the 1.0 play-default: a duration is UNKNOWN when
+    it depends on a variable or expression the static analyser cannot evaluate
+    (``run_time=rt``, ``self.wait(hold)``, ``range(n)`` with dynamic ``n``).
+    Silently coercing UNKNOWN to 0.0 made correct scenes look multi-seconds
+    short and triggered a destructive false-freeze retry; coercing to 1.0 hid
+    real shortfalls. The sentinel forces every consumer to handle the third
+    state explicitly.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return "UNKNOWN"
+
+
+UNKNOWN = _Unknown()
+
+# A resolved duration is a float; an unresolved one is the UNKNOWN sentinel.
+Duration = float | _Unknown
+
+
 def blocking_freezes(timing_result: dict) -> list[str]:
     """Return human-readable descriptions of cues whose freeze-frame tail is
     severe enough to block render acceptance (diff >= _FREEZE_BLOCK_THRESHOLD).
@@ -72,9 +109,16 @@ def blocking_freezes(timing_result: dict) -> list[str]:
     than the narration → dead screen. Overruns (negative diff) are NOT blocking
     (the muxer trims video to audio length). Sub-threshold shortfalls are NOT
     blocking — only multi-second dead screens are.
+
+    A cue containing any UNKNOWN duration (issue #23) is NEVER blocking: its
+    computed total is a lower bound, so a "shortfall" may be entirely explained
+    by the unresolved dynamic duration. Blocking it would force a destructive
+    retry on a scene that is, as far as we can prove, correct.
     """
     out: list[str] = []
     for ct in timing_result.get("cues", []):
+        if getattr(ct, "has_unknown", False):
+            continue
         if ct.diff >= _FREEZE_BLOCK_THRESHOLD:
             out.append(
                 f"CUE {ct.cue_index}: {ct.diff:.2f}s frozen tail "
@@ -129,12 +173,18 @@ def _eval_constant(node: ast.expr) -> float | None:
     return None
 
 
-def _get_run_time(call_node: ast.Call) -> float:
-    """Extract run_time= from a self.play() call, defaulting to 1.0."""
+def _get_run_time(call_node: ast.Call) -> Duration:
+    """Extract run_time= from a self.play() call.
+
+    Returns the ManimGL default (1.0) when ``run_time=`` is omitted, the
+    constant value when it can be statically evaluated, and UNKNOWN when the
+    argument is a dynamic expression (issue #23 — no longer silently treated as
+    the 1.0 default, which masked real timing and produced false freezes).
+    """
     for kw in call_node.keywords:
         if kw.arg == "run_time":
             val = _eval_constant(kw.value)
-            return val if val is not None else _DEFAULT_PLAY_RUNTIME
+            return val if val is not None else UNKNOWN
     return _DEFAULT_PLAY_RUNTIME
 
 
@@ -160,11 +210,18 @@ def _is_self_wait(node: ast.expr) -> bool:
     )
 
 
-def _get_wait_duration(call_node: ast.Call) -> float:
-    """Extract duration from self.wait(X), defaulting to 1.0."""
+def _get_wait_duration(call_node: ast.Call) -> Duration:
+    """Extract duration from self.wait(X).
+
+    A bare ``self.wait()`` is 1.0 in ManimGL. A constant argument resolves to
+    its value. A dynamic argument (e.g. ``self.wait(hold)``) is UNKNOWN — NOT
+    0.0 (issue #23). The old 0.0 default was the asymmetric bug: a scene that
+    intentionally held for a computed duration was scored as a multi-second
+    shortfall and force-retried into a broken state.
+    """
     if call_node.args:
         val = _eval_constant(call_node.args[0])
-        return val if val is not None else 0.0  # unresolvable → assume 0 (flag it)
+        return val if val is not None else UNKNOWN
     return 1.0  # bare self.wait() without args = 1.0 in ManimGL
 
 
@@ -197,40 +254,60 @@ def _get_for_range_count(node: ast.For) -> int | None:
 # ---------------------------------------------------------------------------
 
 
-def _time_for_statements(stmts: list[ast.stmt]) -> float:
-    """Sum the animation time consumed by a list of statements.
+def _time_for_statements(stmts: list[ast.stmt]) -> tuple[float, bool]:
+    """Sum the animation time consumed by a list of statements (issue #23).
+
+    Returns ``(total_seconds, has_unknown)``. ``total_seconds`` is the sum of
+    every *resolvable* duration. ``has_unknown`` is True when any duration could
+    not be statically determined, in which case ``total_seconds`` is only a
+    lower bound and must not be treated as authoritative.
 
     Handles:
-      - self.play(..., run_time=X) → X seconds
-      - self.wait(X) → X seconds
-      - for i in range(N): body → N × body_time
-      - while loops → flagged as unresolvable (returns 0 with warning)
-
-    Does NOT resolve dynamic variables or function calls (returns 0 for unknown).
+      - self.play(..., run_time=X) → X seconds (UNKNOWN if run_time is dynamic)
+      - self.wait(X) → X seconds (UNKNOWN if X is dynamic)
+      - for i in range(N): body → N × body_time (UNKNOWN if N is undeterminable)
+      - if/else → max of the two branches
     """
     total = 0.0
+    has_unknown = False
     for stmt in stmts:
         if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
             call = stmt.value
             if _is_self_play(call):
-                total += _get_run_time(call)
+                rt = _get_run_time(call)
+                if isinstance(rt, _Unknown):
+                    has_unknown = True
+                else:
+                    total += rt
             elif _is_self_wait(call):
-                total += _get_wait_duration(call)
+                wt = _get_wait_duration(call)
+                if isinstance(wt, _Unknown):
+                    has_unknown = True
+                else:
+                    total += wt
         elif isinstance(stmt, ast.For):
             n = _get_for_range_count(stmt)
+            body_time, body_unknown = _time_for_statements(stmt.body)
+            if body_unknown:
+                has_unknown = True
             if n is not None:
-                body_time = _time_for_statements(stmt.body)
                 total += n * body_time
             else:
-                # Can't determine loop count — sum body once and flag
-                body_time = _time_for_statements(stmt.body)
-                total += body_time  # conservative: count at least one iteration
+                # Can't determine loop count — the per-iteration time is known
+                # but the iteration count is not, so the loop's contribution is
+                # unresolvable. Count one iteration as a lower bound and flag.
+                total += body_time
+                has_unknown = True
         elif isinstance(stmt, ast.If):
-            # Take the max of if/else branches as an estimate
-            if_time = _time_for_statements(stmt.body)
-            else_time = _time_for_statements(stmt.orelse) if stmt.orelse else 0.0
+            # Take the max of if/else branches as an estimate.
+            if_time, if_unknown = _time_for_statements(stmt.body)
+            else_time, else_unknown = (
+                _time_for_statements(stmt.orelse) if stmt.orelse else (0.0, False)
+            )
             total += max(if_time, else_time)
-    return total
+            if if_unknown or else_unknown:
+                has_unknown = True
+    return total, has_unknown
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +354,28 @@ def _split_into_cue_blocks(code: str) -> list[tuple[int, str]]:
 # ---------------------------------------------------------------------------
 
 
+def _parse_cue_block(block_code: str) -> ast.Module | None:
+    """Parse a cue-block slice into an AST.
+
+    A cue block is a slice of a larger file, so it may be indented (it lives
+    inside ``construct``). A bare ``ast.parse`` raises IndentationError on such
+    a slice; wrapping it in ``if True:`` makes it parseable while preserving the
+    statement structure (``_time_for_statements`` treats the wrapping If as a
+    single-branch block of identical duration). Returns None if it still won't
+    parse.
+    """
+    try:
+        return ast.parse(block_code)
+    except (SyntaxError, IndentationError):
+        try:
+            return ast.parse(
+                "if True:\n"
+                + "\n".join("    " + line for line in block_code.splitlines())
+            )
+        except (SyntaxError, IndentationError):
+            return None
+
+
 def verify_timing(
     code: str,
     cue_durations: list[float],
@@ -310,29 +409,35 @@ def verify_timing(
             )
             continue
 
-        try:
-            tree = ast.parse(block_code)
-        except SyntaxError:
-            # The cue block may not be valid Python on its own (it's a slice
-            # of a larger file). Wrap it to make it parseable.
-            try:
-                tree = ast.parse(
-                    "if True:\n"
-                    + "\n".join("    " + l for l in block_code.splitlines())
-                )
-            except SyntaxError:
-                warnings.append(
-                    f"CUE {cue_idx}: could not parse code block — timing not verifiable."
-                )
-                continue
+        tree = _parse_cue_block(block_code)
+        if tree is None:
+            warnings.append(
+                f"CUE {cue_idx}: could not parse code block — timing not verifiable."
+            )
+            continue
 
-        computed = _time_for_statements(tree.body)
+        computed, has_unknown = _time_for_statements(tree.body)
         expected = cue_durations[cue_idx]
 
-        ct = CueTiming(cue_index=cue_idx, expected=expected, computed=computed)
+        ct = CueTiming(
+            cue_index=cue_idx,
+            expected=expected,
+            computed=computed,
+            has_unknown=has_unknown,
+        )
         cue_timings.append(ct)
 
-        if not ct.ok:
+        if has_unknown:
+            # Do NOT assert a shortfall/overrun: the computed total is a lower
+            # bound only (a dynamic run_time/wait/loop count was present). A
+            # bare informational note keeps the LLM aware without triggering an
+            # auto-fix or a false-freeze block (issue #23).
+            warnings.append(
+                f"CUE {cue_idx}: contains a dynamic duration "
+                f"(run_time/wait/loop count not statically resolvable) — "
+                f"timing not verifiable, skipping freeze check for this cue."
+            )
+        elif not ct.ok:
             if ct.diff > 0:
                 warnings.append(
                     f"CUE {cue_idx}: {ct.diff:+.2f}s short — "
@@ -425,6 +530,65 @@ def _strip_phantom_cue_blocks(
     return "".join(out_lines), note
 
 
+_MIN_INSERT_RESIDUAL = _TOLERANCE
+# Only insert a missing wait when the shortfall exceeds the tolerance band.
+# Below tolerance the muxer's pad/trim already covers the drift and inserting a
+# sub-second wait would be churn for no visible benefit.
+
+
+def _last_meaningful_line(block_code: str) -> tuple[str, str] | None:
+    """Return (line_text_without_newline, indent) of the last code line in a
+    cue block — the line a synthetic wait should be inserted *after*.
+
+    Skips trailing blank lines and pure-comment lines. Returns None when the
+    block has no code line to anchor to.
+    """
+    for raw in reversed(block_code.splitlines()):
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = raw[: len(raw) - len(raw.lstrip())]
+        return raw, indent
+    return None
+
+
+def _insert_missing_wait(
+    fixed_code: str,
+    block_code: str,
+    cue_idx: int,
+    residual: float,
+) -> tuple[str, str | None]:
+    """Insert ``self.wait(residual)`` at the end of a cue block that has NO
+    ``self.wait()`` at all (issue #22 — the deterministic residual resolver).
+
+    ``auto_fix_timing`` previously no-op'd on these blocks, leaving the exact
+    computed shortfall as a freeze-frame tail and handing the problem to the
+    LLM as an advisory hint. The verifier already knows the precise residual;
+    this makes it authoritative by inserting the wait at the correct boundary.
+
+    Anchors on the last meaningful line of the block (located via rfind so the
+    reverse-order processing in auto_fix_timing stays offset-safe). Returns
+    ``(new_code, applied_message_or_None)``.
+    """
+    anchor = _last_meaningful_line(block_code)
+    if anchor is None:
+        return fixed_code, None
+    anchor_line, indent = anchor
+
+    insert_idx = fixed_code.rfind(anchor_line)
+    if insert_idx < 0:
+        return fixed_code, None
+    insert_at = insert_idx + len(anchor_line)
+
+    wait_line = f"\n{indent}self.wait({residual:.2f})  # CUE_FILL auto-inserted"
+    new_code = fixed_code[:insert_at] + wait_line + fixed_code[insert_at:]
+    msg = (
+        f"CUE {cue_idx}: inserted self.wait({residual:.2f}) at cue boundary "
+        f"(no existing wait; closing a {residual:.2f}s freeze-frame tail)"
+    )
+    return new_code, msg
+
+
 def auto_fix_timing(
     code: str,
     cue_durations: list[float],
@@ -433,6 +597,11 @@ def auto_fix_timing(
 
     Strategy: for each cue block, find the LAST ``self.wait(X)`` call and
     adjust its argument so the total block time matches the expected duration.
+    When a cue block has NO ``self.wait()`` at all but falls short of its
+    expected duration by more than the tolerance, INSERT ``self.wait(residual)``
+    at the cue boundary (issue #22 — deterministic residual resolver). The
+    verifier knows the exact residual, so it writes it directly instead of
+    handing the LLM a hint.
 
     This handles the common case where the Director's wait arithmetic is wrong
     but the animation structure is correct.
@@ -458,15 +627,14 @@ def auto_fix_timing(
         if cue_idx >= len(cue_durations):
             continue
 
-        try:
-            tree = ast.parse(block_code)
-        except SyntaxError:
+        tree = _parse_cue_block(block_code)
+        if tree is None:
             continue
 
         # Find the total animation time excluding the LAST self.wait()
         all_stmts = tree.body
         last_wait_line = None
-        last_wait_old_val = None
+        last_wait_old_val: Duration | None = None
 
         # Walk all statements to find the last self.wait()
         for stmt in ast.walk(tree):
@@ -479,12 +647,41 @@ def auto_fix_timing(
                 last_wait_old_val = _get_wait_duration(stmt.value)
 
         if last_wait_line is None:
+            # #22: no self.wait() in this cue block. If the animations fall
+            # short of the expected duration by more than tolerance, INSERT a
+            # self.wait(residual) at the boundary — the deterministic resolver.
+            # Skip when the block has any dynamic duration (residual unknowable,
+            # #23) or when the block is on-time / overruns (nothing to fill).
+            block_total, block_unknown = _time_for_statements(all_stmts)
+            if block_unknown:
+                continue
+            expected = cue_durations[cue_idx]
+            residual = expected - block_total
+            if residual <= _MIN_INSERT_RESIDUAL:
+                continue
+            new_code, msg = _insert_missing_wait(
+                fixed_code, block_code, cue_idx, residual
+            )
+            if msg:
+                fixed_code = new_code
+                applied.append(msg)
             continue
 
-        # Compute total time excluding the last wait
-        total_without_last_wait = _time_for_statements(all_stmts) - (
-            last_wait_old_val or 0
-        )
+        # If the LAST wait's duration is itself dynamic (UNKNOWN), we cannot
+        # compute a safe replacement — leave it untouched (issue #23). Rewriting
+        # a deliberate dynamic hold to a fabricated constant is exactly the
+        # destructive behaviour we are eliminating.
+        if isinstance(last_wait_old_val, _Unknown):
+            continue
+
+        # Compute total time excluding the last wait.
+        full_total, block_unknown = _time_for_statements(all_stmts)
+        total_without_last_wait = full_total - (last_wait_old_val or 0)
+
+        # If any OTHER duration in the block is dynamic, the residual is
+        # unknowable — adjusting the wait would over- or under-shoot. Skip.
+        if block_unknown:
+            continue
         expected = cue_durations[cue_idx]
         new_wait = max(0.01, expected - total_without_last_wait)
 

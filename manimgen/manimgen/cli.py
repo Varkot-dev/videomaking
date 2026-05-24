@@ -206,6 +206,34 @@ def _write_hash_sidecar(video_path: str, topic_hash: str) -> None:
         f.write(topic_hash)
 
 
+def _cached_scene_blocking_freezes(
+    section: dict, cue_durations: list[float]
+) -> list[str]:
+    """Return blocking freeze-frame tails for a section's CACHED scene source.
+
+    The render-cache / --resume path skips codegen, so it never runs the
+    timing freeze gate that retry.py applies. This reads the on-disk scene
+    .py (deterministic path: scenes_dir/<section id>.py) and runs the same
+    zero-cost static check. Returns [] when the scene file is missing/unreadable
+    (fail-open: an unverifiable cache is honored, not the place to hard-fail) or
+    when there are no real freezes. Post-#23, cues with dynamic (UNKNOWN)
+    durations are never reported as freezes.
+    """
+    section_id = section.get("id", "")
+    scene_path = os.path.join(paths.scenes_dir(), f"{section_id}.py")
+    if not section_id or not os.path.exists(scene_path):
+        return []
+    try:
+        with open(scene_path) as f:
+            code = f.read()
+    except OSError:
+        return []
+
+    from manimgen.validator.timing_verifier import blocking_freezes, verify_timing
+
+    return blocking_freezes(verify_timing(code, cue_durations))
+
+
 # ---------------------------------------------------------------------------
 # Per-section pipeline
 # ---------------------------------------------------------------------------
@@ -318,7 +346,28 @@ def _run_section(
 
     class_name = section_class_name(section)
     found_video = _find_rendered_video(class_name)
-    if found_video and _render_is_fresh(found_video, current_topic_hash):
+    cache_is_usable = bool(found_video) and _render_is_fresh(
+        found_video, current_topic_hash
+    )
+    # #24: the render-cache / --resume shortcut bypasses EVERY quality gate.
+    # A cached section with a multi-second freeze-frame tail would ship
+    # unchecked. Re-run the zero-cost timing freeze check against the cached
+    # scene source before honoring the cache. A real freeze (post-#23: UNKNOWN
+    # cues never block) invalidates the cache and forces full regeneration +
+    # retry. No render happens here — this is a static AST check on the .py.
+    if cache_is_usable and cue_durations:
+        cached_freezes = _cached_scene_blocking_freezes(section, cue_durations)
+        if cached_freezes:
+            log.warning(
+                "[manimgen] Cached render for %s has %d blocking freeze-frame "
+                "tail(s) — invalidating cache, regenerating: %s",
+                class_name,
+                len(cached_freezes),
+                "; ".join(cached_freezes),
+            )
+            cache_is_usable = False
+
+    if cache_is_usable:
         log.info(
             "[manimgen] Render exists and is fresh, skipping codegen: %s", found_video
         )
@@ -362,6 +411,27 @@ def _run_section(
                     "; ".join(vr.issues),
                 )
                 success = False
+
+            # #24: validate_render covers frames/layout but NOT timing freezes.
+            # The first-pass render could still ship a multi-second freeze-frame
+            # tail. Run the same blocking_freezes gate retry.py uses and treat a
+            # real freeze (post-#23: UNKNOWN cues never block) as a hard failure
+            # that routes into the retry path.
+            if success and cue_durations:
+                from manimgen.validator.timing_verifier import (
+                    blocking_freezes,
+                    verify_timing,
+                )
+
+                freezes = blocking_freezes(verify_timing(code, cue_durations))
+                if freezes:
+                    log.warning(
+                        "[manimgen] First-pass render has %d blocking "
+                        "freeze-frame tail(s) — forcing retry: %s",
+                        len(freezes),
+                        "; ".join(freezes),
+                    )
+                    success = False
         if not success:
             success, video_path = retry_scene(
                 section, code, class_name, scene_path, cue_durations=cue_durations
