@@ -1,20 +1,23 @@
 """Tests for the static timing verifier."""
+import ast
 import textwrap
 
 import pytest
 
 from manimgen.validator.timing_verifier import (
+    _FREEZE_BLOCK_THRESHOLD,
+    UNKNOWN,
     CueTiming,
+    _eval_constant,
+    _get_run_time,
+    _get_wait_duration,
+    _split_into_cue_blocks,
+    _time_for_statements,
+    _Unknown,
     auto_fix_timing,
     blocking_freezes,
     verify_timing,
-    _FREEZE_BLOCK_THRESHOLD,
-    _eval_constant,
-    _split_into_cue_blocks,
-    _time_for_statements,
 )
-import ast
-
 
 # -----------------------------------------------------------------------
 # _eval_constant
@@ -94,44 +97,59 @@ class TestSplitCueBlocks:
 # -----------------------------------------------------------------------
 
 class TestTimeForStatements:
+    """_time_for_statements now returns (total, has_unknown) (issue #23).
+
+    These assertions were updated for the new tuple contract — the durations
+    they check are unchanged; only the return shape changed to carry the
+    tri-state flag. None of these encoded the old asymmetric-default bug.
+    """
+
     def _parse_body(self, code: str):
         return ast.parse(textwrap.dedent(code)).body
 
     def test_single_play(self):
-        stmts = self._parse_body("self.play(Write(x), run_time=1.5)")
-        assert _time_for_statements(stmts) == pytest.approx(1.5)
+        total, unknown = _time_for_statements(
+            self._parse_body("self.play(Write(x), run_time=1.5)")
+        )
+        assert total == pytest.approx(1.5)
+        assert unknown is False
 
     def test_play_default_runtime(self):
-        stmts = self._parse_body("self.play(Write(x))")
-        assert _time_for_statements(stmts) == pytest.approx(1.0)
+        total, unknown = _time_for_statements(self._parse_body("self.play(Write(x))"))
+        assert total == pytest.approx(1.0)
+        assert unknown is False
 
     def test_wait(self):
-        stmts = self._parse_body("self.wait(2.5)")
-        assert _time_for_statements(stmts) == pytest.approx(2.5)
+        total, unknown = _time_for_statements(self._parse_body("self.wait(2.5)"))
+        assert total == pytest.approx(2.5)
+        assert unknown is False
 
     def test_play_plus_wait(self):
         code = """\
             self.play(Write(x), run_time=1.5)
             self.wait(2.7)
         """
-        stmts = self._parse_body(code)
-        assert _time_for_statements(stmts) == pytest.approx(4.2)
+        total, unknown = _time_for_statements(self._parse_body(code))
+        assert total == pytest.approx(4.2)
+        assert unknown is False
 
     def test_for_loop(self):
         code = """\
             for i in range(5):
                 self.play(ShowCreation(obj), run_time=0.2)
         """
-        stmts = self._parse_body(code)
-        assert _time_for_statements(stmts) == pytest.approx(1.0)
+        total, unknown = _time_for_statements(self._parse_body(code))
+        assert total == pytest.approx(1.0)
+        assert unknown is False
 
     def test_for_loop_range_start_stop(self):
         code = """\
             for i in range(1, 7):
                 self.play(ShowCreation(obj), run_time=0.25)
         """
-        stmts = self._parse_body(code)
-        assert _time_for_statements(stmts) == pytest.approx(1.5)
+        total, unknown = _time_for_statements(self._parse_body(code))
+        assert total == pytest.approx(1.5)
+        assert unknown is False
 
     def test_multiple_plays(self):
         code = """\
@@ -140,8 +158,9 @@ class TestTimeForStatements:
             self.play(ShowCreation(curve), run_time=2.0)
             self.wait(0.6)
         """
-        stmts = self._parse_body(code)
-        assert _time_for_statements(stmts) == pytest.approx(4.0)
+        total, unknown = _time_for_statements(self._parse_body(code))
+        assert total == pytest.approx(4.0)
+        assert unknown is False
 
     def test_if_branch_takes_max(self):
         code = """\
@@ -150,8 +169,9 @@ class TestTimeForStatements:
             else:
                 self.play(Write(y), run_time=1.0)
         """
-        stmts = self._parse_body(code)
-        assert _time_for_statements(stmts) == pytest.approx(2.0)
+        total, unknown = _time_for_statements(self._parse_body(code))
+        assert total == pytest.approx(2.0)
+        assert unknown is False
 
 
 # -----------------------------------------------------------------------
@@ -326,12 +346,20 @@ class TestApplyTimingGate:
         assert warnings == []
         assert out_code == code
 
-    def test_unresolvable_issue_returns_warnings_to_trigger_gate(self, tmp_path):
+    def test_dynamic_runtime_does_NOT_gate_render(self, tmp_path):
+        """REWRITTEN for issue #23.
+
+        The original test asserted that a ``run_time=rt`` scene must surface
+        gating warnings and route to the retry path. That assertion *encoded
+        the regression*: a dynamic-but-correct scene was being force-retried
+        (and rewritten into a broken one). Post-#23 a cue with only dynamic
+        durations is UNKNOWN, verify_timing reports ok=True, and
+        apply_timing_gate returns no gating warnings — the render proceeds.
+        The pre-existing assertion was asserting the bug, so it is replaced
+        with the correct contract.
+        """
         from manimgen.validator.retry import apply_timing_gate
 
-        # run_time bound to a dynamic variable the static verifier cannot
-        # resolve — auto-fix cannot safely adjust it, so warnings persist and
-        # the cli pre-render gate will route this to the retry path.
         code = textwrap.dedent("""\
             # CUE 0 — 5.0s
             rt = compute_runtime()
@@ -342,7 +370,151 @@ class TestApplyTimingGate:
             f.write(code)
 
         out_code, warnings = apply_timing_gate(code, scene_path, [5.0])
-        assert warnings, "unresolvable timing must surface warnings to gate the render"
+        assert warnings == [], (
+            "a purely-dynamic (UNKNOWN) cue must NOT gate the render — gating it "
+            "is the #23 false-freeze regression"
+        )
+        # The code must be left byte-for-byte intact (no destructive auto-fix).
+        assert out_code == code
+
+
+class TestTriStateDurations:
+    """Issue #23 regression suite — the active regression that rewrites correct
+    scenes into broken ones.
+
+    A correct scene using ``run_time=rt`` (a variable) was scored as a
+    multi-second shortfall because dynamic durations were silently coerced
+    (run_time→1.0, wait→0.0, asymmetrically). The tri-state fix marks them
+    UNKNOWN; UNKNOWN cues are never flagged as freezes. A genuinely short
+    *constant* wait after a long animation MUST still be flagged.
+    """
+
+    # --- low-level extractors return the UNKNOWN sentinel, not 0.0/1.0 ---
+
+    def test_get_run_time_dynamic_is_unknown(self):
+        call = ast.parse("self.play(Write(x), run_time=rt)").body[0].value
+        assert _get_run_time(call) is UNKNOWN
+
+    def test_get_run_time_constant_is_float(self):
+        call = ast.parse("self.play(Write(x), run_time=2.0)").body[0].value
+        assert _get_run_time(call) == pytest.approx(2.0)
+
+    def test_get_run_time_omitted_is_default(self):
+        call = ast.parse("self.play(Write(x))").body[0].value
+        assert _get_run_time(call) == pytest.approx(1.0)
+
+    def test_get_wait_dynamic_is_unknown_not_zero(self):
+        # The asymmetric bug: this used to return 0.0, fabricating a shortfall.
+        call = ast.parse("self.wait(hold)").body[0].value
+        assert _get_wait_duration(call) is UNKNOWN
+
+    def test_get_wait_constant_is_float(self):
+        call = ast.parse("self.wait(2.0)").body[0].value
+        assert _get_wait_duration(call) == pytest.approx(2.0)
+
+    def test_get_wait_bare_is_one(self):
+        call = ast.parse("self.wait()").body[0].value
+        assert _get_wait_duration(call) == pytest.approx(1.0)
+
+    # --- propagation through _time_for_statements ---
+
+    def test_dynamic_runtime_propagates_unknown(self):
+        stmts = ast.parse("self.play(Write(x), run_time=rt)").body
+        total, unknown = _time_for_statements(stmts)
+        assert unknown is True
+        assert total == pytest.approx(0.0)  # only a lower bound
+
+    def test_dynamic_wait_propagates_unknown(self):
+        stmts = ast.parse("self.wait(hold)").body
+        total, unknown = _time_for_statements(stmts)
+        assert unknown is True
+
+    def test_dynamic_loop_count_propagates_unknown(self):
+        code = textwrap.dedent("""\
+            for i in range(n):
+                self.play(ShowCreation(obj), run_time=0.2)
+        """)
+        total, unknown = _time_for_statements(ast.parse(code).body)
+        assert unknown is True
+        # known per-iteration time still counted once as a lower bound
+        assert total == pytest.approx(0.2)
+
+    def test_mixed_known_and_unknown(self):
+        code = textwrap.dedent("""\
+            self.play(Write(x), run_time=1.5)
+            self.play(Grow(y), run_time=rt)
+            self.wait(2.0)
+        """)
+        total, unknown = _time_for_statements(ast.parse(code).body)
+        assert unknown is True
+        assert total == pytest.approx(3.5)  # 1.5 + 2.0, dynamic rt excluded
+
+    # --- THE REGRESSION: a correct dynamic scene must NOT be flagged ---
+
+    def test_dynamic_runtime_scene_not_flagged_as_freeze(self):
+        """A scene that drives a long animation with a variable run_time and
+        holds for a computed duration is CORRECT. Pre-fix it was scored as a
+        ~9s freeze (run_time→1.0, the hold→0.0) and force-retried, rewriting a
+        good scene into a broken one. It must now pass clean."""
+        code = textwrap.dedent("""\
+            # CUE 0 — 9.5s
+            rt = 7.5
+            hold = 2.0
+            self.play(ShowCreation(curve), run_time=rt)
+            self.wait(hold)
+        """)
+        result = verify_timing(code, [9.5])
+        ct = result["cues"][0]
+        assert ct.has_unknown is True
+        assert ct.ok is True  # UNKNOWN cue is acceptable, not a mismatch
+        # And crucially: it does NOT enter the blocking-freeze set.
+        assert blocking_freezes(result) == []
+
+    def test_unknown_cue_ok_property(self):
+        ct = CueTiming(cue_index=0, expected=9.5, computed=0.0, has_unknown=True)
+        # diff would be +9.5 (huge), but has_unknown overrides → ok
+        assert ct.diff == pytest.approx(9.5)
+        assert ct.ok is True
+
+    def test_blocking_freezes_ignores_unknown_even_with_huge_diff(self):
+        cues = [CueTiming(cue_index=0, expected=12.0, computed=0.0, has_unknown=True)]
+        assert blocking_freezes({"ok": False, "cues": cues, "warnings": []}) == []
+
+    # --- THE OTHER HALF: a genuine short CONSTANT wait IS still flagged ---
+
+    def test_genuine_short_constant_wait_still_flagged(self):
+        """A tiny constant wait after a long animation is a real freeze and
+        MUST still block — the fix must not disarm the genuine detector."""
+        code = textwrap.dedent("""\
+            # CUE 0 — 10.0s
+            self.play(ShowCreation(curve), run_time=2.0)
+            self.wait(0.01)
+        """)
+        result = verify_timing(code, [10.0])
+        ct = result["cues"][0]
+        assert ct.has_unknown is False
+        assert ct.ok is False
+        assert ct.diff == pytest.approx(7.99)
+        blocked = blocking_freezes(result)
+        assert len(blocked) == 1
+        assert "CUE 0" in blocked[0]
+
+    def test_unknown_cue_emits_informational_warning_only(self):
+        code = textwrap.dedent("""\
+            # CUE 0 — 5.0s
+            self.play(Write(t), run_time=rt)
+        """)
+        result = verify_timing(code, [5.0])
+        # ok at the cue level (UNKNOWN), warning is informational, not a freeze.
+        assert result["cues"][0].has_unknown is True
+        assert any("dynamic duration" in w for w in result["warnings"])
+        assert not any("freeze-frame tail" in w for w in result["warnings"])
+
+    def test_unknown_sentinel_is_singleton(self):
+        assert isinstance(UNKNOWN, _Unknown)
+        assert _get_run_time(
+            ast.parse("self.play(x, run_time=a)").body[0].value
+        ) is UNKNOWN
 
 
 class TestBlockingFreezes:
