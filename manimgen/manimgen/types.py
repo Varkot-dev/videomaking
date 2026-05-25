@@ -25,6 +25,22 @@ class MuxStatus(str, enum.Enum):
 
 
 @dataclass(frozen=True)
+class GateResult:
+    """Output of the codegen + timing-gate seam (cli._generate_and_gate).
+
+    Carries the (possibly auto-fixed) scene source plus where it was written and
+    whether the zero-cost timing gate found unresolvable freeze-frame issues. A
+    ``timing_blocked`` of True means the expensive first render should be skipped
+    and the section routed straight into the retry path.
+    """
+
+    code: str
+    class_name: str
+    scene_path: str
+    timing_blocked: bool
+
+
+@dataclass(frozen=True)
 class CueMuxResult:
     """Result of attempting to mux one cue.
 

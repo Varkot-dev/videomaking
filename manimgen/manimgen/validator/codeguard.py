@@ -1197,6 +1197,30 @@ def _fix_y_axis_include_numbers(code: str) -> tuple[str, str | None]:
     return code, None
 
 
+def _shadow_log_unknown_symbols(code: str) -> list[str]:
+    """Report-only (#30): log manimlib symbols the allowlist *would* flag.
+
+    Pure shadow mode this cycle — it NEVER blocks the render, never adds to
+    ``errors`` or ``layout_warnings``, and never degrades output. The goal is to
+    land the allowlist mechanism + shadow logging so enforcement can be gated on
+    real data later. Fail-open: when ``manimlib`` is unavailable (CI) the check
+    is a no-op. Returns the flagged names (for tests); callers ignore the value.
+    """
+    from manimgen.validator.manimlib_symbols import shadow_check_allowlist
+
+    flagged = shadow_check_allowlist(code)
+    if flagged:
+        import logging
+
+        logging.getLogger(__name__).info(
+            "[codeguard][allowlist-shadow] would flag %d unknown symbol(s) "
+            "(report-only, render NOT blocked): %s",
+            len(flagged),
+            ", ".join(flagged),
+        )
+    return flagged
+
+
 def precheck_and_autofix(code: str) -> str:
     """Apply all known auto-fixes to a code string and return the fixed code.
 
@@ -1223,6 +1247,8 @@ def precheck_and_autofix_file(scene_path: str) -> dict[str, Any]:
     if fixed != code:
         with open(scene_path, "w") as f:
             f.write(fixed)
+
+    _shadow_log_unknown_symbols(fixed)
 
     errors = validate_scene_code(fixed)
     layout_warnings = run_invariant_warnings(fixed)
