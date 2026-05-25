@@ -15,6 +15,98 @@ from manimgen.validator.codeguard import (
 )
 
 
+# ── ManimCommunity→ManimGL kwarg rewrites (baseline 2026-05-25) ───────────────
+# Every section that fell back in the binary-search baseline died with
+# SceneErrorType.TYPE — the LLM emitted ManimCommunity surface/axes/camera kwargs
+# that Mobject.__init__ (no **kwargs) rejects. These rewrites are verified against
+# the installed manimlib source (Mobject has color/opacity not fill_*, ThreeDAxes
+# has depth not z_length, CameraFrame.add_ambient_rotation exists).
+
+class TestCommunityToGLKwargRewrites:
+
+    def test_fill_opacity_to_opacity(self):
+        code = "ParametricSurface(f, fill_opacity=0.8)"
+        fixed, applied = apply_known_fixes(code)
+        assert "fill_opacity" not in fixed
+        assert "opacity=0.8" in fixed
+
+    def test_fill_color_to_color(self):
+        code = "Surface(f, fill_color=BLUE)"
+        fixed, applied = apply_known_fixes(code)
+        assert "fill_color" not in fixed
+        assert "color=BLUE" in fixed
+
+    def test_z_length_to_depth(self):
+        code = "ThreeDAxes(z_length=4)"
+        fixed, applied = apply_known_fixes(code)
+        assert "z_length" not in fixed
+        assert "depth=4" in fixed
+
+    def test_checkerboard_colors_stripped(self):
+        code = "ParametricSurface(f, checkerboard_colors=[BLUE, GREEN])"
+        fixed, applied = apply_known_fixes(code)
+        assert "checkerboard_colors" not in fixed
+
+    def test_begin_ambient_camera_rotation_rewritten(self):
+        code = "self.begin_ambient_camera_rotation(rate=0.2)"
+        fixed, applied = apply_known_fixes(code)
+        assert "begin_ambient_camera_rotation" not in fixed
+        assert "self.frame.add_ambient_rotation" in fixed
+
+    def test_x_axis_config_is_left_untouched(self):
+        """x_axis_config is a VALID Axes kwarg — must NOT be stripped/rewritten."""
+        code = "Axes(x_axis_config={'include_numbers': True})"
+        fixed, applied = apply_known_fixes(code)
+        assert "x_axis_config" in fixed, (
+            "x_axis_config is valid on Axes — rewriting it would break working code"
+        )
+
+
+class TestColorRoleHeaderInjection:
+    """The Director shows PRIMARY/STRUCT/MUTED... as a palette reference but never
+    requires emitting the assignment lines, so scenes use `color=MUTED` with MUTED
+    undefined → NameError at render. If a role name is USED but not DEFINED, codeguard
+    injects the canonical header. Mapping is the director prompt's palette table."""
+
+    def test_injects_header_when_role_used_undefined(self):
+        code = (
+            "from manimlib import *\n\n"
+            "class S(Scene):\n"
+            "    def construct(self):\n"
+            "        t = Text('hi', color=MUTED)\n"
+        )
+        fixed, applied = apply_known_fixes(code)
+        assert "MUTED = GREY_A" in fixed, "must inject the MUTED definition"
+        # injected header sits before the class so the name is in scope
+        assert fixed.index("MUTED = GREY_A") < fixed.index("class S")
+
+    def test_injects_all_referenced_roles(self):
+        code = "x = [PRIMARY, STRUCT, ALERT]\n"
+        fixed, _ = apply_known_fixes(code)
+        assert "PRIMARY = TEAL_A" in fixed
+        assert "STRUCT = GREY_B" in fixed
+        assert "ALERT = RED" in fixed
+
+    def test_does_not_inject_when_role_already_defined(self):
+        code = "MUTED = GREY_A\nt = Text('hi', color=MUTED)\n"
+        fixed, _ = apply_known_fixes(code)
+        # exactly one definition — no duplicate injected
+        assert fixed.count("MUTED = GREY_A") == 1
+
+    def test_does_not_inject_unreferenced_roles(self):
+        code = "t = Text('hi', color=MUTED)\n"
+        fixed, _ = apply_known_fixes(code)
+        # only MUTED is referenced; PRIMARY/STRUCT/etc must not be injected
+        assert "PRIMARY = TEAL_A" not in fixed
+        assert "ALERT = RED" not in fixed
+
+    def test_no_injection_when_no_roles_used(self):
+        code = "t = Text('hi', color=WHITE)\n"
+        fixed, _ = apply_known_fixes(code)
+        assert "= GREY_A" not in fixed
+        assert "PRIMARY" not in fixed
+
+
 # ── apply_known_fixes ─────────────────────────────────────────────────────────
 
 class TestApplyKnownFixes:

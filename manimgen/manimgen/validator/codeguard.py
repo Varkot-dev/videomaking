@@ -140,7 +140,26 @@ _BANNED_KWARGS = [
     "corner_radius",
     "scale_factor",
     "target_position",
+    # ManimCommunity surface kwarg; ManimGL surfaces have no checkerboard concept.
+    # Stripping it (rather than translating) lets the surface render in a solid color.
+    "checkerboard_colors",
 ]
+
+# Canonical color-role → ManimGL constant map. Single source of truth, mirrors
+# the palette table in generator/prompts/director_system.md. The Director shows
+# these roles as a reference but never requires emitting the assignment lines, so
+# scenes write `color=MUTED` with MUTED undefined → NameError. When a role is used
+# but not defined, _inject_color_role_header() prepends the needed definitions.
+_COLOR_ROLE_CONSTANTS: dict[str, str] = {
+    "PRIMARY": "TEAL_A",
+    "SECONDARY": "GOLD",
+    "STRUCT": "GREY_B",
+    "INK": "WHITE",
+    "MUTED": "GREY_A",
+    "SUCCESS": "GREEN",
+    "WARNING": "YELLOW",
+    "ALERT": "RED",
+}
 
 # Registry of known-wrong kwarg names per method.
 # Maps method_name → {wrong_kwarg: correct_kwarg or None (strip)}.
@@ -207,6 +226,13 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
         # ManimCommunity Axes uses x_length/y_length; ManimGL uses width/height
         (r"\bx_length\s*=", "width=", "x_length -> width (ManimGL Axes)"),
         (r"\by_length\s*=", "height=", "y_length -> height (ManimGL Axes)"),
+        # ManimCommunity ThreeDAxes uses z_length; ManimGL uses depth.
+        # (x_axis_config/y_axis_config are VALID ManimGL Axes kwargs — do NOT touch.)
+        (r"\bz_length\s*=", "depth=", "z_length -> depth (ManimGL ThreeDAxes)"),
+        # ManimCommunity surfaces take fill_opacity/fill_color; ManimGL Mobject
+        # has only opacity/color and no **kwargs, so the fill_* forms hard-crash.
+        (r"\bfill_opacity\s*=", "opacity=", "fill_opacity -> opacity (ManimGL Mobject)"),
+        (r"\bfill_color\s*=", "color=", "fill_color -> color (ManimGL Mobject)"),
         (
             r"\.get_graph_point\s*\(",
             ".input_to_graph_point(",
@@ -324,6 +350,10 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
     if font_applied:
         applied.append(font_applied)
 
+    fixed, role_applied = _inject_color_role_header(fixed)
+    if role_applied:
+        applied.append(role_applied)
+
     fixed, text_applied = _strip_outer_text_wrapper(fixed)
     if text_applied:
         applied.append(text_applied)
@@ -343,6 +373,10 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
     fixed, cam_applied = _fix_set_camera_orientation(fixed)
     if cam_applied:
         applied.append(cam_applied)
+
+    fixed, ambient_applied = _fix_begin_ambient_camera_rotation(fixed)
+    if ambient_applied:
+        applied.append(ambient_applied)
 
     fixed, reorient_applied = _fix_reorient_wrong_kwargs(fixed)
     if reorient_applied:
@@ -649,6 +683,43 @@ def _fix_become_inside_play(code: str) -> tuple[str, str | None]:
     return code, None
 
 
+def _inject_color_role_header(code: str) -> tuple[str, str | None]:
+    """Define any color role (PRIMARY/STRUCT/MUTED/...) that is used but undefined.
+
+    Kills the NameError class: the Director writes `color=MUTED` treating the
+    palette roles as built-in constants, but never emits the assignment lines.
+    For each role referenced as a bare name and not already assigned, we prepend
+    `ROLE = CONSTANT`. Injected after the import block so the names are in scope.
+    """
+    injected: list[str] = []
+    for role, const in _COLOR_ROLE_CONSTANTS.items():
+        used = re.search(rf"(?<![\w.]){role}\b", code) is not None
+        defined = re.search(rf"^\s*{role}\s*=", code, flags=re.MULTILINE) is not None
+        if used and not defined:
+            injected.append(f"{role} = {const}")
+
+    if not injected:
+        return code, None
+
+    header = "# Color roles (auto-injected by codeguard — see director palette)\n" + \
+        "\n".join(injected) + "\n"
+
+    # Insert after the last top-level import line so roles are module-scoped before
+    # the Scene class; if there are no imports, prepend at the very top.
+    lines = code.splitlines(keepends=True)
+    last_import = -1
+    for i, line in enumerate(lines):
+        if re.match(r"\s*(from\s+\S+\s+import|import\s+\S+)", line):
+            last_import = i
+    if last_import >= 0:
+        insert_at = last_import + 1
+        new_code = "".join(lines[:insert_at]) + "\n" + header + "".join(lines[insert_at:])
+    else:
+        new_code = header + "\n" + code
+
+    return new_code, f"injected color-role header ({', '.join(injected)})"
+
+
 def _fix_set_camera_orientation(code: str) -> tuple[str, str | None]:
     """Rewrite ManimCommunity set_camera_orientation() → self.frame.reorient().
 
@@ -677,6 +748,33 @@ def _fix_set_camera_orientation(code: str) -> tuple[str, str | None]:
     new, count = re.subn(outer, _replacer, code)
     if count:
         return new, f"set_camera_orientation -> self.frame.reorient ({count})"
+    return code, None
+
+
+def _fix_begin_ambient_camera_rotation(code: str) -> tuple[str, str | None]:
+    """Rewrite ManimCommunity begin_ambient_camera_rotation() → ManimGL form.
+
+        self.begin_ambient_camera_rotation(rate=0.2)
+      → self.frame.add_ambient_rotation(angular_speed=0.2)
+
+    ManimGL has no begin_ambient_camera_rotation (AttributeError on every render);
+    the spin lives on the frame as add_ambient_rotation(angular_speed=...). The
+    ManimCommunity `rate=` kwarg maps to ManimGL `angular_speed=`. A bare call
+    with no args maps to add_ambient_rotation() (its angular_speed defaults).
+    """
+    outer = re.compile(r"self\.begin_ambient_camera_rotation\(([^)]*)\)")
+
+    def _replacer(m: re.Match) -> str:
+        args = m.group(1).strip()
+        rate_m = re.search(r"\brate\s*=\s*(-?[\d.]+)", args)
+        if rate_m:
+            return f"self.frame.add_ambient_rotation(angular_speed={rate_m.group(1)})"
+        # bare call or unrecognized args: use the default spin
+        return "self.frame.add_ambient_rotation()"
+
+    new, count = re.subn(outer, _replacer, code)
+    if count:
+        return new, f"begin_ambient_camera_rotation -> add_ambient_rotation ({count})"
     return code, None
 
 
