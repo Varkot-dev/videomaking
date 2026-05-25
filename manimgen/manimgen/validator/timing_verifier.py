@@ -101,6 +101,45 @@ UNKNOWN = _Unknown()
 Duration = float | _Unknown
 
 
+_FROZEN_FRAME_MARKER = "identical — animation appears frozen"
+
+
+def join_frozen_with_timing(
+    frame_issues: list[str],
+    timing_freeze_confirmed: bool,
+) -> list[str]:
+    """Join frame_checker's frozen-frame signal with the timing oracle (#32).
+
+    frame_checker emits a ``"... identical — animation appears frozen"`` line
+    whenever two sampled frames match. On its own that signal cannot tell a
+    legit narration HOLD (narrator still talking over a deliberately static
+    visual) from a dead tail (animation ended early, multi-second frozen
+    screen). Making it hard unconditionally false-positives on every legit
+    final hold — which is exactly why it was being discarded outright.
+
+    The timing_verifier QUANTIFIES the difference: ``blocking_freezes`` is
+    non-empty only when a cue's resolvable animation ends >= the block
+    threshold before its narration (a real dead tail), and is empty for legit
+    holds and for UNKNOWN cues. So a frozen frame is admitted as a HARD issue
+    IFF timing independently confirms a dead tail. Otherwise it is dropped as a
+    legit hold.
+
+    Non-frozen frame issues (black frames, edge clipping) always pass through
+    unchanged — they are not subject to the timing join.
+
+    Returns the filtered list of frame issues to fold into ``combined_issues``.
+    """
+    kept: list[str] = []
+    for issue in frame_issues:
+        if _FROZEN_FRAME_MARKER in issue:
+            if timing_freeze_confirmed:
+                kept.append(issue)
+            # else: legit hold — drop the frozen signal, do not false-positive.
+            continue
+        kept.append(issue)
+    return kept
+
+
 def blocking_freezes(timing_result: dict) -> list[str]:
     """Return human-readable descriptions of cues whose freeze-frame tail is
     severe enough to block render acceptance (diff >= _FREEZE_BLOCK_THRESHOLD).

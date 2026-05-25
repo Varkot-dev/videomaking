@@ -16,6 +16,7 @@ from manimgen.validator.timing_verifier import (
     _Unknown,
     auto_fix_timing,
     blocking_freezes,
+    join_frozen_with_timing,
     verify_timing,
 )
 
@@ -685,3 +686,55 @@ class TestBlockingFreezes:
     def test_empty_result_is_safe(self):
         assert blocking_freezes({"ok": True, "cues": [], "warnings": []}) == []
         assert blocking_freezes({}) == []
+
+
+class TestJoinFrozenWithTiming:
+    """#32: the timing ∧ frame join that re-admits the frozen-frame signal
+    that retry.py used to discard outright. A frozen frame becomes a HARD issue
+    IFF the timing oracle independently confirms a dead tail; for a legit
+    narration hold it is dropped (no false-positive)."""
+
+    _FROZEN = (
+        "ISSUE: Frames at t=2.0s and t=4.0s are 99% identical — "
+        "animation appears frozen | CAUSE: long wait | FIX: add activity"
+    )
+    _BLACK = "ISSUE: Black/empty frame at t=2.0s | CAUSE: faded out | FIX: keep content"
+    _CLIP = "ISSUE: Content near top edge at t=2.0s — element may be cut off"
+
+    def test_frozen_kept_when_timing_confirms_dead_tail(self):
+        # frozen frame + timing-confirmed freeze → HARD (kept).
+        kept = join_frozen_with_timing([self._FROZEN], timing_freeze_confirmed=True)
+        assert kept == [self._FROZEN]
+
+    def test_frozen_dropped_when_timing_does_not_confirm(self):
+        # frozen frame but narration still running (no blocking freeze) →
+        # legit hold, dropped. This is the case that must NOT false-positive.
+        kept = join_frozen_with_timing([self._FROZEN], timing_freeze_confirmed=False)
+        assert kept == []
+
+    def test_black_frame_always_kept_regardless_of_timing(self):
+        # Black frames are not subject to the timing join — always pass through.
+        assert join_frozen_with_timing([self._BLACK], timing_freeze_confirmed=False) == [
+            self._BLACK
+        ]
+        assert join_frozen_with_timing([self._BLACK], timing_freeze_confirmed=True) == [
+            self._BLACK
+        ]
+
+    def test_clipping_always_kept_regardless_of_timing(self):
+        assert join_frozen_with_timing([self._CLIP], timing_freeze_confirmed=False) == [
+            self._CLIP
+        ]
+
+    def test_mixed_issues_only_frozen_is_filtered(self):
+        issues = [self._BLACK, self._FROZEN, self._CLIP]
+        # No timing confirmation: drop only the frozen line, keep the rest.
+        kept = join_frozen_with_timing(issues, timing_freeze_confirmed=False)
+        assert kept == [self._BLACK, self._CLIP]
+        # Timing confirms: keep everything.
+        kept = join_frozen_with_timing(issues, timing_freeze_confirmed=True)
+        assert kept == issues
+
+    def test_empty_input_is_safe(self):
+        assert join_frozen_with_timing([], timing_freeze_confirmed=True) == []
+        assert join_frozen_with_timing([], timing_freeze_confirmed=False) == []
