@@ -130,7 +130,12 @@ def _resolve_provider() -> str:
     return _LLM_CONFIG["llm_provider"]
 
 
-def chat(system: str, user: str, images: list[str] | None = None) -> str:
+def chat(
+    system: str,
+    user: str,
+    images: list[str] | None = None,
+    json_mode: bool = False,
+) -> str:
     """
     Call the active LLM provider.
 
@@ -139,11 +144,17 @@ def chat(system: str, user: str, images: list[str] | None = None) -> str:
         user:   User message string.
         images: Optional list of base64-encoded PNG strings to include as
                 vision inputs (sent before the text message).
+        json_mode: When True, ask the provider to emit guaranteed-valid JSON
+                (Gemini response_mime_type='application/json'). Use only for
+                calls that expect a JSON object/array — never for code
+                generation, which returns Python. Currently honored by the
+                Gemini provider; ignored by others (they degrade to prompt-only
+                JSON, the prior behavior).
     """
     provider = _resolve_provider()
 
     if provider == "gemini":
-        return _gemini(system, user, images or [])
+        return _gemini(system, user, images or [], json_mode=json_mode)
     elif provider == "anthropic":
         return _anthropic(system, user, images or [])
     elif provider == "ollama":
@@ -152,7 +163,7 @@ def chat(system: str, user: str, images: list[str] | None = None) -> str:
         raise ValueError(f"Unknown LLM_PROVIDER: {provider}")
 
 
-def _gemini(system: str, user: str, images: list[str]) -> str:
+def _gemini(system: str, user: str, images: list[str], json_mode: bool = False) -> str:
     from google import genai
     from google.genai import types
 
@@ -182,10 +193,17 @@ def _gemini(system: str, user: str, images: list[str]) -> str:
         )
     contents.append(user)
 
+    config_kwargs: dict = {"system_instruction": system}
+    if json_mode:
+        # Native structured output: the model emits parseable JSON instead of
+        # us hoping the prompt-instructed JSON happens to be valid and patching
+        # it with regex after the fact.
+        config_kwargs["response_mime_type"] = "application/json"
+
     response = client.models.generate_content(
         model=cfg["gemini_model"],
         contents=contents,
-        config=types.GenerateContentConfig(system_instruction=system),
+        config=types.GenerateContentConfig(**config_kwargs),
     )
     return response.text.strip()
 

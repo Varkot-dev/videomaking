@@ -26,7 +26,9 @@ def _load_critic_system_prompt() -> str:
 def _self_correct(plan: dict, limit: int = _SELF_CORRECT_LIMIT) -> dict:
     critic_system = _load_critic_system_prompt()
     for _ in range(limit):
-        raw = chat(system=critic_system, user=json.dumps(plan, indent=2))
+        raw = chat(
+            system=critic_system, user=json.dumps(plan, indent=2), json_mode=True
+        )
         stripped = _strip_fencing(raw)
         try:
             plan = _safe_json_loads(stripped)
@@ -265,7 +267,7 @@ def _refill_cues_via_llm(
         f"LaTeX backslashes inside Tex() only."
     )
     try:
-        raw = chat(system=_load_system_prompt(), user=user)
+        raw = chat(system=_load_system_prompt(), user=user, json_mode=True)
         # This path INTENTIONALLY accepts a top-level JSON array (the cue list),
         # so use the lenient parser rather than the dict-guaranteeing wrapper.
         parsed = _safe_json_loads_any(_strip_fencing(raw))
@@ -395,7 +397,9 @@ def research_topic(topic: str) -> dict:
     """
     system = _load_researcher_system_prompt()
     raw = chat(
-        system=system, user=f"Research this topic for an educational video: {topic}"
+        system=system,
+        user=f"Research this topic for an educational video: {topic}",
+        json_mode=True,
     )
     try:
         brief = _safe_json_loads(_strip_fencing(raw))
@@ -507,7 +511,7 @@ def plan_lesson(topic: str) -> dict:
     else:
         user_message = f"Create a visual storyboard for: {topic}"
 
-    raw = chat(system=system, user=user_message)
+    raw = chat(system=system, user=user_message, json_mode=True)
     plan = _cap_sections(_safe_json_loads(_strip_fencing(raw)), _MAX_SECTIONS_TOPIC)
     plan = _self_correct(plan)
     # _self_correct wholesale-replaces `plan` with the critic LLM's output,
@@ -570,7 +574,12 @@ def plan_lesson_from_pdf(pdf_path: str) -> dict:
     logger.info(
         "[planner] Calling LLM for PDF lesson plan (images: %d)...", len(images)
     )
-    raw = chat(system=system, user=user_message, images=images if images else None)
+    raw = chat(
+        system=system,
+        user=user_message,
+        images=images if images else None,
+        json_mode=True,
+    )
     plan = _cap_sections(_safe_json_loads(_strip_fencing(raw)), _MAX_SECTIONS_PDF)
     plan = _self_correct(plan)
     # Same invariant as the topic path: _self_correct wholesale-replaces

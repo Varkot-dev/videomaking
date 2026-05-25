@@ -60,6 +60,58 @@ class TestGeminiClientConfigured:
         assert retry_call.kwargs["attempts"] == _REQUEST_RETRY_ATTEMPTS
 
 
+class TestGeminiJsonMode:
+    """_gemini(json_mode=True) must request guaranteed-valid JSON from the model.
+
+    Guards against the planner JSONDecodeError class (2026-05-25): Gemini emitted
+    a syntactically invalid lesson plan (missing comma) and the regex repair could
+    not fix it. response_mime_type='application/json' makes the model emit
+    parseable JSON natively, eliminating the failure class.
+    """
+
+    def _run_gemini(self, monkeypatch, **kwargs):
+        monkeypatch.setenv("GEMINI_API_KEY", "fake-key-for-test")
+        fake_genai = MagicMock()
+        fake_types = MagicMock()
+        fake_response = MagicMock()
+        fake_response.text = "{}"
+        fake_genai.Client.return_value.models.generate_content.return_value = fake_response
+        with patch.dict(
+            "sys.modules",
+            {"google": MagicMock(genai=fake_genai), "google.genai": fake_genai,
+             "google.genai.types": fake_types},
+        ):
+            fake_genai.types = fake_types
+            _gemini(system="sys", user="user", images=[], **kwargs)
+        return fake_types
+
+    def test_json_mode_sets_response_mime_type(self, monkeypatch):
+        fake_types = self._run_gemini(monkeypatch, json_mode=True)
+        cfg_call = fake_types.GenerateContentConfig.call_args
+        assert cfg_call is not None, "GenerateContentConfig was not constructed"
+        assert cfg_call.kwargs.get("response_mime_type") == "application/json", (
+            "json_mode=True must set response_mime_type='application/json'"
+        )
+
+    def test_default_does_not_force_json(self, monkeypatch):
+        fake_types = self._run_gemini(monkeypatch)
+        cfg_call = fake_types.GenerateContentConfig.call_args
+        assert cfg_call is not None
+        assert cfg_call.kwargs.get("response_mime_type") is None, (
+            "Default chat() must NOT force JSON — scene/code generation returns Python."
+        )
+
+    def test_chat_forwards_json_mode_to_gemini(self, monkeypatch):
+        """chat(json_mode=True) must thread through to the Gemini provider."""
+        monkeypatch.setenv("GEMINI_API_KEY", "fake-key-for-test")
+        monkeypatch.setenv("LLM_PROVIDER", "gemini")
+        with patch("manimgen.llm._gemini", return_value="{}") as mock_gemini:
+            chat(system="sys", user="user", json_mode=True)
+        assert mock_gemini.call_args.kwargs.get("json_mode") is True, (
+            "chat() must forward json_mode to _gemini()"
+        )
+
+
 class TestAnthropicClientConfigured:
     """_anthropic() must construct Anthropic client with explicit timeout + retries."""
 
