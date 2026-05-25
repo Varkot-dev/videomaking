@@ -14,6 +14,7 @@
 # not estimated. The scene generator uses them as hard constraints so
 # the animation fills exactly the time the narrator is speaking.
 
+from manimgen.planner.cue_parser import align_cue_indices
 from manimgen.renderer.tts import WordTimestamp, cue_times
 from manimgen.types import CueSegment
 
@@ -24,6 +25,7 @@ def compute_segments(
     timestamps: list[WordTimestamp],
     cue_word_indices: list[int],
     audio_duration: float,
+    clean_text: str | None = None,
 ) -> list[CueSegment]:
     """Return one CueSegment per cue interval, with exact durations from audio.
 
@@ -31,14 +33,33 @@ def compute_segments(
         timestamps:       Word-level timestamps from TTS (tts.generate_narration).
         cue_word_indices: 0-based word indices marking animation boundaries,
                           always starting with 0. From lesson plan field
-                          cue_word_indices. E.g. [0, 9, 23].
+                          cue_word_indices. E.g. [0, 9, 23]. These were derived
+                          from ``str.split()`` in ``cue_parser.parse_cues``.
         audio_duration:   Total duration of the narration audio file in seconds.
+        clean_text:       The narration string that was sent to TTS (no [CUE]
+                          tags). When provided, ``cue_word_indices`` is
+                          re-derived against the CANONICAL edge-tts WordBoundary
+                          tokenization (``timestamps[i].word``) before indexing,
+                          because str.split() and edge-tts can tokenize
+                          contractions/numbers/hyphens differently. An
+                          in-range-but-shifted index would otherwise silently
+                          resolve to the wrong word's onset → inaudible A/V
+                          desync. When ``None`` (callers passing already-aligned
+                          indices, or tests), the indices are used as-is.
 
     Returns:
         List of CueSegment in order. The durations sum to audio_duration.
     """
     if not cue_word_indices:
         cue_word_indices = [0]
+
+    # Re-derive against the canonical edge-tts token stream when we know the
+    # source narration. The edge-tts WordBoundary words are the ground truth
+    # the timestamps are indexed by, so the cue indices must agree with them.
+    if clean_text is not None:
+        cue_word_indices = align_cue_indices(
+            clean_text, cue_word_indices, [t.word for t in timestamps]
+        )
 
     starts = cue_times(timestamps, cue_word_indices)
     total = len(starts)

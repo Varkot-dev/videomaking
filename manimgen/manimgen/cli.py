@@ -525,7 +525,12 @@ def _run_section(
 
             audio_path, timestamps, audio_duration = tts_result
             cue_word_indices = section.get("cue_word_indices", [0])
-            segments = compute_segments(timestamps, cue_word_indices, audio_duration)
+            segments = compute_segments(
+                timestamps,
+                cue_word_indices,
+                audio_duration,
+                clean_text=section.get("narration", ""),
+            )
             log.info("[manimgen] %d cue segment(s) for this section", len(segments))
 
             if _all_cues_muxed(section, idx, len(segments)):
@@ -666,7 +671,10 @@ def main():
                 audio_path, timestamps, audio_duration = tts_result
                 cue_word_indices = section.get("cue_word_indices", [0])
                 segments = compute_segments(
-                    timestamps, cue_word_indices, audio_duration
+                    timestamps,
+                    cue_word_indices,
+                    audio_duration,
+                    clean_text=section.get("narration", ""),
                 )
                 audio_slices = slice_audio(
                     audio_path,

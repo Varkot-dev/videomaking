@@ -100,3 +100,47 @@ class TestComputeSegments:
         segs = compute_segments(ts, [0], 1.0)
         assert len(segs) == 1
         assert abs(segs[0].duration - 1.0) < 1e-6
+
+
+class TestCanonicalAlignmentSeam:
+    """#36 — compute_segments(clean_text=...) re-derives cue indices against
+    the edge-tts WordBoundary tokenization carried in `timestamps`, so an
+    in-range-but-shifted str.split index can't silently desync the segment.
+    """
+
+    def test_clean_text_none_uses_indices_as_is(self):
+        # Back-compat: no clean_text → indices used verbatim (unchanged behaviour).
+        segs = compute_segments(TIMESTAMPS, [0, 5], AUDIO_DURATION)
+        assert abs(segs[1].start_time - TIMESTAMPS[5].start) < 1e-6
+
+    def test_contraction_realigns_segment_start(self):
+        # edge-tts split "you'll" into "you" + "'ll", so its WordBoundary stream
+        # (and thus `timestamps`) has one MORE token than str.split(). A cue at
+        # str.split index 4 ("you'll") must resolve to the onset of "you".
+        ts = _make_timestamps([
+            ("It",      0.10, 0.30),
+            ("'s",      0.30, 0.45),
+            ("a",       0.50, 0.60),
+            ("classic", 0.62, 1.10),
+            ("that",    1.12, 1.40),
+            ("you",     1.45, 1.70),   # <- correct onset for the "you'll" cue
+            ("'ll",     1.70, 1.85),
+            ("use",     1.90, 2.20),
+        ])
+        clean = "It's a classic that you'll use"  # 6 str.split tokens
+        # Raw str.split index 4 = "you'll". Without re-derivation it would index
+        # ts[4] = "that" (1.12s). With clean_text it must land on "you" (1.45s).
+        segs = compute_segments(ts, [0, 4], 2.40, clean_text=clean)
+        assert abs(segs[1].start_time - 1.45) < 1e-6, (
+            f"Expected segment to start at 'you' (1.45s), got {segs[1].start_time}"
+        )
+        # And the buggy raw-index behaviour is demonstrably different:
+        raw = compute_segments(ts, [0, 4], 2.40)  # no clean_text
+        assert abs(raw[1].start_time - 1.12) < 1e-6  # lands on "that" — the desync
+
+    def test_matching_tokenization_is_noop(self):
+        # When edge-tts agrees with str.split, clean_text changes nothing.
+        clean = " ".join(t.word for t in TIMESTAMPS)
+        with_text = compute_segments(TIMESTAMPS, [0, 5, 9], AUDIO_DURATION, clean_text=clean)
+        without = compute_segments(TIMESTAMPS, [0, 5, 9], AUDIO_DURATION)
+        assert [s.start_time for s in with_text] == [s.start_time for s in without]
