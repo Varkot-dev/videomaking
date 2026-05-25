@@ -25,6 +25,31 @@ from manimgen.validator.codeguard import precheck_and_autofix, precheck_and_auto
 _WORDS_PER_MINUTE = 130
 _MAX_EXAMPLES = 6
 
+# Technique tags that require a 3D scene. A cue visual mentioning any of these
+# promotes the generated `class X(Scene)` to `class X(ThreeDScene)`. Built once
+# at module load — previously rebuilt on every generate_scenes() call.
+_3D_TECHNIQUES = frozenset({"3d_surface", "camera_rotation"})
+
+# Negation words that, when they directly precede a 3D tag, mean the tag is
+# being ruled out rather than requested ("no 3d_surface needed").
+_NEGATION_PREFIXES = ("no", "not", "without", "avoid", "skip")
+
+
+def _requests_3d(cue_visuals: str) -> bool:
+    """True if any 3D technique tag appears as a non-negated whole token.
+
+    Uses a word-boundary match (an underscore counts as a word char, so
+    `\\b3d_surface\\b` matches the full tag and not a fragment of a longer
+    word) and rejects matches immediately preceded by a negation word.
+    """
+    for tag in _3D_TECHNIQUES:
+        for m in re.finditer(rf"\b{re.escape(tag)}\b", cue_visuals):
+            preceding = cue_visuals[: m.start()].rstrip().split()
+            if preceding and preceding[-1] in _NEGATION_PREFIXES:
+                continue
+            return True
+    return False
+
 
 def _load_director_prompt() -> str:
     here = os.path.dirname(__file__)
@@ -197,10 +222,12 @@ def generate_scenes(
     if not code.startswith("from manimlib"):
         code = "from manimlib import *\n\n\n" + code
 
-    # If any cue visual requests a 3D technique, promote Scene → ThreeDScene
-    _3d_techniques = {"3d_surface", "camera_rotation"}
+    # If any cue visual requests a 3D technique, promote Scene → ThreeDScene.
+    # Match the tag as a whole token (not a substring) and skip negated
+    # mentions like "no 3d_surface needed" / "without camera_rotation" so a
+    # disclaimer never wrongly forces a (slower, crash-prone) 3D scene.
     cue_visuals = " ".join(c.get("visual", "").lower() for c in section.get("cues", []))
-    if any(t in cue_visuals for t in _3d_techniques):
+    if _requests_3d(cue_visuals):
         code = re.sub(r"\bclass\s+(\w+)\(Scene\):", r"class \1(ThreeDScene):", code)
 
     code = precheck_and_autofix(code)
@@ -214,9 +241,17 @@ def generate_scenes(
         f.write(code)
 
     # Run file-based full validation (layout smells, timing smells, banned patterns)
-    # AFTER saving — the string-only precheck above skips these checks.
-    precheck_and_autofix_file(scene_path)
+    # AFTER saving — the string-only precheck above skips these checks. Surface
+    # a non-ok result instead of discarding it and proceeding to a render that
+    # is already known to be doomed (mirrors runner.py's precheck["ok"] gate).
+    precheck = precheck_and_autofix_file(scene_path)
     with open(scene_path) as f:
         code = f.read()
+
+    if not precheck["ok"]:
+        raise ValueError(
+            f"Generated scene {os.path.basename(scene_path)} failed precheck "
+            f"validation:\n{precheck['stderr']}"
+        )
 
     return code, class_name, scene_path

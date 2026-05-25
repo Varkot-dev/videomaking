@@ -1,7 +1,13 @@
 import base64
+import os
 import re
 import sys
 import warnings
+
+# Cap the number of pages rendered/parsed from a single PDF. Each page render
+# is a base64 PNG held in memory; an unbounded book-length PDF would balloon
+# memory and the downstream LLM payload. Pages beyond the cap are ignored.
+_MAX_PDF_PAGES = 50
 
 
 def _clean_text(text: str) -> str:
@@ -116,7 +122,18 @@ def parse_pdf(pdf_path: str) -> dict:
             "extracted_pages": int  number of pages with text
             "images": [str],        base64-encoded PNG renders, one per page
         }
+
+    Raises:
+        FileNotFoundError: if pdf_path is not an existing file.
+        ValueError:        if pdf_path does not have a .pdf extension.
     """
+    # Validate the input at the boundary before opening anything. The path is
+    # operator/user supplied and flows into file reads and an LLM payload.
+    if not os.path.isfile(pdf_path):
+        raise FileNotFoundError(f"PDF not found: {pdf_path!r}")
+    if os.path.splitext(pdf_path)[1].lower() != ".pdf":
+        raise ValueError(f"Expected a .pdf file, got: {pdf_path!r}")
+
     try:
         import fitz  # PyMuPDF
     except ImportError:
@@ -135,12 +152,21 @@ def parse_pdf(pdf_path: str) -> dict:
     reader = PdfReader(pdf_path)
     total_pages = len(reader.pages)
 
+    pages_to_process = min(total_pages, _MAX_PDF_PAGES)
+    if total_pages > _MAX_PDF_PAGES:
+        warnings.warn(
+            f"[pdf_parser] PDF has {total_pages} pages — capping at "
+            f"{_MAX_PDF_PAGES}. Remaining pages are ignored."
+        )
+
     page_texts = []
     all_images: list[str] = []
     skipped = 0
 
     for i, page in enumerate(reader.pages):
-        # Render every page regardless of text content
+        if i >= pages_to_process:
+            break
+        # Render every processed page regardless of text content
         all_images.append(_render_page_to_b64(doc, i))
 
         try:
@@ -161,7 +187,7 @@ def parse_pdf(pdf_path: str) -> dict:
         page_texts.append(text)
 
     doc.close()
-    extracted_pages = total_pages - skipped
+    extracted_pages = pages_to_process - skipped
 
     if not page_texts and not all_images:
         warnings.warn("[pdf_parser] No content could be extracted from any page.")

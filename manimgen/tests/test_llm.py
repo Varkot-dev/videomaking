@@ -117,3 +117,57 @@ class TestProviderResolution:
         monkeypatch.setenv("LLM_PROVIDER", "nonexistent")
         with pytest.raises(ValueError, match="Unknown LLM_PROVIDER"):
             chat(system="sys", user="user")
+
+
+class TestOllamaUrlSsrfGuard:
+    """_validate_ollama_url rejects anything outside localhost/private range."""
+
+    def test_localhost_allowed(self):
+        from manimgen.llm import _validate_ollama_url
+
+        assert _validate_ollama_url("http://localhost:11434") == (
+            "http://localhost:11434"
+        )
+
+    def test_loopback_ip_allowed(self):
+        from manimgen.llm import _validate_ollama_url
+
+        assert _validate_ollama_url("http://127.0.0.1:11434")
+
+    def test_private_range_allowed(self):
+        from manimgen.llm import _validate_ollama_url
+
+        assert _validate_ollama_url("http://192.168.1.5:11434")
+
+    def test_public_ip_blocked(self):
+        from manimgen.llm import _validate_ollama_url
+
+        with pytest.raises(ValueError, match="non-local address"):
+            _validate_ollama_url("http://8.8.8.8:11434")
+
+    def test_public_hostname_blocked(self):
+        from manimgen.llm import _validate_ollama_url
+
+        # Resolve a public host to a public address deterministically.
+        with patch("manimgen.llm.socket.getaddrinfo") as mock_gai:
+            mock_gai.return_value = [
+                (None, None, None, None, ("93.184.216.34", 0))
+            ]
+            with pytest.raises(ValueError, match="non-local address"):
+                _validate_ollama_url("http://evil.example.com:11434")
+
+    def test_non_http_scheme_blocked(self):
+        from manimgen.llm import _validate_ollama_url
+
+        with pytest.raises(ValueError, match="http/https"):
+            _validate_ollama_url("ftp://localhost:11434")
+
+    def test_ollama_call_blocks_public_url(self, monkeypatch):
+        """_ollama must refuse a public base URL before issuing any request."""
+        import manimgen.llm as llm_mod
+
+        monkeypatch.setitem(llm_mod._LLM_CONFIG, "ollama_base_url", "http://8.8.8.8")
+        with patch("requests.post") as mock_post:
+            with pytest.raises(ValueError, match="non-local address"):
+                llm_mod._ollama("sys", "user", [])
+            mock_post.assert_not_called()

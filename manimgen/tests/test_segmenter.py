@@ -101,6 +101,18 @@ class TestComputeSegments:
         assert len(segs) == 1
         assert abs(segs[0].duration - 1.0) < 1e-6
 
+    def test_degenerate_next_cue_index_uses_word_end_not_start(self):
+        # Malformed indices where the next cue points at word 0 → last_word_idx
+        # = -1. The boundary must fall back to that word's .end (0.50), never
+        # its .start (0.10), which would clip the last syllable and produce a
+        # nonsensical (here negative-before-clamp) duration.
+        segs = compute_segments(TIMESTAMPS, [0, 0], AUDIO_DURATION)
+        # Cue 0 boundary = TIMESTAMPS[0].end = 0.50, audio_start = 0.0.
+        assert abs(segs[0].duration - 0.50) < 1e-6, (
+            f"Expected boundary at word0.end (0.50) but got {segs[0].duration}. "
+            "Fallback must use .end, not .start (0.10), to match the A/V contract."
+        )
+
 
 class TestCanonicalAlignmentSeam:
     """#36 — compute_segments(clean_text=...) re-derives cue indices against

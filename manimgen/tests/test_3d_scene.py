@@ -206,5 +206,102 @@ class TestThreeDSceneSubstitution(unittest.TestCase):
             self.assertIn("ThreeDScene", saved)
 
 
+class TestGenerateScenesPrecheckGate(unittest.TestCase):
+    """generate_scenes must surface a failed file precheck instead of
+    silently returning code that is already known to be un-renderable."""
+
+    def _make_section(self) -> dict:
+        return {
+            "id": "section_01",
+            "title": "Test Section",
+            "narration": "Hello world.",
+            "cues": [{"index": 0, "visual": "axes_curve plot"}],
+        }
+
+    def test_precheck_failure_raises(self):
+        import tempfile
+        from manimgen.generator import scene_generator
+
+        # Syntactically broken scene → validate_scene_code returns errors →
+        # precheck_and_autofix_file returns {"ok": False}.
+        broken = (
+            "from manimlib import *\n\n"
+            "class TestSection01(Scene):\n"
+            "    def construct(self)\n"  # missing colon → SyntaxError
+            "        self.wait(1.0)\n"
+        )
+        with (
+            patch("manimgen.generator.scene_generator.chat", return_value=broken),
+            patch(
+                "manimgen.generator.scene_generator.precheck_and_autofix",
+                side_effect=lambda x: x,
+            ),
+            patch("manimgen.generator.scene_generator.paths") as mock_paths,
+            tempfile.TemporaryDirectory() as tmpdir,
+        ):
+            mock_paths.scenes_dir.return_value = tmpdir
+            with self.assertRaisesRegex(ValueError, "failed precheck"):
+                scene_generator.generate_scenes(
+                    self._make_section(), cue_durations=[5.0]
+                )
+
+    def test_valid_scene_does_not_raise(self):
+        import tempfile
+        from manimgen.generator import scene_generator
+
+        good = (
+            "from manimlib import *\n\n"
+            "class TestSection01(Scene):\n"
+            "    def construct(self):\n"
+            "        self.wait(1.0)\n"
+        )
+        with (
+            patch("manimgen.generator.scene_generator.chat", return_value=good),
+            patch(
+                "manimgen.generator.scene_generator.precheck_and_autofix",
+                side_effect=lambda x: x,
+            ),
+            patch("manimgen.generator.scene_generator.paths") as mock_paths,
+            tempfile.TemporaryDirectory() as tmpdir,
+        ):
+            mock_paths.scenes_dir.return_value = tmpdir
+            # Must not raise; the file is written inside the tmpdir context.
+            code, class_name, scene_path = scene_generator.generate_scenes(
+                self._make_section(), cue_durations=[5.0]
+            )
+            self.assertTrue(os.path.isfile(scene_path))
+            self.assertIn("class TestSection01(Scene):", code)
+
+
+class TestRequests3DWordBoundary(unittest.TestCase):
+    """_requests_3d uses whole-token matching and skips negated mentions."""
+
+    def setUp(self):
+        from manimgen.generator.scene_generator import _requests_3d
+
+        self._requests_3d = staticmethod(_requests_3d)
+
+    def test_plain_tag_triggers(self):
+        self.assertTrue(self._requests_3d("technique: 3d_surface here"))
+        self.assertTrue(self._requests_3d("use camera_rotation to spin"))
+
+    def test_negated_tag_does_not_trigger(self):
+        self.assertFalse(self._requests_3d("no 3d_surface needed for this 2d plot"))
+        self.assertFalse(self._requests_3d("without camera_rotation, keep it flat"))
+        self.assertFalse(self._requests_3d("avoid 3d_surface; stay in 2d"))
+
+    def test_mixed_negated_and_affirmed_triggers(self):
+        # One cue rules it out, another genuinely requests it → must promote.
+        text = "cue a: no 3d_surface. cue b: render a 3d_surface mesh"
+        self.assertTrue(self._requests_3d(text))
+
+    def test_substring_of_larger_word_does_not_trigger(self):
+        # A bare mention buried in another token must not match.
+        self.assertFalse(self._requests_3d("the my3d_surfaceX label"))
+
+    def test_no_tag_does_not_trigger(self):
+        self.assertFalse(self._requests_3d("plot y=x^2 on axes"))
+
+
 if __name__ == "__main__":
     unittest.main()

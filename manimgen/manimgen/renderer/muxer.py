@@ -217,8 +217,22 @@ def _get_duration(path: str) -> float:
     return max(0.1, dur)
 
 
+# A single mux/cut should finish in seconds. Cap at 300s so a wedged ffmpeg
+# (e.g. a malformed filtergraph that never completes) is reaped instead of
+# hanging the whole pipeline. Mirrors assembler's 300s subprocess timeouts.
+_FFMPEG_TIMEOUT_SECONDS = 300
+
+
 def _run(cmd: list[str], output_path: str) -> None:
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=_FFMPEG_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"[muxer] ffmpeg timed out after {_FFMPEG_TIMEOUT_SECONDS}s "
+            f"for {output_path}"
+        )
     if result.returncode != 0:
         raise RuntimeError(f"[muxer] ffmpeg failed for {output_path}:\n{result.stderr}")
 
@@ -255,7 +269,19 @@ def _cut_one(video_path: str, start: float, dur: float, out_path: str, i: int) -
         "-an",
         out_path,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=_FFMPEG_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired:
+        logger.error(
+            "[cutter] FFmpeg timed out after %ds for cue %d",
+            _FFMPEG_TIMEOUT_SECONDS,
+            i,
+        )
+        raise RuntimeError(
+            f"cutter timed out after {_FFMPEG_TIMEOUT_SECONDS}s for cue {i}"
+        )
     if result.returncode != 0:
         logger.error("[cutter] FFmpeg failed for cue %d: %s", i, result.stderr[-500:])
         raise RuntimeError(f"cutter failed for cue {i}: {result.stderr[-200:]}")

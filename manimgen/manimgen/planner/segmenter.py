@@ -75,8 +75,14 @@ def compute_segments(
             # of the first word in the next segment. This ensures the last
             # syllable of each cue is not cut off mid-word.
             last_word_idx = cue_word_indices[i + 1] - 1
+            # When the next cue starts at word 0 (degenerate/malformed indices),
+            # there is no preceding word, so fall back to the next cue's first
+            # word .end — never its .start, which would re-introduce the
+            # last-syllable clipping the .end boundary exists to prevent.
             boundary = (
-                timestamps[last_word_idx].end if last_word_idx >= 0 else starts[i + 1]
+                timestamps[last_word_idx].end
+                if last_word_idx >= 0
+                else timestamps[cue_word_indices[i + 1]].end
             )
             duration = boundary - audio_start
         else:

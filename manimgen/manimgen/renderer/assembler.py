@@ -332,21 +332,41 @@ def _has_audio_stream(path: str) -> bool:
             return True
         return out.strip() != ""
     except Exception as exc:
-        # If probing fails, assume audio is present to use the safer encode path.
-        # Log so transient probe failures are observable.
+        # Fail safe to False: the no-audio branch in _normalise_all injects a
+        # silent anullsrc track, which always yields a valid [v][a] clip.
+        # Assuming audio *present* when it is not makes ffmpeg's `-c:a aac`
+        # map fail outright (there is no stream to encode), aborting assembly.
+        # Log so transient probe failures stay observable.
         import logging
 
         logging.getLogger(__name__).warning(
-            "[assembler] Audio stream probe failed for %s: %s — assuming audio present",
+            "[assembler] Audio stream probe failed for %s: %s — assuming NO audio "
+            "(silent track will be injected)",
             os.path.basename(path),
             exc,
         )
-        return True
+        return False
 
 
 def _xfade_pair(a: str, b: str, out: str) -> None:
     a_dur = _video_duration(a)
-    offset = max(0.0, a_dur - _XFADE_DURATION)
+    # If the first clip is at/under the xfade window (e.g. _video_duration hit
+    # its 0.1s floor on unreadable metadata), a fixed 0.3s xfade would force
+    # offset=0 and cross-dissolve the entire first section from frame one.
+    # Shrink the transition to half the available duration so the offset stays
+    # positive and the first section is mostly shown before the dissolve.
+    xfade_dur = _XFADE_DURATION
+    if a_dur <= _XFADE_DURATION:
+        xfade_dur = max(0.01, a_dur / 2.0)
+        logging.getLogger(__name__).warning(
+            "[assembler] First clip %s is only %.3fs (<= %.2fs xfade window) — "
+            "shrinking transition to %.3fs to avoid dissolving the whole section.",
+            os.path.basename(a),
+            a_dur,
+            _XFADE_DURATION,
+            xfade_dur,
+        )
+    offset = max(0.0, a_dur - xfade_dur)
     subprocess.run(
         [
             "ffmpeg",
@@ -358,8 +378,8 @@ def _xfade_pair(a: str, b: str, out: str) -> None:
             "-filter_complex",
             (
                 f"[0:v][1:v]xfade=transition=fade:"
-                f"duration={_XFADE_DURATION}:offset={offset}[v];"
-                f"[0:a][1:a]acrossfade=d={_XFADE_DURATION}[a]"
+                f"duration={xfade_dur}:offset={offset}[v];"
+                f"[0:a][1:a]acrossfade=d={xfade_dur}[a]"
             ),
             "-map",
             "[v]",

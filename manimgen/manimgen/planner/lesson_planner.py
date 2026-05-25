@@ -6,6 +6,7 @@ import os
 from manimgen.llm import chat
 from manimgen.planner.cue_parser import parse_cues
 from manimgen.utils import sanitize_section_id
+from manimgen.utils import strip_fencing as _strip_fencing
 
 logger = logging.getLogger(__name__)
 
@@ -284,8 +285,6 @@ def _refill_cues_via_llm(
     return cues
 
 
-from manimgen.utils import strip_fencing as _strip_fencing
-
 # Sentinel the planner is instructed to use in place of a LaTeX backslash,
 # because a raw "\" in a JSON string value silently corrupts or breaks
 # json.loads (\f -> form-feed, \t -> tab, \x -> error). The planner emits
@@ -498,7 +497,7 @@ def _format_research_brief(brief: dict) -> str:
 
 
 def plan_lesson(topic: str) -> dict:
-    print(f"[planner] Researching topic: {topic}")
+    logger.info("[planner] Researching topic: %s", topic)
     brief = research_topic(topic)
     research_material = _format_research_brief(brief)
 
@@ -521,18 +520,19 @@ def plan_lesson(topic: str) -> dict:
 def plan_lesson_from_pdf(pdf_path: str) -> dict:
     from manimgen.input.pdf_parser import parse_pdf
 
-    print(f"[planner] Parsing PDF: {pdf_path}")
+    logger.info("[planner] Parsing PDF: %s", pdf_path)
     parsed = parse_pdf(pdf_path)
     images = parsed.get("images", [])
 
     if not parsed["raw_text"] and not images:
         raise ValueError(f"No content could be extracted from '{pdf_path}'.")
 
-    print(
-        f"[planner] Extracted {parsed['extracted_pages']} pages, "
-        f"{len(parsed['chunks'])} chunks, "
-        f"{len(parsed['raw_text'])} chars, "
-        f"{len(images)} image(s)"
+    logger.info(
+        "[planner] Extracted %d pages, %d chunks, %d chars, %d image(s)",
+        parsed["extracted_pages"],
+        len(parsed["chunks"]),
+        len(parsed["raw_text"]),
+        len(images),
     )
 
     MAX_CHARS = 24_000
@@ -567,7 +567,9 @@ def plan_lesson_from_pdf(pdf_path: str) -> dict:
         images = images[:MAX_IMAGES]
 
     system = _load_pdf_system_prompt()
-    print(f"[planner] Calling LLM for PDF lesson plan (images: {len(images)})...")
+    logger.info(
+        "[planner] Calling LLM for PDF lesson plan (images: %d)...", len(images)
+    )
     raw = chat(system=system, user=user_message, images=images if images else None)
     plan = _cap_sections(_safe_json_loads(_strip_fencing(raw)), _MAX_SECTIONS_PDF)
     plan = _self_correct(plan)

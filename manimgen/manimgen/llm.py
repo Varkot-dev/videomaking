@@ -17,8 +17,11 @@ Usage:
     response = chat(system="...", user="...")
 """
 
+import ipaddress
 import logging
 import os
+import socket
+from urllib.parse import urlparse
 
 import yaml
 from dotenv import load_dotenv
@@ -73,11 +76,58 @@ def _load_llm_config() -> dict:
         return dict(_DEFAULTS)
 
 
+# Parsed once at import time, mirroring paths._PATHS and tts._TTS_CFG. The
+# previous behaviour re-read and re-parsed config.yaml on every chat() call
+# (twice per call: once in _resolve_provider, once in the provider helper).
+_LLM_CONFIG = _load_llm_config()
+
+
+def _validate_ollama_url(url: str) -> str:
+    """Reject Ollama base URLs that point outside localhost/private ranges.
+
+    The Ollama base URL is operator-supplied (config.yaml / defaults) and is
+    used verbatim in an outbound POST. Without validation a malicious or
+    mistyped config could turn the pipeline into an SSRF vector against
+    arbitrary internal services. We only allow loopback and RFC1918 private
+    addresses — the only places a local Ollama server is ever reachable.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(
+            f"ollama_base_url must use http/https, got {parsed.scheme!r}: {url}"
+        )
+    host = parsed.hostname
+    if not host:
+        raise ValueError(f"ollama_base_url has no host: {url}")
+
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror as exc:
+        raise ValueError(f"ollama_base_url host {host!r} does not resolve: {exc}")
+
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        # 0.0.0.0 / :: are classified is_private by ipaddress but are
+        # unspecified (not a real loopback); reject them explicitly so the
+        # guard means "a local Ollama is actually reachable here".
+        if ip.is_unspecified:
+            raise ValueError(
+                f"ollama_base_url {url!r} resolves to unspecified address {ip} — "
+                "use 127.0.0.1 or localhost explicitly (SSRF guard)."
+            )
+        if not (ip.is_loopback or ip.is_private or ip.is_link_local):
+            raise ValueError(
+                f"ollama_base_url {url!r} resolves to non-local address {ip} — "
+                "only localhost/private-range Ollama servers are allowed (SSRF guard)."
+            )
+    return url
+
+
 def _resolve_provider() -> str:
     env = os.environ.get("LLM_PROVIDER", "").strip().lower()
     if env:
         return env
-    return _load_llm_config()["llm_provider"]
+    return _LLM_CONFIG["llm_provider"]
 
 
 def chat(system: str, user: str, images: list[str] | None = None) -> str:
@@ -106,7 +156,7 @@ def _gemini(system: str, user: str, images: list[str]) -> str:
     from google import genai
     from google.genai import types
 
-    cfg = _load_llm_config()
+    cfg = _LLM_CONFIG
     client = genai.Client(
         api_key=os.environ["GEMINI_API_KEY"],
         http_options=types.HttpOptions(
@@ -143,7 +193,7 @@ def _gemini(system: str, user: str, images: list[str]) -> str:
 def _anthropic(system: str, user: str, images: list[str]) -> str:
     import anthropic
 
-    cfg = _load_llm_config()
+    cfg = _LLM_CONFIG
     client = anthropic.Anthropic(
         api_key=os.environ["ANTHROPIC_API_KEY"],
         timeout=_REQUEST_TIMEOUT_SECONDS,
@@ -172,12 +222,13 @@ def _anthropic(system: str, user: str, images: list[str]) -> str:
 def _ollama(system: str, user: str, images: list[str]) -> str:
     import requests
 
-    cfg = _load_llm_config()
+    cfg = _LLM_CONFIG
+    base_url = _validate_ollama_url(cfg["ollama_base_url"])
     user_msg: dict = {"role": "user", "content": user}
     if images:
         user_msg["images"] = images
 
-    url = f"{cfg['ollama_base_url']}/api/chat"
+    url = f"{base_url}/api/chat"
     payload = {
         "model": cfg["ollama_model"],
         "messages": [{"role": "system", "content": system}, user_msg],

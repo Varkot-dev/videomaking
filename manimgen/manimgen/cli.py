@@ -173,13 +173,6 @@ def _topic_hash(topic_or_pdf: str) -> str:
     return hashlib.sha256(topic_or_pdf.encode()).hexdigest()[:8]
 
 
-def _rendered_section_path(section: dict) -> str:
-    """Path to the full (pre-cut) rendered section video from ManimGL."""
-    from manimgen.utils import section_class_name
-
-    return os.path.join("videos", f"{section_class_name(section)}.mp4")
-
-
 def _sidecar_hash_path(video_path: str) -> str:
     """Sidecar file that stores the topic hash next to a rendered video."""
     return video_path + ".hash"
