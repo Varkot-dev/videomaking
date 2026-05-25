@@ -1,5 +1,19 @@
 # ManimGen — Session Guide
 
+## ⚠️ Before running the pipeline: env-doctor
+Recurring setup/version landmines (manimlib import, `setuptools<81` for
+`pkg_resources`, manimgen editable path, broken `--fps`, planner `json_mode`)
+are **actively guarded**. The `.claude/settings.json` SessionStart hook runs
+`python3 scripts/env_doctor.py` automatically; run it manually anytime with:
+
+```bash
+python3 scripts/env_doctor.py   # exit 1 = blocking issue, prints the exact fix
+```
+
+Full diagnoses + fixes: **`docs/KNOWN_ISSUES.md`**. When you find a NEW recurring
+breakage: fix it, add a check to `scripts/env_doctor.py`, document it in
+`docs/KNOWN_ISSUES.md`. Enforcement beats memory.
+
 ## What this project is
 Automated pipeline: **topic string or PDF → 3Blue1Brown-style animated explainer video with narration.**
 Uses an audio-first CUE pipeline where spoken word timestamps drive animation durations — no speed warping.

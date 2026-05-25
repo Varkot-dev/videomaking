@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/varshithkotagiri/videomaking/manimgen/scripts/env_doctor.py 1>&2 || echo '[env-doctor] Blocking setup issues detected above — fix before running the manimgen pipeline.' 1>&2",
+            "description": "Run the manimgen env-doctor at session start to catch known recurring setup landmines (manimlib import, setuptools<81, manimgen path, --fps crash, planner json_mode) with their fixes"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Write|Edit",
