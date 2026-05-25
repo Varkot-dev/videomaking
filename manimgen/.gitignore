@@ -14,3 +14,7 @@ videos/
 .DS_Store
 downloads/
 test_clips/
+
+# Session output archives (render artifacts, not source)
+manimgen/output_*/
+manimgen/manimgen/output_*/
