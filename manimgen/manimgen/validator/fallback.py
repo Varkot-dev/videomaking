@@ -6,6 +6,7 @@ import subprocess
 from manimgen import paths
 from manimgen.utils import safe_section_id
 from manimgen.validator.env import get_render_env
+from manimgen.validator.render_command import build_manimgl_command
 
 logger = logging.getLogger(__name__)
 
@@ -71,17 +72,7 @@ def fallback_scene(section: dict) -> str | None:
 
     try:
         result = subprocess.run(
-            [
-                "manimgl",
-                scene_path,
-                class_name,
-                "-w",
-                paths.render_quality_flag(),
-                "--fps",
-                str(paths.render_fps()),
-                "-c",
-                "#1C1C1C",
-            ],
+            build_manimgl_command(scene_path, class_name),
             capture_output=True,
             text=True,
             timeout=180,

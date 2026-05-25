@@ -13,6 +13,7 @@ from manimgen.validator.codeguard import (
 )
 from manimgen.validator.env import get_render_env
 from manimgen.validator.layout_checker import check_layout
+from manimgen.validator.render_command import build_manimgl_command
 from manimgen.validator.runner import _find_rendered_video, _is_3d_scene
 from manimgen.validator.timing_verifier import auto_fix_timing, verify_timing
 
@@ -463,17 +464,7 @@ def _run_and_capture(scene_path: str, class_name: str) -> dict:
     timeout = 360 if _is_3d_scene(scene_path) else 240
     try:
         result = subprocess.run(
-            [
-                "manimgl",
-                scene_path,
-                class_name,
-                "-w",
-                paths.render_quality_flag(),
-                "--fps",
-                str(paths.render_fps()),
-                "-c",
-                "#1C1C1C",
-            ],
+            build_manimgl_command(scene_path, class_name),
             capture_output=True,
             text=True,
             timeout=timeout,

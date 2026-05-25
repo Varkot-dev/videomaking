@@ -7,6 +7,7 @@ from manimgen.validator.codeguard import (
     precheck_and_autofix_file as precheck_and_autofix,
 )
 from manimgen.validator.env import get_render_env
+from manimgen.validator.render_command import build_manimgl_command
 from manimgen.validator.scene_ast_gate import inspect_scene_file
 
 
@@ -120,17 +121,7 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
 
     try:
         result = subprocess.run(
-            [
-                "manimgl",
-                scene_path,
-                class_name,
-                "-w",
-                paths.render_quality_flag(),
-                "--fps",
-                str(paths.render_fps()),
-                "-c",
-                "#1C1C1C",
-            ],
+            build_manimgl_command(scene_path, class_name),
             capture_output=True,
             text=True,
             timeout=timeout,
