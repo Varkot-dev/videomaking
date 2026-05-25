@@ -1,143 +1,253 @@
+"""
+Focused, FULLY-MOCKED cli.py / pipeline integration tests.
+
+History (#35): this file used to hold a single brittle full-`main()` e2e test
+marked ``xfail(strict)``. Its xfail reason named ``manimgen.cli.check_layout``
+as the thing to mock — but that symbol DOES NOT EXIST. The real layout-check
+call lives in ``manimgen.validator.layout_checker.check_layout`` and is invoked
+from ``validator.retry`` and ``validator.render_validator`` (never from
+``cli``). Naively "un-xfailing" the old test would have fired a PAID Gemini
+vision call through that real path.
+
+Replacement: instead of one fragile end-to-end test, these are focused
+integration tests at the documented seams — ``chat()`` (LLM) and per-module
+``subprocess.run`` (manimgl/ffmpeg). EVERY LLM, subprocess, and layout-checker
+call is mocked. There is ZERO real network/LLM/Gemini/subprocess work here.
+
+If you add a test to this file: mock ``chat`` (in scene_generator AND/OR
+lesson_planner), mock ``subprocess.run`` at the module that calls it, and never
+let ``layout_checker.check_layout`` run unmocked.
+"""
+
+import importlib
+import inspect
 import os
-import json
-import sys
-from unittest.mock import MagicMock
 
 import pytest
 
-from manimgen.cli import main
-from manimgen import paths
+import manimgen.cli as cli
+from manimgen.validator import fallback as fallback_mod
+from manimgen.validator import runner as runner_mod
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Stale full-pipeline integration test. Two layers already repaired "
-        "(dead manimgen.paths.base_dir mock removed; fake TTS timestamps made "
-        "objects not dicts). Remaining work to un-xfail: (1) mock "
-        "manimgen.cli.check_layout / layout_checker so it does not make a real "
-        "Gemini vision call, (2) fix the mux JSON-parse path the fake "
-        "ffmpeg-subprocess produces, (3) update the final success assertion to "
-        "the current output contract. Tracked, not hidden — flip to a passing "
-        "test when the pipeline contract stabilizes."
-    ),
-)
-def test_full_pipeline_success(mocker, tmp_path):
+# ── Seam 1: planner LLM output flows into the Director (scene-gen) ───────────
+
+
+@pytest.mark.integration
+def test_planner_output_flows_into_scene_generator(mocker, tmp_path):
+    """plan_lesson's parsed sections drive generate_scenes at the chat() seam.
+
+    Both LLM calls are mocked: lesson_planner.chat returns a storyboard JSON,
+    scene_generator.chat returns ManimGL code. We assert the section the
+    planner produced is the section the Director is asked to generate — the
+    planner→Director wiring — without any API call. The scene is written to a
+    tmp scenes dir (real round-trip; generate_scenes re-reads the file), so no
+    global ``open`` mock is needed.
     """
-    E2E integration test for the full ManimGen pipeline.
-    Mocks LLMs and heavy subprocesses (manimgl, ffmpeg, tts) 
-    to ensure the entire orchestrator connects properly.
+    plan_json = (
+        '{"title": "Linear Search", "sections": ['
+        '{"id": "section_01", "title": "Scan", '
+        '"narration": "We scan left to right.", '
+        '"cue_word_indices": [0], '
+        '"cues": [{"index": 0, "visual": "array of boxes"}]}]}'
+    )
+    mocker.patch("manimgen.planner.lesson_planner.chat", return_value=plan_json)
+    # Avoid disk reads for the Director's few-shot reference frames/examples.
+    mocker.patch(
+        "manimgen.generator.scene_generator.load_reference_frames", return_value=[]
+    )
+    mocker.patch(
+        "manimgen.generator.scene_generator._load_examples_text", return_value=""
+    )
+    # Write the generated scene into an isolated tmp dir.
+    mocker.patch(
+        "manimgen.generator.scene_generator.paths.scenes_dir",
+        return_value=str(tmp_path),
+    )
+    scene_chat = mocker.patch(
+        "manimgen.generator.scene_generator.chat",
+        return_value="from manimlib import *\n\n\nclass ScanScene(Scene):\n    def construct(self):\n        self.wait(1)\n",
+    )
+
+    from manimgen.generator.scene_generator import generate_scenes
+    from manimgen.planner.lesson_planner import plan_lesson
+
+    plan = plan_lesson("linear search")
+    assert plan["sections"][0]["title"] == "Scan"
+
+    code, class_name, _ = generate_scenes(plan["sections"][0], cue_durations=[2.0])
+
+    # Director was invoked exactly once, at the chat() seam, with the planner's
+    # storyboard text in the user message.
+    assert scene_chat.call_count == 1
+    user_msg = scene_chat.call_args.kwargs["user"]
+    assert "array of boxes" in user_msg
+    assert class_name == "Section01Scene"
+    assert code.startswith("from manimlib")
+
+
+# ── Seam 2: run_scene wires the manimgl subprocess and returns the video ─────
+
+
+@pytest.mark.integration
+def test_run_scene_invokes_manimgl_subprocess(mocker, tmp_path):
+    """run_scene shells out to manimgl with the dark-bg flag, mocked.
+
+    subprocess.run is replaced; we assert the manimgl argv is correct and that
+    a returncode==0 yields the discovered video path. No real render.
     """
-    # 1. Isolate output directories to tmp_path. paths.py returns relative
-    # paths resolved against cwd, so chdir-ing into tmp_path (below) is what
-    # actually isolates output. (A former mock of a non-existent
-    # `manimgen.paths.base_dir` was dead code and raised AttributeError.)
-    mocker.patch('os.getcwd', return_value=str(tmp_path))
-    # If the app relies on relative paths like "videos" it can be safe to just chdir
-    original_cwd = os.getcwd()
-    os.chdir(str(tmp_path))
+    scene_path = tmp_path / "section_01.py"
+    scene_path.write_text("from manimlib import *\n\n\nclass S(Scene):\n    pass\n")
 
-    try:
-        # 2. Mock TTS to avoid network and slow generation
-        def fake_tts(narration, audio_path):
-            os.makedirs(os.path.dirname(audio_path), exist_ok=True)
-            with open(audio_path, 'wb') as f:
-                f.write(b"fake audio mp3 data")
-            # Return words for two cues. tts.py consumes word-timestamp
-            # OBJECTS (accesses .start/.end), not dicts — use SimpleNamespace
-            # so the fake matches the real WordBoundary shape.
-            from types import SimpleNamespace
-            timestamps = [
-                SimpleNamespace(word="Let's", start=0.0, end=0.5),
-                SimpleNamespace(word="begin.", start=0.6, end=1.0),
-                SimpleNamespace(word="Now", start=1.5, end=2.0),
-                SimpleNamespace(word="scan.", start=2.1, end=2.5),
-            ]
-            return audio_path, timestamps
+    fake_proc = mocker.MagicMock(returncode=0, stdout="ok", stderr="")
+    run_mock = mocker.patch(
+        "manimgen.validator.runner.subprocess.run", return_value=fake_proc
+    )
+    mocker.patch(
+        "manimgen.validator.runner.precheck_and_autofix",
+        return_value={"ok": True, "applied_fixes": [], "layout_warnings": []},
+    )
+    mocker.patch(
+        "manimgen.validator.runner._find_rendered_video",
+        return_value="/tmp/Section01Scene.mp4",
+    )
 
-        mocker.patch('manimgen.cli._run_tts_for_section', side_effect=lambda sec, idx: fake_tts(sec.get("narration", ""), os.path.join(str(tmp_path), f"audio_{idx}.mp3"))[:2] + (3.0,))
+    success, video = runner_mod.run_scene(str(scene_path), "Section01Scene")
 
-        # 3. Mock Planner LLM
-        mock_plan = {
-            "title": "Sweep Highlight Test",
-            "sections": [
-                {
-                    "id": "section_01",
-                    "title": "Linear Search",
-                    "narration": "Let's begin. [CUE] Now scan.",
-                    "cue_word_indices": [0, 2],
-                    "cues": [
-                        {"index": 0, "visual": "Technique: stagger_reveal array"},
-                        {"index": 1, "visual": "Technique: sweep_highlight scan_rect over array"}
-                    ]
-                }
-            ]
-        }
-        mocker.patch('manimgen.cli.plan_lesson', return_value=mock_plan)
+    assert success is True
+    assert video == "/tmp/Section01Scene.mp4"
+    argv = run_mock.call_args.args[0]
+    assert argv[0] == "manimgl"
+    # Dark background contract: -c "#1C1C1C" (never --background_color).
+    assert "-c" in argv and "#1C1C1C" in argv
+    assert "--background_color" not in argv
 
-        # 4. Mock Director LLM (returns code using .become() for the sweep highlight)
-        fake_scene_code = '''
-from manimlib import *
 
-class Section01Scene(ThreeDScene):
-    def construct(self):
-        text = Text("Array")
-        self.play(Write(text), run_time=1.0)
-        self.wait(1.0)
+@pytest.mark.integration
+def test_run_scene_returns_failure_on_nonzero_exit(mocker, tmp_path):
+    """A non-zero manimgl exit yields (False, None) without raising."""
+    scene_path = tmp_path / "section_01.py"
+    scene_path.write_text("from manimlib import *\n\n\nclass S(Scene):\n    pass\n")
 
-        # CUE 1
-        scan_rect = SurroundingRectangle(text)
-        self.play(ShowCreation(scan_rect))
-        self.play(scan_rect.animate.become(SurroundingRectangle(text).shift(RIGHT)))
-        self.wait(1.0)
-'''
-        # We patch manimgen.generator.scene_generator.chat because generate_scenes calls chat()
-        mocker.patch('manimgen.generator.scene_generator.chat', return_value=fake_scene_code)
+    fake_proc = mocker.MagicMock(returncode=1, stdout="", stderr="boom")
+    mocker.patch(
+        "manimgen.validator.runner.subprocess.run", return_value=fake_proc
+    )
+    mocker.patch(
+        "manimgen.validator.runner.precheck_and_autofix",
+        return_value={"ok": True, "applied_fixes": [], "layout_warnings": []},
+    )
+    find = mocker.patch("manimgen.validator.runner._find_rendered_video")
 
-        # 5. Mock subprocess.run for manimgl and ffmpeg
-        def fake_subprocess_run(args, **kwargs):
-            res = MagicMock()
-            res.returncode = 0
-            res.stdout = "mock stdout"
-            res.stderr = "mock stderr"
-            
-            args_list = list(args)
-            if not args_list: 
-                return res
-            
-            cmd = args_list[0]
-            
-            if cmd == "manimgl":
-                # Create fake manimgl video output
-                class_name = args_list[2]
-                output_path = os.path.join(str(tmp_path), "videos", f"{class_name}.mp4")
-                os.makedirs(os.path.dirname(output_path), exist_ok=True)
-                with open(output_path, "w") as f:
-                    f.write("mock video")
-                    
-            elif cmd == "ffmpeg":
-                # Create fake ffmpeg output
-                output_path = args_list[-1]
-                if output_path.endswith(".mp4") or output_path.endswith(".m4a"):
-                    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-                    with open(output_path, "w") as f:
-                        f.write("mock ffmpeg output")
-                        
-            return res
+    success, video = runner_mod.run_scene(str(scene_path), "Section01Scene")
 
-        mocker.patch('subprocess.run', side_effect=fake_subprocess_run)
+    assert success is False
+    assert video is None
+    find.assert_not_called()  # never look for a video when the render failed
 
-        # Allow TTS inside main loop
-        mocker.patch('manimgen.cli._tts_enabled', return_value=True)
 
-        # Execute
-        sys.argv = ["manimgen", "Linear Search"]
-        main()
+# ── Seam 3: fallback_scene writes code + invokes manimgl (no LLM) ────────────
 
-        # 6. Verify assembler created the final movie
-        final_video_name = "Sweep_Highlight_Test.mp4"
-        final_video_path = os.path.join("output", "videos", final_video_name)
-        assert os.path.exists(final_video_path), f"Final assembled video {final_video_path} was not created"
-    
-    finally:
-        os.chdir(original_cwd)
+
+@pytest.mark.integration
+def test_fallback_scene_renders_without_llm(mocker, tmp_path):
+    """fallback_scene is deterministic — it must never call chat()/the LLM."""
+    mocker.patch(
+        "manimgen.validator.fallback.paths.scenes_dir", return_value=str(tmp_path)
+    )
+    fake_proc = mocker.MagicMock(returncode=0, stdout="ok", stderr="")
+    run_mock = mocker.patch(
+        "manimgen.validator.fallback.subprocess.run", return_value=fake_proc
+    )
+    mocker.patch(
+        "manimgen.validator.runner._find_rendered_video",
+        return_value="/tmp/Section01FallbackScene.mp4",
+    )
+
+    section = {"id": "section_01", "title": "Recap", "narration": "Quick recap."}
+    out = fallback_mod.fallback_scene(section)
+
+    assert out == "/tmp/Section01FallbackScene.mp4"
+    argv = run_mock.call_args.args[0]
+    assert argv[0] == "manimgl"
+    # Scene file was actually written to the (mocked) scenes dir.
+    written = list(tmp_path.glob("*_fallback.py"))
+    assert written, "fallback scene .py was not written"
+
+
+# ── Seam 4: cli._run_section error path → fallback when render+retry fail ────
+
+
+@pytest.mark.integration
+def test_run_section_uses_fallback_when_render_and_retry_fail(mocker):
+    """cli._run_section routes to fallback_scene when render + retry both fail.
+
+    TTS is off, so no audio/cut/mux happens. generate_scenes, run_scene,
+    retry_scene, and fallback_scene are all mocked — zero LLM, zero subprocess.
+    """
+    mocker.patch(
+        "manimgen.cli.generate_scenes",
+        return_value=("from manimlib import *\n", "Section01Scene", "/tmp/s.py"),
+    )
+    mocker.patch("manimgen.cli._find_rendered_video", return_value=None)
+    mocker.patch("manimgen.cli.run_scene", return_value=(False, None))
+    retry = mocker.patch("manimgen.cli.retry_scene", return_value=(False, None))
+    fb = mocker.patch(
+        "manimgen.cli.fallback_scene", return_value="/tmp/fallback.mp4"
+    )
+    mocker.patch("os.path.exists", return_value=True)
+    mocker.patch("manimgen.cli._write_hash_sidecar")
+
+    section = {"id": "section_01", "title": "Scan", "narration": "scan."}
+    out = cli._run_section(section, 1, tts_on=False, current_topic_hash="deadbeef")
+
+    assert out == ["/tmp/fallback.mp4"]
+    retry.assert_called_once()
+    fb.assert_called_once_with(section)
+
+
+@pytest.mark.integration
+def test_run_section_returns_empty_when_fallback_also_fails(mocker):
+    """If even fallback yields no video, the section is dropped (empty list)."""
+    mocker.patch(
+        "manimgen.cli.generate_scenes",
+        return_value=("from manimlib import *\n", "Section01Scene", "/tmp/s.py"),
+    )
+    mocker.patch("manimgen.cli._find_rendered_video", return_value=None)
+    mocker.patch("manimgen.cli.run_scene", return_value=(False, None))
+    mocker.patch("manimgen.cli.retry_scene", return_value=(False, None))
+    mocker.patch("manimgen.cli.fallback_scene", return_value=None)
+
+    section = {"id": "section_01", "title": "Scan", "narration": "scan."}
+    out = cli._run_section(section, 1, tts_on=False, current_topic_hash="deadbeef")
+
+    assert out == []
+
+
+# ── Regression: the xfail reason's dead symbol claim is now accurate ─────────
+
+
+@pytest.mark.unit
+def test_check_layout_symbol_lives_in_layout_checker_not_cli():
+    """Locks the corrected #35 claim: the real check_layout is NOT on cli.
+
+    The old xfail reason told future readers to mock ``manimgen.cli.check_layout``
+    — a symbol that never existed, so the mock would no-op and a real paid
+    Gemini vision call would fire through the genuine path. This test pins the
+    truth so the comment can't silently rot back: check_layout is defined in
+    layout_checker and consumed by retry / render_validator; cli has no such
+    attribute and no layout import.
+    """
+    from manimgen.validator import layout_checker
+
+    assert hasattr(layout_checker, "check_layout")
+    assert not hasattr(cli, "check_layout")
+
+    cli_src = inspect.getsource(importlib.import_module("manimgen.cli"))
+    assert "check_layout" not in cli_src
+
+    # The real consumers import it from layout_checker.
+    from manimgen.validator import render_validator, retry
+
+    assert render_validator.check_layout is layout_checker.check_layout
+    assert retry.check_layout is layout_checker.check_layout

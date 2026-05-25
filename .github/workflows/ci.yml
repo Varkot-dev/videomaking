@@ -62,9 +62,12 @@ jobs:
       - name: Run the ENTIRE suite — zero --ignore flags
         # This is the core of the hardening: the previously-hidden
         # failures (test_caps_overshooting_llm, the stale e2e test) are
-        # fixed/xfail-strict, so a green run here is an honest green.
-        # --strict-markers ensures the xfail marker can't silently rot.
-        run: python3 -m pytest tests/ -q --strict-markers --maxfail=1
+        # fixed, so a green run here is an honest green.
+        # --strict-markers ensures markers can't silently rot.
+        # No --maxfail: report a change's FULL blast radius, not just the
+        # first failure. --strict-markers is also set in pyproject.toml so a
+        # bare local `pytest` matches this invocation (local == CI).
+        run: python3 -m pytest tests/ -q --strict-markers
 
   smoke:
     name: Mocked-LLM pipeline smoke
@@ -92,9 +95,8 @@ jobs:
       - name: Pipeline contract + Director smoke (mocked LLM, zero API cost)
         # The real behavioral signal here is test_pipeline_contracts (A/V
         # sync invariants) + test_director (planner->Director->scene-gen
-        # wiring), all LLM/subprocess calls mocked. test_pipeline_e2e is
-        # included but is currently xfail(strict) — it contributes failure-
-        # tracking, not a positive assertion, until its 3 documented stale
-        # mock layers are repaired. A wiring regression in the contract or
-        # director tests fails here without any API key or render.
+        # wiring) + test_pipeline_e2e (cli.py orchestration at the chat() +
+        # subprocess.run seams). ALL LLM/subprocess/layout-checker calls are
+        # mocked — zero API key, zero render, zero network. A wiring
+        # regression in any of these fails here without any API cost.
         run: python3 -m pytest tests/test_pipeline_contracts.py tests/test_pipeline_e2e.py tests/test_director.py -q --strict-markers

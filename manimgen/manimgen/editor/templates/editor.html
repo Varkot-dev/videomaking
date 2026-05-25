@@ -347,10 +347,16 @@
     const raw = await res.json();
     clips = raw.map(c => {
       const isFallback = c.id.toLowerCase().includes('fallback');
+      // _probe_duration can return null (unreadable / ffprobe failure). Treat
+      // null as 0 for slider math but keep the "unknown" state distinguishable
+      // for display.
+      const dur = (typeof c.duration === 'number') ? c.duration : 0;
       return {
         ...c,
+        duration: dur,
+        duration_known: typeof c.duration === 'number',
         trim_start: 0,
-        trim_end: c.duration,
+        trim_end: dur,
         enabled: !isFallback,
       };
     });
@@ -382,19 +388,50 @@
       const trimmed = clip.trim_start > 0 || clip.trim_end < clip.duration;
       const effectiveDur = (clip.trim_end - clip.trim_start).toFixed(1);
       const isFallback = clip.id.toLowerCase().includes('fallback');
+      const durLabel = clip.duration_known ? `${clip.duration.toFixed(1)}s total` : 'duration unknown';
 
-      el.innerHTML = `
-        <span class="clip-drag-handle">&#8991;</span>
-        <div class="clip-info">
-          <div class="clip-name-row">
-            <div class="clip-name">${clip.id}</div>
-            ${isFallback ? '<span class="badge-fallback">fallback</span>' : ''}
-          </div>
-          <div class="clip-duration">${clip.duration.toFixed(1)}s total</div>
-          ${trimmed ? `<div class="clip-trim-badge">&#9986; trimmed to ${effectiveDur}s</div>` : ''}
-        </div>
-        <button class="clip-toggle">${clip.enabled ? 'Skip' : 'Include'}</button>
-      `;
+      // SECURITY: clip.id is filename-derived (untrusted) and must NEVER be
+      // interpolated into markup — that is an XSS sink. Build the row from
+      // programmatic DOM nodes and set every untrusted / dynamic field with
+      // textContent, which escapes by construction. No innerHTML with clip data.
+      const handle = document.createElement('span');
+      handle.className = 'clip-drag-handle';
+      handle.textContent = '⌷';
+
+      const info = document.createElement('div');
+      info.className = 'clip-info';
+
+      const nameRow = document.createElement('div');
+      nameRow.className = 'clip-name-row';
+      const name = document.createElement('div');
+      name.className = 'clip-name';
+      name.textContent = clip.id;
+      nameRow.appendChild(name);
+      if (isFallback) {
+        const badge = document.createElement('span');
+        badge.className = 'badge-fallback';
+        badge.textContent = 'fallback';
+        nameRow.appendChild(badge);
+      }
+      info.appendChild(nameRow);
+
+      const durEl = document.createElement('div');
+      durEl.className = 'clip-duration';
+      durEl.textContent = durLabel;
+      info.appendChild(durEl);
+
+      if (trimmed) {
+        const trimBadge = document.createElement('div');
+        trimBadge.className = 'clip-trim-badge';
+        trimBadge.textContent = `✂ trimmed to ${effectiveDur}s`;
+        info.appendChild(trimBadge);
+      }
+
+      const toggle = document.createElement('button');
+      toggle.className = 'clip-toggle';
+      toggle.textContent = clip.enabled ? 'Skip' : 'Include';
+
+      el.replaceChildren(handle, info, toggle);
 
       // Click to select
       el.addEventListener('click', (e) => {
@@ -449,7 +486,10 @@
 
     video.style.display = 'block';
     noClip.classList.remove('visible');
-    video.src = `/api/video/${clip.filename}`;
+    // encodeURIComponent: filename is untrusted (filesystem-derived) and goes
+    // into a URL path segment — encode so a name with spaces/#/? can't break
+    // the request or escape the path.
+    video.src = `/api/video/${encodeURIComponent(clip.filename)}`;
     video.load();
     video.addEventListener('loadedmetadata', () => {
       video.currentTime = clip.trim_start;
