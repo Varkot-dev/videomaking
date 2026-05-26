@@ -272,6 +272,7 @@ class TestMuxerDurationContract:
 
         with patch("manimgen.renderer.muxer._get_duration", side_effect=[10.0, 9.0, 10.0]), \
              patch("manimgen.renderer.muxer.subprocess.run", side_effect=fake_run), \
+             patch("manimgen.renderer.muxer._has_video_stream", return_value=True), \
              patch("os.makedirs"):
             mux_audio_video("v.mp4", "a.mp3", str(tmp_path / "out.mp4"))
 
@@ -308,6 +309,7 @@ class TestMuxerDurationContract:
         with patch("manimgen.renderer.muxer._get_duration",
                    side_effect=[video_dur, audio_dur, video_dur]), \
              patch("manimgen.renderer.muxer.subprocess.run", side_effect=fake_run), \
+             patch("manimgen.renderer.muxer._has_video_stream", return_value=True), \
              patch("os.makedirs"):
             mux_audio_video("v.mp4", "a.mp3", str(tmp_path / "out.mp4"))
 

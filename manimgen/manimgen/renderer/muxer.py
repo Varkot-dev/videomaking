@@ -26,6 +26,12 @@ logger = logging.getLogger(__name__)
 # placement or TTS/render timing problem worth investigating.
 _WARN_THRESHOLD_SECONDS = 1.0
 
+# The pipeline's dark background (matches the -c "#1C1C1C" render flag). Used to
+# synthesize a placeholder clip when a cue's render produced no video stream.
+_BG_COLOR = "#1C1C1C"
+_SYNTH_RESOLUTION = "1920x1080"
+_SYNTH_FPS = 60
+
 # Module-level mismatch log — each entry is a dict with video_path, diff, cue info.
 # The CLI reads this at the end of a run and prints a summary.
 # Call clear_mismatch_log() at the start of each pipeline run.
@@ -88,6 +94,21 @@ def mux_audio_video(video_path: str, audio_path: str, output_path: str) -> str:
             diff,
             diff,
         )
+
+    # Graceful degradation: a too-short render can yield an .mp4 with NO video
+    # stream. The freeze path's [0:v]tpad filter then errors ("matches no streams")
+    # and the whole section gets dropped -> black gap. Instead, synthesize a solid
+    # background for the full narration so the cue keeps its audio over a clean
+    # frame. (Doesn't fix WHY the video is empty — that's the Director/timing layer
+    # — but stops one empty cue from cascading into a dropped section.)
+    if not _has_video_stream(video_path):
+        logger.warning(
+            "[muxer] %s has no video stream — synthesizing %s background for the "
+            "%.2fs narration (degraded; section preserved).",
+            video_path, _BG_COLOR, audio_dur,
+        )
+        _mux_synth_background(audio_path, output_path, audio_dur)
+        return output_path
 
     if audio_dur > video_dur:
         _mux_freeze_video(video_path, audio_path, output_path, audio_dur)
@@ -167,9 +188,69 @@ def _mux_freeze_video(
     _run(cmd, output_path)
 
 
+def _mux_synth_background(
+    audio_path: str,
+    output_path: str,
+    audio_dur: float,
+) -> None:
+    """Mux narration over a synthesized solid #1C1C1C background.
+
+    Used when the cue's rendered video has no usable video stream (a too-short
+    render). Produces a clean dark clip lasting the full narration so the section
+    is preserved with its audio, rather than crashing the freeze path.
+    """
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"color=c={_BG_COLOR}:s={_SYNTH_RESOLUTION}:r={_SYNTH_FPS}:d={audio_dur:.6f}",
+        "-i",
+        audio_path,
+        "-map",
+        "0:v",
+        "-map",
+        "1:a",
+        "-c:v",
+        "libx264",
+        "-c:a",
+        "aac",
+        "-t",
+        f"{audio_dur:.6f}",
+        output_path,
+    ]
+    _run(cmd, output_path)
+
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+
+def _has_video_stream(path: str) -> bool:
+    """Return True iff ``path`` contains at least one video stream.
+
+    Fail-closed: any ffprobe error / missing binary / unexpected output is treated
+    as "no usable video stream" so the caller degrades gracefully rather than
+    feeding an empty file into the [0:v] freeze filter (which errors out).
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "v",
+                "-show_entries", "stream=codec_type",
+                "-of", "csv=p=0",
+                path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and "video" in result.stdout
 
 
 def _get_duration(path: str) -> float:

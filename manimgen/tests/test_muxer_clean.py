@@ -55,9 +55,15 @@ def _mock_subprocess(video_dur: float, audio_dur: float):
 
 
 def _run_mux(video_dur, audio_dur, tmp_path):
-    """Run mux_audio_video with mocked durations; return the ffmpeg command."""
+    """Run mux_audio_video with mocked durations; return the ffmpeg command.
+
+    These tests exercise the freeze/pad STRATEGY selection, which presupposes a
+    real video stream — so we patch _has_video_stream True (the empty-stream
+    degradation path has its own dedicated tests in TestEmptyVideoStreamGuard).
+    """
     p1, p2, calls = _mock_subprocess(video_dur, audio_dur)
-    with p1, p2, patch("os.makedirs"):
+    with p1, p2, patch("os.makedirs"), \
+         patch("manimgen.renderer.muxer._has_video_stream", return_value=True):
         mux_audio_video("video.mp4", "audio.mp3", str(tmp_path / "out.mp4"))
     # calls[0] is the ffmpeg command (subprocess.run)
     return " ".join(calls[0]) if calls else ""
@@ -156,7 +162,8 @@ class TestOutputEncoding:
     def test_output_path_in_command(self, tmp_path):
         out = str(tmp_path / "out.mp4")
         p1, p2, calls = _mock_subprocess(10.0, 8.0)
-        with p1, p2, patch("os.makedirs"):
+        with p1, p2, patch("os.makedirs"), \
+             patch("manimgen.renderer.muxer._has_video_stream", return_value=True):
             mux_audio_video("v.mp4", "a.mp3", out)
         assert out in " ".join(calls[0])
 
@@ -275,3 +282,72 @@ class TestErrorHandling:
              patch("os.makedirs"):
             mux_audio_video("v.mp4", "a.mp3", str(tmp_path / "out.mp4"))
         assert captured.get("timeout") == _FFMPEG_TIMEOUT_SECONDS
+
+
+# ---------------------------------------------------------------------------
+# Empty / missing video stream → graceful degradation (no crash, no dropped section)
+# Real defect: a too-short render produces a 262-byte .mp4 with NO video stream.
+# _mux_freeze_video's [0:v]tpad then errors "Stream specifier ':v' matches no
+# streams", dropping the whole section -> black gap. Guard: synthesize a solid
+# #1C1C1C background for the full audio duration so narration is preserved.
+# ---------------------------------------------------------------------------
+
+from manimgen.renderer.muxer import _has_video_stream  # noqa: E402
+
+
+class TestEmptyVideoStreamGuard:
+    def test_has_video_stream_true_when_video_present(self):
+        with patch("manimgen.renderer.muxer.subprocess.run") as mr:
+            mr.return_value = MagicMock(returncode=0, stdout="video\n", stderr="")
+            assert _has_video_stream("v.mp4") is True
+
+    def test_has_video_stream_false_when_no_video(self):
+        with patch("manimgen.renderer.muxer.subprocess.run") as mr:
+            mr.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            assert _has_video_stream("empty.mp4") is False
+
+    def test_has_video_stream_false_on_probe_error(self):
+        with patch("manimgen.renderer.muxer.subprocess.run") as mr:
+            mr.return_value = MagicMock(returncode=1, stdout="", stderr="boom")
+            assert _has_video_stream("bad.mp4") is False
+
+    def test_missing_stream_synthesizes_background_not_crash(self, tmp_path):
+        """When the video has no stream, mux must build a solid-bg clip for the
+        audio duration — NOT run the [0:v]tpad freeze path (which would crash)."""
+        cmds = []
+
+        def fake_run(cmd, **kwargs):
+            cmds.append(cmd)
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("manimgen.renderer.muxer._has_video_stream", return_value=False), \
+             patch("manimgen.renderer.muxer._get_duration",
+                   side_effect=[0.1, 8.0, 0.1]), \
+             patch("manimgen.renderer.muxer.subprocess.run", side_effect=fake_run), \
+             patch("os.makedirs"):
+            mux_audio_video("empty.mp4", "a.mp3", str(tmp_path / "out.mp4"))
+
+        flat = " ".join(" ".join(c) for c in cmds)
+        # synthesized a solid background source for the audio duration
+        assert "lavfi" in flat and "1C1C1C" in flat, "should synthesize #1C1C1C bg"
+        # must NOT use the freeze path's video-stream filter (the crashing path)
+        assert "[0:v]tpad" not in flat, "must not run the crashing freeze filter"
+
+    def test_present_stream_still_uses_freeze_path(self, tmp_path):
+        """Sanity: when the video stream IS present, behaviour is unchanged."""
+        cmds = []
+
+        def fake_run(cmd, **kwargs):
+            cmds.append(cmd)
+            return MagicMock(returncode=0, stdout="video\n", stderr="")
+
+        with patch("manimgen.renderer.muxer._has_video_stream", return_value=True), \
+             patch("manimgen.renderer.muxer._get_duration",
+                   side_effect=[3.0, 8.0, 3.0]), \
+             patch("manimgen.renderer.muxer.subprocess.run", side_effect=fake_run), \
+             patch("os.makedirs"):
+            mux_audio_video("v.mp4", "a.mp3", str(tmp_path / "out.mp4"))
+
+        flat = " ".join(" ".join(c) for c in cmds)
+        assert "tpad" in flat, "real video should still use the freeze/tpad path"
+        assert "lavfi" not in flat, "should not synthesize bg when video exists"
