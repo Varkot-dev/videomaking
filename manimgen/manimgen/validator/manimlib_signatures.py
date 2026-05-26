@@ -28,11 +28,24 @@ from __future__ import annotations
 import ast
 import inspect
 import logging
+import os
 import sys
 from dataclasses import dataclass, field
 from functools import lru_cache
 
 logger = logging.getLogger(__name__)
+
+# Phase 3 enforcement flag. Default OFF — the strip mechanism stays dormant until
+# shadow-log data confirms zero false positives (see the design doc's gate). When
+# enabled, provably-invalid kwargs are REMOVED (never renamed — removal cannot
+# create a duplicate kwarg, so #55 is structurally impossible).
+_ENFORCE_ENV_VAR = "MANIMGEN_KWARG_ENFORCE"
+_FALSEY = frozenset({"", "0", "false", "off", "no"})
+
+
+def enforcement_enabled() -> bool:
+    """True when MANIMGEN_KWARG_ENFORCE is set to a truthy value (default False)."""
+    return os.environ.get(_ENFORCE_ENV_VAR, "").strip().lower() not in _FALSEY
 
 # Classes whose __init__ consumes **kwargs and forwards them LATERALLY (not via
 # super()) to another constructor that static MRO introspection cannot follow.
@@ -235,3 +248,76 @@ def shadow_check_kwargs(code: str) -> list[FlaggedKwarg]:
                                  lineno=getattr(node, "lineno", 0))
                 )
     return flagged
+
+
+def _line_col_to_offset(lines: list[str], lineno: int, col: int) -> int:
+    """Convert a 1-based (lineno, 0-based col) AST position to an absolute char
+    offset in the original source string (lines kept with their newlines)."""
+    return sum(len(lines[i]) for i in range(lineno - 1)) + col
+
+
+def strip_invalid_kwargs(code: str) -> tuple[str, list[tuple[str, str]]]:
+    """Remove provably-invalid constructor kwargs from ``code``.
+
+    Returns ``(new_code, removed)`` where ``removed`` is a list of
+    ``(class_name, kwarg)``. The strip is surgical: each invalid keyword is excised
+    by its exact AST span (plus one bordering comma), right-to-left so earlier spans
+    stay valid. Removal — never rename — so it cannot create a duplicate kwarg.
+    Comments and formatting elsewhere are untouched (no ``ast.unparse``). Fail-open:
+    on a syntax error or no manimlib, returns the input unchanged. Never raises.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code, []
+
+    aliases = _import_alias_map(tree)
+    # (start_offset, end_offset, class_name, kwarg) for each keyword to remove.
+    spans: list[tuple[int, int, str, str]] = []
+    src_lines = code.splitlines(keepends=True)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        cls = _resolve_class(node.func.id, aliases)
+        if cls is None:
+            continue
+        for kw in node.keywords:
+            if kw.arg is None:
+                break  # **splat — skip the whole call
+            if not is_provably_invalid_kwarg(cls, kw.arg):
+                continue
+            # ast.keyword carries col_offset/end_col_offset for the full arg=value
+            # span (Python 3.9+). Fail-open if positions are missing.
+            if getattr(kw, "col_offset", None) is None or getattr(kw, "end_col_offset", None) is None:
+                continue
+            start = _line_col_to_offset(src_lines, kw.lineno, kw.col_offset)
+            end = _line_col_to_offset(src_lines, kw.end_lineno, kw.end_col_offset)
+            spans.append((start, end, node.func.id, kw.arg))
+
+    if not spans:
+        return code, []
+
+    removed: list[tuple[str, str]] = []
+    out = code
+    # Apply right-to-left so each excision leaves earlier offsets intact.
+    for start, end, class_name, kwarg in sorted(spans, key=lambda s: s[0], reverse=True):
+        # Absorb one bordering comma (and surrounding spaces) so we don't leave a
+        # dangling ", ," or "(, ". Prefer the preceding comma; else the following.
+        lo, hi = start, end
+        j = lo - 1
+        while j >= 0 and out[j] in " \t":
+            j -= 1
+        if j >= 0 and out[j] == ",":
+            lo = j  # eat the preceding comma
+        else:
+            k = hi
+            while k < len(out) and out[k] in " \t":
+                k += 1
+            if k < len(out) and out[k] == ",":
+                hi = k + 1  # eat the following comma
+        out = out[:lo] + out[hi:]
+        removed.append((class_name, kwarg))
+
+    removed.reverse()  # report in source order
+    return out, removed

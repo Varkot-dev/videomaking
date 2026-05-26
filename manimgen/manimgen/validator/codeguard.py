@@ -1506,6 +1506,23 @@ def precheck_and_autofix(code: str) -> str:
     fixed, structural_fixes = _fix_broken_call_args(code)
     fixed, applied_fixes = apply_known_fixes(fixed)
     applied_fixes = structural_fixes + applied_fixes
+
+    # Phase 3 enforcement (default OFF — gated on MANIMGEN_KWARG_ENFORCE). When
+    # enabled, surgically REMOVE provably-invalid constructor kwargs via the
+    # type-aware introspection strip. Removal can't create a duplicate kwarg, so
+    # this can't reintroduce #55. Dormant until shadow data justifies turning on.
+    from manimgen.validator.manimlib_signatures import (
+        enforcement_enabled,
+        strip_invalid_kwargs,
+    )
+
+    if enforcement_enabled():
+        fixed, removed = strip_invalid_kwargs(fixed)
+        if removed:
+            applied_fixes = applied_fixes + [
+                f"stripped invalid kwarg {cls}(...{kw}=)" for cls, kw in removed
+            ]
+
     if applied_fixes:
         import logging
 

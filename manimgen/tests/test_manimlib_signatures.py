@@ -169,3 +169,73 @@ class TestRealManimlib:
     def test_parametric_surface_fill_color_flagged(self):
         flagged = sigs.shadow_check_kwargs("s = ParametricSurface(uv_func=f, fill_color=BLUE)\n")
         assert any(fk.kwarg == "fill_color" for fk in flagged)
+
+
+# ── Phase 3: AST strip-only enforcement (mechanism, flag-gated default OFF) ────
+
+class TestEnforceFlag:
+    def test_enforce_off_by_default(self, monkeypatch):
+        monkeypatch.delenv("MANIMGEN_KWARG_ENFORCE", raising=False)
+        assert sigs.enforcement_enabled() is False
+
+    def test_enforce_on_when_set(self, monkeypatch):
+        monkeypatch.setenv("MANIMGEN_KWARG_ENFORCE", "1")
+        assert sigs.enforcement_enabled() is True
+
+    def test_enforce_off_for_empty_or_zero(self, monkeypatch):
+        for val in ("", "0", "false", "off", "no"):
+            monkeypatch.setenv("MANIMGEN_KWARG_ENFORCE", val)
+            assert sigs.enforcement_enabled() is False, f"{val!r} should be OFF"
+
+
+class TestStripInvalidKwargs:
+    def _resolver(self):
+        return lambda name, aliases: {
+            "ParametricSurface": FakeParametricSurface,
+            "Square": FakeSquare,
+        }.get(name)
+
+    def test_strips_provably_invalid_kwarg(self, monkeypatch):
+        monkeypatch.setattr(sigs, "_resolve_class", self._resolver())
+        code = "s = ParametricSurface(uv_func=f, fill_color=BLUE)\n"
+        out, removed = sigs.strip_invalid_kwargs(code)
+        assert "fill_color" not in out
+        assert "uv_func=f" in out  # valid kwarg preserved
+        assert removed == [("ParametricSurface", "fill_color")]
+        import ast as _ast
+        _ast.parse(out)  # still valid Python
+
+    def test_anti_55_valid_vmobject_untouched(self, monkeypatch):
+        """The #55 case must survive enforcement byte-for-byte: fill_color is valid
+        on Square; stripping/renaming it is exactly the bug we're escaping."""
+        monkeypatch.setattr(sigs, "_resolve_class", self._resolver())
+        code = "Square(side_length=0.9, fill_color=BLUE, color=GREY_B)\n"
+        out, removed = sigs.strip_invalid_kwargs(code)
+        assert out == code
+        assert removed == []
+
+    def test_strip_never_creates_duplicate_kwarg(self, monkeypatch):
+        # Removal (not rename) can never produce 'keyword argument repeated'.
+        monkeypatch.setattr(sigs, "_resolve_class", self._resolver())
+        code = "ParametricSurface(uv_func=f, fill_color=BLUE, color=RED)\n"
+        out, _ = sigs.strip_invalid_kwargs(code)
+        import ast as _ast
+        _ast.parse(out)  # no duplicate kwarg syntaxerror
+        assert "color=RED" in out  # valid color= preserved
+
+    def test_strip_preserves_comments(self, monkeypatch):
+        monkeypatch.setattr(sigs, "_resolve_class", self._resolver())
+        code = "# a comment\ns = ParametricSurface(uv_func=f, fill_color=BLUE)  # trailing\n"
+        out, _ = sigs.strip_invalid_kwargs(code)
+        assert "# a comment" in out
+        assert "# trailing" in out
+
+    def test_strip_unresolvable_class_noop(self, monkeypatch):
+        monkeypatch.setattr(sigs, "_resolve_class", lambda name, aliases: None)
+        code = "MyHelper(foo=1)\n"
+        out, removed = sigs.strip_invalid_kwargs(code)
+        assert out == code and removed == []
+
+    def test_strip_syntax_error_noop(self):
+        out, removed = sigs.strip_invalid_kwargs("def (((")
+        assert out == "def (((" and removed == []
