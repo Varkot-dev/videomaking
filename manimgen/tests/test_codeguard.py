@@ -287,6 +287,14 @@ class TestApplyKnownFixes:
         fixed, applied = apply_known_fixes(code)
         assert 'font="Arial"' in fixed
 
+    def test_fixes_get_point_at_angle(self):
+        # ManimGL Circle has point_at_angle, NOT get_point_at_angle (ManimCommunity).
+        code = "p = circle.get_point_at_angle(PI / 2)"
+        fixed, applied = apply_known_fixes(code)
+        assert ".point_at_angle(" in fixed
+        assert "get_point_at_angle" not in fixed
+        assert any("get_point_at_angle" in a for a in applied)
+
     def test_no_changes_returns_empty_applied(self):
         code = "from manimlib import *\nclass Foo(Scene): pass"
         fixed, applied = apply_known_fixes(code)

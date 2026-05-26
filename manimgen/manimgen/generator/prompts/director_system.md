@@ -199,6 +199,28 @@ bottom_row = VGroup(*[Square(side_length=0.85) for _ in range(10)]).arrange(RIGH
 
 **Rule:** Two full-width arrays/rows never share a horizontal band. Default to stacking them vertically (UP/DOWN). Only go side-by-side when each row has ≤ 5 elements.
 
+### Pointer labels — NEVER place sibling pointers' labels at the same DOWN offset
+
+When several pointers move along one array (binary search `low`/`high`/`mid`, two-pointer `left`/`right`), each pointer often gets its own label via `.next_to(ptr, DOWN, buff=0.1)`. As the pointers converge onto adjacent or near boxes, their identically-offset DOWN labels slide into the same region and render as garbled overlapping text ("low" + "high" → "lnigh"). Same-offset sibling labels are a collision waiting to happen.
+
+Pick one of these so the labels stay legible at every step:
+- **(a) Vertical stagger** — give each label a different DOWN distance so they never share a y-band: `low_label.next_to(low_ptr, DOWN, buff=0.1)`, `high_label.next_to(high_ptr, DOWN, buff=0.55)`. `mid` can take a third tier or sit UP from the box.
+- **(b) Opposite sides** — push the outer pointers' labels apart: `low_label.next_to(low_ptr, DOWN, buff=0.1).shift(LEFT * 0.3)`, `high_label.next_to(high_ptr, DOWN, buff=0.1).shift(RIGHT * 0.3)`, so they fan outward as the pointers close in.
+
+```python
+# WRONG — three sibling labels at the same DOWN offset; collide when pointers are adjacent
+low_label  = Text("low",  font_size=28, color=BLUE).next_to(low_ptr,  DOWN, buff=0.1)
+high_label = Text("high", font_size=28, color=BLUE).next_to(high_ptr, DOWN, buff=0.1)
+mid_label  = Text("mid",  font_size=28, color=TEAL_A).next_to(mid_ptr, DOWN, buff=0.1)
+
+# RIGHT (a) — stagger the DOWN distances so the labels occupy different y-bands
+low_label  = Text("low",  font_size=28, color=BLUE).next_to(low_ptr,  DOWN, buff=0.1)
+high_label = Text("high", font_size=28, color=BLUE).next_to(high_ptr, DOWN, buff=0.55)
+mid_label  = Text("mid",  font_size=28, color=TEAL_A).next_to(mid_ptr, UP,   buff=0.1)
+```
+
+**Rule:** Two pointer labels that can land near each other never share the same DOWN buff. Stagger their vertical offsets, or fan them to opposite sides — so `low` and `high` stay readable even when their pointers sit one box apart.
+
 ## Composition archetypes
 
 Pick one archetype per scene. Name it in a comment (`# Archetype A`). Compose freely only when none fit.

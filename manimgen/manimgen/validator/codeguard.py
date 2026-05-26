@@ -242,6 +242,12 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
             ".input_to_graph_point(",
             "get_graph_point -> input_to_graph_point",
         ),
+        # ManimCommunity Circle has get_point_at_angle; ManimGL has point_at_angle.
+        (
+            r"\.get_point_at_angle\s*\(",
+            ".point_at_angle(",
+            "get_point_at_angle -> point_at_angle",
+        ),
         (r"\._mobjects\b", ".submobjects", "_mobjects -> submobjects"),
         (r"\.set_fill_color\s*\(", ".set_fill(", "set_fill_color -> set_fill"),
         (r"\bDARK_GREY\b", "GREY_D", "DARK_GREY -> GREY_D"),
