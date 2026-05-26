@@ -24,17 +24,35 @@ from manimgen.validator.codeguard import (
 
 class TestCommunityToGLKwargRewrites:
 
-    def test_fill_opacity_to_opacity(self):
-        code = "ParametricSurface(f, fill_opacity=0.8)"
+    def test_fill_color_preserved_on_vmobject(self):
+        """fill_color is VALID on VMobject (Square/Circle/Line/Tex/Text...). It must
+        NOT be rewritten — the blanket fill_color->color rewrite created duplicate
+        color= kwargs -> SyntaxError (#55) and caused fallback cards. Phase 1 deletes
+        that rewrite. The surface-only case is handled later by type-aware introspection."""
+        code = "Square(fill_color=BLUE, color=GREY_B)"
         fixed, applied = apply_known_fixes(code)
-        assert "fill_opacity" not in fixed
-        assert "opacity=0.8" in fixed
+        assert "fill_color=BLUE" in fixed, "fill_color is valid on VMobject; must be preserved"
+        assert fixed.count("color=") == 2, "both fill_color= and color= remain distinct"
 
-    def test_fill_color_to_color(self):
-        code = "Surface(f, fill_color=BLUE)"
+    def test_fill_opacity_preserved_on_vmobject(self):
+        code = "Circle(fill_opacity=0.8, opacity=1.0)"
         fixed, applied = apply_known_fixes(code)
-        assert "fill_color" not in fixed
-        assert "color=BLUE" in fixed
+        assert "fill_opacity=0.8" in fixed, "fill_opacity is valid on VMobject; must be preserved"
+
+    def test_no_duplicate_kwarg_syntaxerror_regression(self):
+        """Anti-#55: the exact pattern that produced 'keyword argument repeated: color'
+        and fallback cards must survive codeguard as valid, parseable Python."""
+        import ast as _ast
+        code = (
+            "boxes = VGroup(*[\n"
+            "    Square(side_length=0.9, fill_color=\"#2a2a2a\", opacity=1,\n"
+            "           stroke_width=2.5, color=GREY_B)\n"
+            "    for _ in range(5)\n"
+            "])\n"
+        )
+        fixed, applied = apply_known_fixes(code)
+        _ast.parse(fixed)  # must NOT raise SyntaxError: keyword argument repeated
+        assert "fill_color=" in fixed
 
     def test_z_length_to_depth(self):
         code = "ThreeDAxes(z_length=4)"
@@ -105,6 +123,25 @@ class TestColorRoleHeaderInjection:
         fixed, _ = apply_known_fixes(code)
         assert "= GREY_A" not in fixed
         assert "PRIMARY" not in fixed
+
+    def test_no_injection_for_role_word_in_comment(self):
+        """#56: a role word in a COMMENT must not trigger injection (it's not a
+        real identifier use). Detection must scan AST Name nodes, not raw text."""
+        code = "# use MUTED tones for the background\nt = Text('hi', color=WHITE)\n"
+        fixed, _ = apply_known_fixes(code)
+        assert "MUTED = GREY_A" not in fixed, "comment mention is not a real use"
+
+    def test_no_injection_for_role_word_in_string(self):
+        """#56: a role word inside a STRING literal must not trigger injection."""
+        code = "label = Text('SUCCESS')\n"
+        fixed, _ = apply_known_fixes(code)
+        assert "SUCCESS = GREEN" not in fixed, "string content is not a real use"
+
+    def test_still_injects_for_genuine_identifier_use(self):
+        """Sanity: a real bare-name use still injects (the fix must not over-correct)."""
+        code = "t = Text('hi', color=MUTED)\n"
+        fixed, _ = apply_known_fixes(code)
+        assert "MUTED = GREY_A" in fixed
 
 
 # ── apply_known_fixes ─────────────────────────────────────────────────────────

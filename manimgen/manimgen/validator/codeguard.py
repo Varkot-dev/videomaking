@@ -229,10 +229,14 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
         # ManimCommunity ThreeDAxes uses z_length; ManimGL uses depth.
         # (x_axis_config/y_axis_config are VALID ManimGL Axes kwargs — do NOT touch.)
         (r"\bz_length\s*=", "depth=", "z_length -> depth (ManimGL ThreeDAxes)"),
-        # ManimCommunity surfaces take fill_opacity/fill_color; ManimGL Mobject
-        # has only opacity/color and no **kwargs, so the fill_* forms hard-crash.
-        (r"\bfill_opacity\s*=", "opacity=", "fill_opacity -> opacity (ManimGL Mobject)"),
-        (r"\bfill_color\s*=", "color=", "fill_color -> color (ManimGL Mobject)"),
+        # NOTE: fill_color/fill_opacity are NOT rewritten. They are VALID on every
+        # VMobject subclass (Square/Circle/Line/Tex/Text/... — vectorized_mobject.py
+        # names them explicitly + has **kwargs). The old blanket fill_color->color /
+        # fill_opacity->opacity rewrites corrupted that valid code into duplicate
+        # color=/opacity= kwargs -> SyntaxError (#55) -> fallback cards. Only the base
+        # Mobject / Surface family rejects them; that narrow case is handled by the
+        # type-aware introspection shadow (see DESIGN_codeguard_introspection_pivot.md),
+        # never by a context-free string rewrite.
         (
             r"\.get_graph_point\s*\(",
             ".input_to_graph_point(",
@@ -691,11 +695,27 @@ def _inject_color_role_header(code: str) -> tuple[str, str | None]:
     For each role referenced as a bare name and not already assigned, we prepend
     `ROLE = CONSTANT`. Injected after the import block so the names are in scope.
     """
+    # Detect role USE via AST Name nodes, not raw text (#56): a role word inside a
+    # comment ("# use MUTED tones") or a string literal ("Text('SUCCESS')") is NOT a
+    # real identifier reference and must not trigger injection. Names in Load context
+    # are genuine uses; names in Store context are definitions already present.
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code, None  # fail-open: a syntax error is the precheck's job
+
+    used_names: set[str] = set()
+    defined_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            if isinstance(node.ctx, ast.Load):
+                used_names.add(node.id)
+            elif isinstance(node.ctx, ast.Store):
+                defined_names.add(node.id)
+
     injected: list[str] = []
     for role, const in _COLOR_ROLE_CONSTANTS.items():
-        used = re.search(rf"(?<![\w.]){role}\b", code) is not None
-        defined = re.search(rf"^\s*{role}\s*=", code, flags=re.MULTILINE) is not None
-        if used and not defined:
+        if role in used_names and role not in defined_names:
             injected.append(f"{role} = {const}")
 
     if not injected:
