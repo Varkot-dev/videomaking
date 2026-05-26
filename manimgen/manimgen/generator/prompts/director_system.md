@@ -178,6 +178,27 @@ step1.next_to(update_rule, DOWN, buff=0.4).align_to(update_rule, LEFT)
 
 **Rule:** Never place content with `.next_to(obj, RIGHT)` when `obj` is already in the right half of the frame (x > 0). Use `DOWN` instead. Never place anything `.next_to(axes, RIGHT)` or `.next_to(parabola, RIGHT)` — axes/graphs are already near the right edge.
 
+### Two full arrays — NEVER side-by-side on the same horizontal band
+
+A full-width array/row needs the **whole** content width. Two of them on the same horizontal band (e.g. one `.shift(LEFT * 2.8)`, one `.shift(RIGHT * 2.8)`) each get only half the frame — so a 10-element row that fits centered will collide with its partner in the middle and overflow the safe x-bounds. Each box is ~0.85–1.0 units wide; 10 boxes ≈ 9–10 units, which does **not** fit in the ~6.5-unit half-frame.
+
+When comparing two sequences, pick one of these — never side-by-side full rows:
+- **(a) Stack vertically** — one row above the other: `row_top.center().shift(UP * 1.2)`, `row_bottom.center().shift(DOWN * 1.2)`. Both keep the full content width.
+- **(b) Show sequentially** — `FadeOut(first)` (or transform it) before building the second on the same band.
+- **(c) Far fewer elements** — only place two rows side-by-side if **each has ≤ 5 elements**, so both fit in their half (`.shift(LEFT * 3.2)` / `.shift(RIGHT * 3.2)`, each row ≤ ~4 units wide).
+
+```python
+# WRONG — two 10-element rows on the same band; they overlap in the middle and overflow
+left_row  = VGroup(*[Square(side_length=0.85) for _ in range(10)]).arrange(RIGHT, buff=0.14).shift(LEFT * 2.8)
+right_row = VGroup(*[Square(side_length=0.85) for _ in range(10)]).arrange(RIGHT, buff=0.14).shift(RIGHT * 2.8)
+
+# RIGHT (a) — stack the two full rows vertically; each keeps the full content width
+top_row    = VGroup(*[Square(side_length=0.85) for _ in range(10)]).arrange(RIGHT, buff=0.14).center().shift(UP * 1.2)
+bottom_row = VGroup(*[Square(side_length=0.85) for _ in range(10)]).arrange(RIGHT, buff=0.14).center().shift(DOWN * 1.2)
+```
+
+**Rule:** Two full-width arrays/rows never share a horizontal band. Default to stacking them vertically (UP/DOWN). Only go side-by-side when each row has ≤ 5 elements.
+
 ## Composition archetypes
 
 Pick one archetype per scene. Name it in a comment (`# Archetype A`). Compose freely only when none fit.
@@ -210,6 +231,20 @@ title.move_to([3, 3.5, 0])  # ← hardcoded position, not centered
 ```
 
 **Rule:** Titles always use `Text(...).to_edge(UP, buff=0.8)` — this centers horizontally by default. Never use `to_corner()` for a section title.
+
+### Title length — SHORT, 3–5 words, ≤ ~28 characters
+
+A section title is a **label, not a sentence.** At `font_size=36–44`, a `Text` string longer than ~28 characters runs past the safe x-bounds and renders clipped or garbled ("Midpo'rt"). Keep titles to **3–5 words, ≤ ~28 characters.** Shorten long descriptive storyboard titles down to the core idea — drop the colon and the list of sub-topics; those belong in the narration and the on-screen visuals, never in the title bar.
+
+```python
+# WRONG — long descriptive title overflows the frame, renders clipped/garbled
+title = Text("The Algorithm: Pointers, Midpoint, and Comparison", font_size=36).to_edge(UP, buff=0.8)
+
+# RIGHT — short title; the detail lives in the narration and the visuals below
+title = Text("The Algorithm", font_size=44).to_edge(UP, buff=0.8)
+```
+
+**Rule:** If a storyboard hands you a long title, shorten it before placing it. Cut "The Algorithm: Pointers, Midpoint, and Comparison" → "The Algorithm". Never lower `font_size` below 36 just to fit a long string — shorten the string instead.
 
 ### Archetype A — canonical placement
 

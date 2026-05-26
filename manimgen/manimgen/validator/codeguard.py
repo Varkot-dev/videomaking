@@ -1240,6 +1240,130 @@ def _check_horizontal_chain_overflow(lines: list[str], warnings: list[str]) -> N
             break  # one warning per scene is enough
 
 
+# Rough per-glyph aspect: an average glyph occupies ~0.55 * (font_size/72) manim
+# units of horizontal space (manim renders ~1 unit ≈ 72px at default scale). This
+# is deliberately approximate — it only needs to separate a clearly-too-wide title
+# from a normal one, not measure exact pixels. Tuned so the real ~49-char title at
+# fs=36 (~13.5 units) trips the ~13-unit threshold while a normal ~22-char title at
+# fs=48 (~8 units) stays well under.
+_GLYPH_ASPECT = 0.55
+# Usable horizontal width: the 14.2-unit frame minus side margins/buffs.
+_USABLE_FRAME_WIDTH = 13.0
+
+# Title at the UP edge: `var = Text(/Tex("...", font_size=NN, ...)....to_edge(UP`
+# Captures the title string content, the font_size, on a line that also places it
+# at the top edge. font_size may appear before or after the string within the call.
+_TITLE_TEXT_RE = re.compile(
+    r"""(?:Text|Tex|TexText)\s*\(\s*r?["'](?P<content>[^"']*)["']""",
+)
+_FONT_SIZE_RE = re.compile(r"\bfont_size\s*=\s*(\d+)")
+_TOP_EDGE_ON_LINE_RE = re.compile(r"\.to_edge\s*\(\s*UP\b|\.to_corner\s*\(\s*U[LR]\b")
+
+
+def _check_title_width_overflow(lines: list[str], warnings: list[str]) -> None:
+    """Warn when a Text/Tex title at the UP edge is likely too wide to fit.
+
+    Real defect: Text("The Algorithm: Pointers, Midpoint, and Comparison",
+    font_size=36).to_edge(UP) — 53 chars at fs=36 estimates to ~13.25 units,
+    overflowing the ~13-unit usable frame and rendering clipped/garbled.
+
+    Estimate: char_count * _GLYPH_ASPECT * (font_size / 72) manim units.
+    A normal ~24-char title at fs=36 (~6 units) or ~22-char title at fs=48
+    (~7.3 units) stays well under the threshold and is NOT flagged.
+    """
+    default_font_size = 48  # manim Text() default; conservative upper bound
+    for i, line in enumerate(lines):
+        if not _TOP_EDGE_ON_LINE_RE.search(line):
+            continue
+        m = _TITLE_TEXT_RE.search(line)
+        if not m:
+            continue
+        content = m.group("content")
+        char_count = len(content)
+        fs_m = _FONT_SIZE_RE.search(line)
+        font_size = int(fs_m.group(1)) if fs_m else default_font_size
+        est_width = char_count * _GLYPH_ASPECT * (font_size / 72)
+        if est_width > _USABLE_FRAME_WIDTH:
+            warnings.append(
+                f"Line {i + 1}: title is likely too wide — '{content[:40]}...' "
+                f"({char_count} chars at font_size={font_size}) estimates to "
+                f"~{est_width:.1f} manim units, exceeding the ~{_USABLE_FRAME_WIDTH:.0f}-unit "
+                "usable frame width and will render clipped/garbled. "
+                "Shorten the title text or reduce font_size."
+            )
+
+
+# A large horizontal array: VGroup built from a list comprehension that iterates
+# over a source list, where that source list literal has 8+ elements. Captures the
+# source list variable name so we can size it.
+_ARRAY_COMP_RE = re.compile(
+    r"VGroup\s*\(\s*\*\s*\[[^\]]*?\bfor\b\s+\w+\s+in\s+(\w+)\s*\]"
+)
+_LIST_LITERAL_RE = re.compile(r"^\s*(\w+)\s*=\s*\[([^\]]*)\]")
+# Opposing horizontal shift on the same line: .shift(LEFT * n) / .shift(RIGHT * n).
+# Also detect a vertical component so we can tell same-band from stacked rows.
+_SHIFT_LEFT_RE = re.compile(r"\.shift\([^)]*\bLEFT\b")
+_SHIFT_RIGHT_RE = re.compile(r"\.shift\([^)]*\bRIGHT\b")
+_SHIFT_VERTICAL_RE = re.compile(r"\.shift\([^)]*\b(?:UP|DOWN)\b")
+
+# Conservative threshold: only flag arrays large enough that two of them with
+# opposing shifts plausibly collide in the middle.
+_LARGE_ARRAY_MIN_ELEMENTS = 8
+
+
+def _check_side_by_side_array_overflow(lines: list[str], warnings: list[str]) -> None:
+    """Warn when two large horizontal arrays with opposing shifts share a band.
+
+    Real defect: two 10-element VGroups of Squares, one .shift(LEFT*2.8) and one
+    .shift(RIGHT*2.8) on the same vertical band, collide in the middle.
+
+    Conservative: requires BOTH groups to be built from a list comprehension over
+    an 8+ element source list, AND placed with opposing horizontal shifts (one
+    LEFT, one RIGHT) on the same vertical band (neither shifted vertically apart).
+    A single array, two small groups, same-direction shifts, or vertically
+    separated rows are NOT flagged.
+    """
+    # Map source-list variable -> element count, for list literals with enough items.
+    list_sizes: dict[str, int] = {}
+    for line in lines:
+        lm = _LIST_LITERAL_RE.match(line)
+        if not lm:
+            continue
+        items = [tok for tok in lm.group(2).split(",") if tok.strip()]
+        list_sizes[lm.group(1)] = len(items)
+
+    # Collect large-array rows: (line_idx, horizontal_dir, has_vertical_shift)
+    left_rows: list[bool] = []  # has_vertical_shift flags for LEFT-shifted large arrays
+    right_rows: list[bool] = []
+
+    for line in lines:
+        cm = _ARRAY_COMP_RE.search(line)
+        if not cm:
+            continue
+        source = cm.group(1)
+        if list_sizes.get(source, 0) < _LARGE_ARRAY_MIN_ELEMENTS:
+            continue
+        has_vertical = bool(_SHIFT_VERTICAL_RE.search(line))
+        if _SHIFT_LEFT_RE.search(line):
+            left_rows.append(has_vertical)
+        elif _SHIFT_RIGHT_RE.search(line):
+            right_rows.append(has_vertical)
+
+    # Need at least one LEFT-shifted and one RIGHT-shifted large array, both on the
+    # same band (no vertical separation), for a middle collision.
+    same_band_left = any(not v for v in left_rows)
+    same_band_right = any(not v for v in right_rows)
+    if same_band_left and same_band_right:
+        warnings.append(
+            "Two large side-by-side arrays detected: each VGroup is built from an "
+            f"{_LARGE_ARRAY_MIN_ELEMENTS}+ element list and they are placed with "
+            "opposing horizontal shifts (LEFT*n and RIGHT*n) on the same vertical "
+            "band — they will collide/overlap in the middle. Stack them vertically "
+            "(one .shift(UP...), one .shift(DOWN...)), shrink each row "
+            "(smaller side_length / fewer visible elements), or show one array at a time."
+        )
+
+
 def _check_layout_smells(code: str) -> list[str]:
     """Codeguard-local layout heuristics that are not design-system invariants.
 
@@ -1272,6 +1396,8 @@ def _check_layout_smells(code: str) -> list[str]:
     _check_next_to_stacking(lines, warnings)
     _check_horizontal_chain_overflow(lines, warnings)
     _check_top_edge_collision(lines, warnings)
+    _check_title_width_overflow(lines, warnings)
+    _check_side_by_side_array_overflow(lines, warnings)
 
     right_anchor_re = re.compile(
         r"\.next_to\(\s*(parabola|axes|graph|curve|surface|table_headers)\s*,\s*RIGHT"

@@ -754,3 +754,135 @@ class TestTopEdgeCollision:
         code = 'title = Text("Just one").to_edge(UP, buff=0.8)\n'
         warnings = self._smells(code)
         assert not any("title zone" in w for w in warnings)
+
+
+class TestTitleWidthOverflow:
+    """A long Text/Tex title at the UP edge renders clipped/garbled when its
+    estimated rendered width exceeds the usable frame width (~13 manim units).
+    Real defect: a 53-char title at font_size=36 clips off both sides of frame."""
+
+    def _smells(self, code: str) -> list[str]:
+        from manimgen.validator.codeguard import _check_layout_smells
+        return _check_layout_smells(code)
+
+    def test_long_title_fs36_warns(self):
+        # The exact real defect: 53 chars at fs=36, .to_edge(UP)
+        code = (
+            'title = Text("The Algorithm: Pointers, Midpoint, and Comparison", '
+            'font_size=36, color=WHITE).to_edge(UP, buff=0.8)\n'
+        )
+        warnings = self._smells(code)
+        assert any("too wide" in w.lower() or "title width" in w.lower() for w in warnings)
+        # message must guide the fix
+        assert any(
+            ("shorten" in w.lower() or "font_size" in w.lower())
+            for w in warnings
+            if "too wide" in w.lower() or "title width" in w.lower()
+        )
+
+    def test_normal_short_title_fs36_no_warning(self):
+        # ~24-char title at fs=36 is well within the frame — must NOT warn.
+        code = 'title = Text("Binary Search Trees", font_size=36).to_edge(UP, buff=0.8)\n'
+        warnings = self._smells(code)
+        assert not any("too wide" in w.lower() or "title width" in w.lower() for w in warnings)
+
+    def test_normal_title_fs48_no_warning(self):
+        # ~22-char title at the largest canonical size — still fits.
+        code = 'title = Text("Gradient Descent Intro", font_size=48).to_edge(UP, buff=0.8)\n'
+        warnings = self._smells(code)
+        assert not any("too wide" in w.lower() or "title width" in w.lower() for w in warnings)
+
+    def test_long_string_not_at_top_edge_no_warning(self):
+        # A long string NOT in the title zone is the body's problem, not a title
+        # clip — must not be flagged by the title-width check.
+        code = (
+            'body = Text("The Algorithm: Pointers, Midpoint, and Comparison", '
+            'font_size=36).move_to(ORIGIN)\n'
+        )
+        warnings = self._smells(code)
+        assert not any("too wide" in w.lower() or "title width" in w.lower() for w in warnings)
+
+    def test_long_title_smaller_font_no_warning(self):
+        # Same long string but at a small font_size fits — must NOT warn.
+        code = (
+            'title = Text("The Algorithm: Pointers, Midpoint, and Comparison", '
+            'font_size=18).to_edge(UP, buff=0.8)\n'
+        )
+        warnings = self._smells(code)
+        assert not any("too wide" in w.lower() or "title width" in w.lower() for w in warnings)
+
+    def test_long_tex_title_also_warns(self):
+        # The same width logic applies to Tex() titles at the UP edge.
+        code = (
+            'title = Tex(r"The Algorithm: Pointers, Midpoint, and Comparison", '
+            'font_size=36).to_edge(UP, buff=0.8)\n'
+        )
+        warnings = self._smells(code)
+        assert any("too wide" in w.lower() or "title width" in w.lower() for w in warnings)
+
+
+class TestSideBySideArrayOverflow:
+    """Two large horizontal arrays (10-element VGroups built from list
+    comprehensions over an 8+ item source list) placed with opposing horizontal
+    shifts (LEFT*n and RIGHT*n) on the same vertical band collide in the middle.
+    Real defect: two 10-Square rows at LEFT*2.8 and RIGHT*2.8 overlap."""
+
+    def _smells(self, code: str) -> list[str]:
+        from manimgen.validator.codeguard import _check_layout_smells
+        return _check_layout_smells(code)
+
+    def test_two_opposing_large_arrays_warn(self):
+        code = (
+            "arr_a = [5, 3, 8, 1, 9, 2, 7, 4, 6, 0]\n"
+            "arr_b = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]\n"
+            "left_row = VGroup(*[Square(side_length=0.7) for v in arr_a]).arrange(RIGHT, buff=0.15).shift(LEFT * 2.8)\n"
+            "right_row = VGroup(*[Square(side_length=0.7) for v in arr_b]).arrange(RIGHT, buff=0.15).shift(RIGHT * 2.8)\n"
+        )
+        warnings = self._smells(code)
+        assert any("collide" in w.lower() or "overlap" in w.lower() or "overflow" in w.lower()
+                   for w in warnings if "side-by-side" in w.lower() or "two" in w.lower())
+
+    def test_single_large_array_no_warning(self):
+        # A single 10-element array centered is fine — must NOT warn.
+        code = (
+            "arr = [5, 3, 8, 1, 9, 2, 7, 4, 6, 0]\n"
+            "row = VGroup(*[Square(side_length=0.7) for v in arr]).arrange(RIGHT, buff=0.15).center()\n"
+        )
+        warnings = self._smells(code)
+        assert not any("side-by-side" in w.lower() for w in warnings)
+
+    def test_two_small_groups_no_warning(self):
+        # Two SMALL groups (3 elements each) shifted apart do not collide —
+        # must NOT warn (conservative: avoid false positives on small groups).
+        code = (
+            "a = [1, 2, 3]\n"
+            "b = [4, 5, 6]\n"
+            "left = VGroup(*[Square() for v in a]).arrange(RIGHT).shift(LEFT * 2.8)\n"
+            "right = VGroup(*[Square() for v in b]).arrange(RIGHT).shift(RIGHT * 2.8)\n"
+        )
+        warnings = self._smells(code)
+        assert not any("side-by-side" in w.lower() for w in warnings)
+
+    def test_two_large_arrays_same_direction_no_warning(self):
+        # Both shifted the SAME direction (both LEFT) — they don't collide in the
+        # middle the way opposing shifts do; conservative check should not warn.
+        code = (
+            "arr_a = [5, 3, 8, 1, 9, 2, 7, 4, 6, 0]\n"
+            "arr_b = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]\n"
+            "left_row = VGroup(*[Square() for v in arr_a]).arrange(RIGHT).shift(LEFT * 2.8)\n"
+            "other_row = VGroup(*[Square() for v in arr_b]).arrange(RIGHT).shift(LEFT * 2.8)\n"
+        )
+        warnings = self._smells(code)
+        assert not any("side-by-side" in w.lower() for w in warnings)
+
+    def test_two_large_arrays_vertically_separated_no_warning(self):
+        # Opposing horizontal shifts but ALSO separated vertically (one UP, one
+        # DOWN) — they are not on the same band, so no collision.
+        code = (
+            "arr_a = [5, 3, 8, 1, 9, 2, 7, 4, 6, 0]\n"
+            "arr_b = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]\n"
+            "top = VGroup(*[Square() for v in arr_a]).arrange(RIGHT).shift(UP * 2 + LEFT * 2.8)\n"
+            "bot = VGroup(*[Square() for v in arr_b]).arrange(RIGHT).shift(DOWN * 2 + RIGHT * 2.8)\n"
+        )
+        warnings = self._smells(code)
+        assert not any("side-by-side" in w.lower() for w in warnings)
