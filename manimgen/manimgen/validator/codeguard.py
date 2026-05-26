@@ -1471,6 +1471,31 @@ def _shadow_log_unknown_symbols(code: str) -> list[str]:
     return flagged
 
 
+def _shadow_log_invalid_kwargs(code: str) -> list:
+    """Report-only (Phase 2): log constructor kwargs the introspection check *would*
+    flag as provably invalid for the resolved manimlib class.
+
+    Pure shadow mode — NEVER blocks the render, never adds to ``errors`` or
+    ``layout_warnings``, never alters code. Lands the type-aware mechanism + shadow
+    logging so enforcement can be gated on real data later (see
+    docs/DESIGN_codeguard_introspection_pivot.md). Fail-open: when ``manimlib`` is
+    unavailable (CI) it is a no-op. Returns the flagged items (for tests).
+    """
+    from manimgen.validator.manimlib_signatures import shadow_check_kwargs
+
+    flagged = shadow_check_kwargs(code)
+    if flagged:
+        import logging
+
+        logging.getLogger(__name__).info(
+            "[codeguard][kwarg-shadow] would flag %d invalid kwarg(s) "
+            "(report-only, render NOT blocked): %s",
+            len(flagged),
+            ", ".join(f"{fk.class_name}(...{fk.kwarg}=) L{fk.lineno}" for fk in flagged),
+        )
+    return flagged
+
+
 def precheck_and_autofix(code: str) -> str:
     """Apply all known auto-fixes to a code string and return the fixed code.
 
@@ -1499,6 +1524,7 @@ def precheck_and_autofix_file(scene_path: str) -> dict[str, Any]:
             f.write(fixed)
 
     _shadow_log_unknown_symbols(fixed)
+    _shadow_log_invalid_kwargs(fixed)
 
     errors = validate_scene_code(fixed)
     layout_warnings = run_invariant_warnings(fixed)
