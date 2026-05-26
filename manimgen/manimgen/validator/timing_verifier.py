@@ -76,6 +76,28 @@ _FREEZE_BLOCK_THRESHOLD = float(
 )
 _DEFAULT_PLAY_RUNTIME = 1.0  # ManimGL default when run_time= is omitted
 
+# Compression floor (issue #59). A scaled-down run_time is never written below
+# this — an animation faster than ~0.1s reads as an instant cut, not motion. If
+# even at the floor a cue's animations cannot be squeezed into its narration D,
+# we render best-effort at the floor and emit a planner-issue warning rather
+# than mangling or dropping content.
+_MIN_RUN_TIME = 0.1
+
+# Scaling is treated as a no-op when the required factor is this close to 1.0.
+# Guards idempotency: after verify→fix→re-verify, a second auto_fix pass on the
+# already-corrected code sees factor≈1.0 and rewrites nothing (no double-scale).
+_SCALE_NOOP_LO = 0.98
+_SCALE_NOOP_HI = 1.02
+
+# Largest stretch we will apply by slowing animations. Beyond this a play would
+# read as unnaturally slow (a 2s Write dragged to 10s looks broken), so the gap
+# is better absorbed by HOLDING the final frame with a self.wait() — the issue
+# #22 deterministic residual resolver. This is constraint 7's "only adjust the
+# wait when scaling plays alone cannot [reasonably] absorb the gap". Compression
+# (factor < 1) has no such cap — it is always preferable to a frame the cutter
+# would otherwise drop as an over-length clip.
+_MAX_STRETCH_FACTOR = 3.0
+
 
 class _Unknown:
     """Tri-state sentinel for a statically-unresolvable duration (issue #23).
@@ -605,19 +627,26 @@ def _insert_missing_wait(
     LLM as an advisory hint. The verifier already knows the precise residual;
     this makes it authoritative by inserting the wait at the correct boundary.
 
-    Anchors on the last meaningful line of the block (located via rfind so the
-    reverse-order processing in auto_fix_timing stays offset-safe). Returns
-    ``(new_code, applied_message_or_None)``.
+    Anchors within the cue BLOCK, not the whole file: first locate the block
+    (its ``# CUE N`` header makes ``block_code`` unique), then find the anchor
+    line inside that block's span. Searching the whole file with rfind would
+    land the wait in the wrong cue when two cues share byte-identical play text.
+    Returns ``(new_code, applied_message_or_None)``.
     """
     anchor = _last_meaningful_line(block_code)
     if anchor is None:
         return fixed_code, None
     anchor_line, indent = anchor
 
-    insert_idx = fixed_code.rfind(anchor_line)
-    if insert_idx < 0:
+    # Locate this cue's block in the full code, then find the anchor line only
+    # within that block — never across the whole file (cross-cue contamination).
+    block_idx = fixed_code.rfind(block_code)
+    if block_idx < 0:
         return fixed_code, None
-    insert_at = insert_idx + len(anchor_line)
+    anchor_in_block = block_code.rfind(anchor_line)
+    if anchor_in_block < 0:
+        return fixed_code, None
+    insert_at = block_idx + anchor_in_block + len(anchor_line)
 
     wait_line = f"\n{indent}self.wait({residual:.2f})  # CUE_FILL auto-inserted"
     new_code = fixed_code[:insert_at] + wait_line + fixed_code[insert_at:]
@@ -625,6 +654,233 @@ def _insert_missing_wait(
         f"CUE {cue_idx}: inserted self.wait({residual:.2f}) at cue boundary "
         f"(no existing wait; closing a {residual:.2f}s freeze-frame tail)"
     )
+    return new_code, msg
+
+
+# ---------------------------------------------------------------------------
+# run_time scaling (issue #59)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _RunTimeLiteral:
+    """A resolvable ``run_time=`` constant located within a cue block.
+
+    Offsets are character indices into the *block* string (already translated
+    out of any ``if True:`` parse-wrapper), so the literal can be sliced and
+    replaced without re-tokenising. ``value`` is the current float.
+    """
+
+    start: int
+    end: int
+    value: float
+
+
+def _block_line_starts(block_code: str) -> list[int]:
+    """Character offset of the first char of each 1-based line in block_code."""
+    starts = [0]
+    for line in block_code.splitlines(keepends=True):
+        starts.append(starts[-1] + len(line))
+    return starts
+
+
+def _collect_play_run_time_consts(
+    block_code: str,
+) -> tuple[list[_RunTimeLiteral], bool]:
+    """Locate every CONSTANT ``run_time=`` literal inside ``self.play(...)``.
+
+    Returns ``(literals, parse_ok)``. Each literal carries its character span
+    within ``block_code`` so callers can do precise, offset-based replacement —
+    NEVER regex/rfind, which mis-handled loops and multi-line calls (#55/#56/
+    #57). The full subtree is walked (``ast.walk``), so occurrences inside
+    ``for`` loops and ``if`` branches are all captured, not just the last.
+
+    A dynamic ``run_time=expr`` contributes no literal (it is UNKNOWN and must
+    not be scaled). ``parse_ok`` is False when the block could not be parsed.
+    """
+    # A cue block is a slice of construct(), so it is usually indented. Parsing
+    # bare fails on the indent; wrap in ``if True:`` exactly like _parse_cue_block
+    # and record the (line, col) shift so offsets translate back to block_code.
+    line_shift = 0
+    col_shift = 0
+    try:
+        tree = ast.parse(block_code)
+    except (SyntaxError, IndentationError):
+        try:
+            tree = ast.parse(
+                "if True:\n"
+                + "\n".join("    " + line for line in block_code.splitlines())
+            )
+            line_shift = 1  # the synthetic ``if True:`` header line
+            col_shift = 4  # the 4-space re-indent added to every body line
+        except (SyntaxError, IndentationError):
+            return [], False
+
+    line_starts = _block_line_starts(block_code)
+    literals: list[_RunTimeLiteral] = []
+
+    for node in ast.walk(tree):
+        if not _is_self_play(node):
+            continue
+        for kw in node.keywords:
+            if kw.arg != "run_time":
+                continue
+            val = _eval_constant(kw.value)
+            if val is None:
+                continue  # dynamic — UNKNOWN, never scale
+            v = kw.value
+            # Translate the value node's wrapped (line, col) back to block_code
+            # coordinates, then to an absolute character offset.
+            # AST lineno is 1-based; line_starts is 0-based ⇒ index lineno-1.
+            start_line = v.lineno - line_shift
+            end_line = (v.end_lineno or v.lineno) - line_shift
+            start_col = v.col_offset - col_shift
+            end_col = (v.end_col_offset or v.col_offset) - col_shift
+            if start_line < 1 or end_line < 1 or end_line > len(line_starts):
+                continue
+            start = line_starts[start_line - 1] + start_col
+            end = line_starts[end_line - 1] + end_col
+            literals.append(_RunTimeLiteral(start=start, end=end, value=val))
+
+    # Sort by position so replacement (done in reverse) stays offset-stable.
+    literals.sort(key=lambda lit: lit.start)
+    return literals, True
+
+
+def _format_run_time(value: float) -> str:
+    """Render a scaled run_time as a clean 3-decimal float literal.
+
+    ``round(.., 3)`` then ``repr`` strips trailing-zero/float-noise artefacts
+    (0.156, not 0.15600000001 and not 0.1560).
+    """
+    return repr(round(value, 3))
+
+
+def _scale_run_times_in_block(
+    block_code: str,
+    literals: list[_RunTimeLiteral],
+    factor: float,
+) -> tuple[str, bool]:
+    """Rewrite every located run_time literal by ``factor``, clamped to the
+    compression floor. Returns ``(new_block, hit_floor)``.
+
+    Replacements are applied from the highest offset down so each edit leaves
+    the offsets of the not-yet-applied (earlier) literals valid.
+    """
+    hit_floor = False
+    new_block = block_code
+    for lit in sorted(literals, key=lambda l: l.start, reverse=True):
+        scaled = lit.value * factor
+        if scaled < _MIN_RUN_TIME:
+            scaled = _MIN_RUN_TIME
+            hit_floor = True
+        new_block = (
+            new_block[: lit.start]
+            + _format_run_time(scaled)
+            + new_block[lit.end :]
+        )
+    return new_block, hit_floor
+
+
+def _try_scale_plays(
+    fixed_code: str,
+    block_code: str,
+    cue_idx: int,
+    all_stmts: list[ast.stmt],
+    expected: float,
+) -> tuple[str, str | None]:
+    """Scale a cue's self.play(run_time=...) literals so its animations fill the
+    narration duration ``expected`` (issue #59).
+
+    Applied only to cue blocks with NO adjustable trailing self.wait() — the
+    exact failure mode that produced 262-byte empty cue videos: a continuous
+    animation far shorter than its narration with no wait to stretch. Cues that
+    DO have a trailing wait keep the existing wait-adjustment path (the wait
+    deterministically absorbs the whole gap there).
+
+    Returns ``(new_code, applied_message_or_None)``. A None message means "not
+    applicable / no-op" — the caller then falls through to the wait logic.
+
+    Guards (recreating any of these reintroduces a known bug):
+      - block_unknown → never scale (dynamic run_time/loop count, #23).
+      - play_total == 0 (zero-play cue) → never divide by zero; caller's wait
+        path fills D instead.
+      - factor within the no-op band → leave the code byte-for-byte (idempotency).
+      - un-fittable even at the floor → floor every literal + emit a
+        planner-issue warning; never drop or mangle content.
+    """
+    block_total, block_unknown = _time_for_statements(all_stmts)
+    if block_unknown:
+        return fixed_code, None  # UNKNOWN — fall back to wait path / no-op
+
+    literals, parse_ok = _collect_play_run_time_consts(block_code)
+    if not parse_ok or not literals:
+        return fixed_code, None
+
+    # Loop-aware play total: each literal already weighted by its loop count is
+    # exactly ``block_total`` minus the resolved waits. We need only the play
+    # contribution, so recompute it directly from the statement walk minus waits
+    # is unnecessary — for the no-wait blocks this path handles, block_total IS
+    # the play total. Scaling every literal by ``factor`` scales an in-loop
+    # literal's N×contribution by the same factor, so per-literal scaling is
+    # loop-correct.
+    play_total = block_total
+    if play_total <= 0:
+        return fixed_code, None  # zero-play — caller fills with a wait
+
+    if abs(expected - play_total) < _TOLERANCE:
+        # Within the tolerance band the muxer's pad/trim already covers the
+        # drift; rewriting run_times here would be churn for no visible benefit
+        # (and would fight idempotency on sub-second deltas). Strict < matches
+        # CueTiming.ok so an exactly-1.0s shortfall is fixed, not no-op'd.
+        return fixed_code, None
+
+    factor = expected / play_total
+    if _SCALE_NOOP_LO <= factor <= _SCALE_NOOP_HI:
+        return fixed_code, None  # already on target — idempotent no-op
+    if factor > _MAX_STRETCH_FACTOR:
+        # Too large a stretch to absorb by slowing animations — hand back to the
+        # caller's wait-insertion path, which holds the final frame to fill D.
+        return fixed_code, None
+
+    new_block, hit_floor = _scale_run_times_in_block(block_code, literals, factor)
+
+    # Locate this block in the full code (reverse-order processing + rfind keeps
+    # the match correct even when two blocks share identical text).
+    idx = fixed_code.rfind(block_code)
+    if idx < 0:
+        return fixed_code, None
+    new_code = fixed_code[:idx] + new_block + fixed_code[idx + len(block_code) :]
+
+    # Determine, loop-aware, the post-scale play total by re-timing the rewritten
+    # block. If the floor forced it above D (over-stuffed cue that physically
+    # cannot fit), surface the planner-issue signal — but still render the
+    # best-effort floored result; never drop or mangle content.
+    cannot_fit = False
+    if hit_floor:
+        scaled_tree = _parse_cue_block(new_block)
+        if scaled_tree is not None:
+            scaled_total, _ = _time_for_statements(scaled_tree.body)
+            # "Cannot fit" means the floored animation still overruns the
+            # narration itself — compare against ``expected`` directly, not the
+            # coarse 1.0s drift tolerance (which would mask a 0.5s overflow on a
+            # 0.2s cue). A small epsilon avoids float-noise false positives.
+            cannot_fit = scaled_total > expected + 1e-6
+
+    if cannot_fit:
+        msg = (
+            f"CUE {cue_idx}: cannot fit {play_total:.2f}s of animation into "
+            f"{expected:.2f}s narration even at the {_MIN_RUN_TIME}s run_time "
+            f"floor — likely planner issue (cue over-stuffed). Floored "
+            f"run_times and rendered best-effort; no content dropped."
+        )
+    else:
+        verb = "stretched" if factor > 1 else "compressed"
+        msg = (
+            f"CUE {cue_idx}: {verb} {len(literals)} run_time(s) by "
+            f"{factor:.3f}x (animations {play_total:.2f}s → {expected:.2f}s "
+            f"to match narration)"
+        )
     return new_code, msg
 
 
@@ -686,15 +942,31 @@ def auto_fix_timing(
                 last_wait_old_val = _get_wait_duration(stmt.value)
 
         if last_wait_line is None:
-            # #22: no self.wait() in this cue block. If the animations fall
-            # short of the expected duration by more than tolerance, INSERT a
-            # self.wait(residual) at the boundary — the deterministic resolver.
-            # Skip when the block has any dynamic duration (residual unknowable,
-            # #23) or when the block is on-time / overruns (nothing to fill).
+            # No trailing self.wait() to absorb the gap. This is issue #59's
+            # exact failure mode: a continuous animation whose wall-clock differs
+            # from its narration with no wait to stretch — the case that produced
+            # 262-byte empty cue videos. PRIMARY fix: scale the self.play(
+            # run_time=...) literals so the animation fills D exactly. Scaling is
+            # loop-aware (each literal scaled by the same factor scales its N×
+            # loop contribution) and uses offset-based AST replacement (no regex,
+            # no rfind-of-one-literal — every occurrence is rewritten).
+            expected = cue_durations[cue_idx]
+            scaled_code, scale_msg = _try_scale_plays(
+                fixed_code, block_code, cue_idx, all_stmts, expected
+            )
+            if scale_msg:
+                fixed_code = scaled_code
+                applied.append(scale_msg)
+                continue
+
+            # FALLBACK (#22 + #23): scaling did not apply — the block is UNKNOWN
+            # (dynamic run_time/loop count) or zero-play (no plays to scale, e.g.
+            # ambient rotation / pure hold). If the animations fall short of D by
+            # more than tolerance, INSERT a self.wait(residual) at the boundary.
+            # Skip dynamic blocks (residual unknowable) and on-time/overruns.
             block_total, block_unknown = _time_for_statements(all_stmts)
             if block_unknown:
                 continue
-            expected = cue_durations[cue_idx]
             residual = expected - block_total
             if residual <= _MIN_INSERT_RESIDUAL:
                 continue

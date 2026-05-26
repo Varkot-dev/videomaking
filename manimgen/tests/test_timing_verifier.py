@@ -6,6 +6,7 @@ import pytest
 
 from manimgen.validator.timing_verifier import (
     _FREEZE_BLOCK_THRESHOLD,
+    _MIN_RUN_TIME,
     UNKNOWN,
     CueTiming,
     _eval_constant,
@@ -392,16 +393,44 @@ class TestInsertMissingWait:
         assert applied == []
         assert fixed == code
 
-    def test_no_insert_when_overrun(self):
-        # animations already exceed expected — nothing to fill.
+    def test_identical_play_cues_each_get_their_own_wait(self):
+        # Regression: two cues with byte-identical play text both need a wait
+        # inserted (huge stretch routes to the fallback wait path). The wait for
+        # CUE 0 must land in CUE 0, not in the later identical block (the old
+        # rfind-across-whole-file bug put both waits in CUE 1).
+        code = textwrap.dedent("""\
+            # CUE 0 — 5.0s
+            self.play(Write(title), run_time=1.0)
+
+            # CUE 1 — 5.0s
+            self.play(Write(title), run_time=1.0)
+        """)
+        fixed, applied = auto_fix_timing(code, [5.0, 5.0])
+        # each cue block contains exactly one inserted wait
+        import re as _re
+        frags = _re.split(r"# CUE \d", fixed)[1:]  # drop preamble
+        assert len(frags) == 2
+        for frag in frags:
+            assert frag.count("self.wait(") == 1, (
+                "each cue must get its own wait, not both in one block"
+            )
+        ast.parse(fixed)
+
+    def test_no_wait_inserted_when_overrun(self):
+        # An overrun (4.0s animation vs 1.0s narration) must NOT get a self.wait()
+        # inserted — there is nothing to *fill*. Since #59, the overrun is instead
+        # COMPRESSED by scaling run_times to fit D; assert no wait was added and
+        # the compression happened.
         code = textwrap.dedent("""\
             # CUE 0 — 1.0s
             self.play(Write(x), run_time=2.0)
             self.play(Grow(y), run_time=2.0)
         """)
         fixed, applied = auto_fix_timing(code, [1.0])
-        assert applied == []
-        assert fixed == code
+        assert "self.wait(" not in fixed, "no wait should be inserted on an overrun"
+        # the run_times are compressed to fit the 1.0s narration
+        assert "run_time=2.0" not in fixed
+        assert any("compress" in m.lower() for m in applied)
 
     def test_insert_does_not_create_phantom_cue_block(self):
         # The CUE_FILL comment must not be parsed as a new "# CUE N" boundary.
@@ -738,3 +767,302 @@ class TestJoinFrozenWithTiming:
     def test_empty_input_is_safe(self):
         assert join_frozen_with_timing([], timing_freeze_confirmed=True) == []
         assert join_frozen_with_timing([], timing_freeze_confirmed=False) == []
+
+
+# -----------------------------------------------------------------------
+# auto_fix_timing — RUN_TIME SCALING (issue #59).
+#
+# The core fix: when a cue's animations sum to a different wall-clock than its
+# narration duration D, scale every resolvable self.play(run_time=...) literal
+# by factor = D / sum_of_play_run_time so the animation fills exactly D. This
+# extends (does NOT replace) the existing self.wait() adjustment — scaling is
+# tried first; waits only absorb a residual that scaling cannot.
+#
+# Constraints under test (from 4 adversarial design reviews):
+#  - FULL AST traversal: every run_time literal scaled, including inside loops
+#    and if-blocks (a naive rfind would fix only the last occurrence).
+#  - UNKNOWN cues (dynamic run_time / dynamic loop count) are NOT scaled.
+#  - Zero-play cues never divide by zero — fall back to wait insertion.
+#  - Compression floor _MIN_RUN_TIME; below it, warn + best-effort, never drop.
+#  - Idempotency: running twice == running once (factor within [0.98,1.02] no-op).
+#  - Comments preserved; comments/strings containing "run_time=" never touched.
+# -----------------------------------------------------------------------
+
+
+def _runtime_literals(code: str) -> list[float]:
+    """Extract every numeric run_time= literal from code, in source order.
+
+    Used by the scaling tests to assert ALL occurrences were rewritten (not
+    just the last), independent of how auto_fix_timing locates them.
+    """
+    out: list[float] = []
+    tree = ast.parse(code)
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "play"
+        ):
+            continue
+        for kw in node.keywords:
+            if kw.arg == "run_time" and isinstance(kw.value, ast.Constant):
+                out.append(float(kw.value.value))
+    return out
+
+
+class TestRunTimeScalingShort:
+    def test_short_cue_scales_run_times_up(self):
+        # plays sum to 2.0, D=4.0 → factor 2x → run_times become 0.8 and 1.2.
+        code = textwrap.dedent("""\
+            # CUE 0 — 4.0s
+            self.play(Write(title), run_time=0.8)
+            self.play(ShowCreation(curve), run_time=1.2)
+        """)
+        fixed, applied = auto_fix_timing(code, [4.0])
+        assert applied, "a 2x-short cue must be scaled"
+        lits = _runtime_literals(fixed)
+        assert lits == pytest.approx([1.6, 2.4])
+        # The cue now fills D exactly.
+        assert verify_timing(fixed, [4.0])["ok"]
+
+    def test_short_cue_remains_valid_python(self):
+        code = textwrap.dedent("""\
+            # CUE 0 — 6.0s
+            self.play(Write(title), run_time=1.0)
+            self.play(ShowCreation(curve), run_time=2.0)
+        """)
+        fixed, _ = auto_fix_timing(code, [6.0])
+        ast.parse(fixed)  # must not raise
+        assert verify_timing(fixed, [6.0])["ok"]
+
+
+class TestRunTimeScalingLong:
+    def test_long_cue_compresses_run_times(self):
+        # plays sum to 6.0, D=3.0 → factor 0.5x → each run_time halved.
+        code = textwrap.dedent("""\
+            # CUE 0 — 3.0s
+            self.play(Write(title), run_time=2.0)
+            self.play(ShowCreation(curve), run_time=4.0)
+        """)
+        fixed, applied = auto_fix_timing(code, [3.0])
+        assert applied, "a 2x-long cue must be compressed"
+        lits = _runtime_literals(fixed)
+        assert lits == pytest.approx([1.0, 2.0])
+        assert verify_timing(fixed, [3.0])["ok"]
+
+
+class TestRunTimeScalingLoop:
+    def test_loop_run_time_literal_scaled(self):
+        # for i in range(5): self.play(run_time=0.4) → contributes 5*0.4=2.0.
+        # D=4.0 → factor 2x → the single literal 0.4 becomes 0.8 (5*0.8=4.0).
+        code = textwrap.dedent("""\
+            # CUE 0 — 4.0s
+            for i in range(5):
+                self.play(ShowCreation(scan_rect), run_time=0.4)
+        """)
+        fixed, applied = auto_fix_timing(code, [4.0])
+        assert applied
+        lits = _runtime_literals(fixed)
+        # Exactly one literal in source; it must be scaled to 0.8 — NOT left
+        # at 0.4 and NOT a rogue per-occurrence overcorrection.
+        assert lits == pytest.approx([0.8])
+        assert verify_timing(fixed, [4.0])["ok"]
+
+    def test_all_occurrences_inside_loop_and_outside_scaled(self):
+        # A literal appears once before the loop and once inside it. A naive
+        # rfind would touch only the last; the full-AST transform must scale
+        # BOTH. Pre-time: 0.5 (outside) + 4*0.5 (loop) = 2.5. D=5.0 → 2x.
+        code = textwrap.dedent("""\
+            # CUE 0 — 5.0s
+            self.play(Write(title), run_time=0.5)
+            for i in range(4):
+                self.play(ShowCreation(box), run_time=0.5)
+        """)
+        fixed, applied = auto_fix_timing(code, [5.0])
+        assert applied
+        lits = _runtime_literals(fixed)
+        assert len(lits) == 2
+        assert all(v == pytest.approx(1.0) for v in lits), (
+            "every run_time occurrence must be scaled, not just the last"
+        )
+        assert verify_timing(fixed, [5.0])["ok"]
+
+
+class TestRunTimeScalingUnknown:
+    def test_dynamic_runtime_not_scaled_falls_back_to_wait(self):
+        # run_time=rt is UNKNOWN: must NOT compute a scale factor from it. With
+        # no wait to adjust and a dynamic duration, auto_fix is a clean no-op.
+        code = textwrap.dedent("""\
+            # CUE 0 — 8.0s
+            self.play(ShowCreation(curve), run_time=rt)
+        """)
+        fixed, applied = auto_fix_timing(code, [8.0])
+        assert applied == []
+        assert fixed == code
+
+    def test_dynamic_loop_count_not_scaled(self):
+        # range(n) → loop count UNKNOWN → must not scale (would be wrong).
+        code = textwrap.dedent("""\
+            # CUE 0 — 8.0s
+            for i in range(n):
+                self.play(ShowCreation(box), run_time=0.3)
+        """)
+        fixed, applied = auto_fix_timing(code, [8.0])
+        assert applied == []
+        assert fixed == code
+
+    def test_unknown_with_existing_wait_left_untouched(self):
+        # Dynamic run_time + a constant trailing wait: the existing path skips
+        # blocks with any dynamic duration. Must not scale, must not crash.
+        code = textwrap.dedent("""\
+            # CUE 0 — 8.0s
+            self.play(ShowCreation(curve), run_time=rt)
+            self.wait(1.0)
+        """)
+        fixed, applied = auto_fix_timing(code, [8.0])
+        assert applied == []
+        assert fixed == code
+
+
+class TestRunTimeScalingZeroPlay:
+    def test_zero_play_cue_no_division_by_zero(self):
+        # No plays at all — only a wait. sum_of_play_run_time == 0 → must NOT
+        # divide by zero; fall back to existing wait-insert/adjust to reach D.
+        code = textwrap.dedent("""\
+            # CUE 0 — 5.0s
+            self.wait(1.0)
+        """)
+        fixed, applied = auto_fix_timing(code, [5.0])
+        assert applied  # the wait is adjusted up to ~5.0
+        assert verify_timing(fixed, [5.0])["ok"]
+        ast.parse(fixed)
+
+    def test_zero_play_no_wait_inserts_wait(self):
+        # Pure ambient/no-play, no wait: the residual resolver inserts a wait.
+        code = textwrap.dedent("""\
+            # CUE 0 — 6.0s
+            self.frame.add_ambient_rotation(angular_speed=0.2)
+        """)
+        fixed, applied = auto_fix_timing(code, [6.0])
+        assert applied
+        assert "self.wait" in fixed
+        ast.parse(fixed)
+
+
+class TestRunTimeScalingIdempotency:
+    def test_scaling_twice_equals_once(self):
+        code = textwrap.dedent("""\
+            # CUE 0 — 4.0s
+            self.play(Write(title), run_time=0.8)
+            self.play(ShowCreation(curve), run_time=1.2)
+        """)
+        once, applied_once = auto_fix_timing(code, [4.0])
+        twice, applied_twice = auto_fix_timing(once, [4.0])
+        assert applied_once, "first pass must scale"
+        assert applied_twice == [], "second pass on corrected code must be a no-op"
+        assert twice == once
+
+    def test_already_on_target_is_no_op(self):
+        # factor would be ~1.0 (within [0.98,1.02]) → no rewrite at all.
+        code = textwrap.dedent("""\
+            # CUE 0 — 3.0s
+            self.play(Write(title), run_time=1.0)
+            self.play(ShowCreation(curve), run_time=2.0)
+        """)
+        fixed, applied = auto_fix_timing(code, [3.0])
+        assert applied == []
+        assert fixed == code
+
+
+class TestRunTimeScalingCannotFit:
+    def test_huge_animation_tiny_d_floors_and_warns(self):
+        # plays sum to 100.0, D=0.2. Even compressed, 5 literals * floor 0.1 =
+        # 0.5 > 0.2 → cannot fit. Must floor each run_time, emit a warning, and
+        # leave valid Python. Content is NOT dropped.
+        code = textwrap.dedent("""\
+            # CUE 0 — 0.2s
+            self.play(a, run_time=20.0)
+            self.play(b, run_time=20.0)
+            self.play(c, run_time=20.0)
+            self.play(d, run_time=20.0)
+            self.play(e, run_time=20.0)
+        """)
+        fixed, applied = auto_fix_timing(code, [0.2])
+        assert applied
+        assert any("planner" in m.lower() or "cannot fit" in m.lower() for m in applied), (
+            "an un-fittable cue must emit a planner-issue warning"
+        )
+        ast.parse(fixed)  # still valid Python
+        lits = _runtime_literals(fixed)
+        assert len(lits) == 5, "no play content dropped"
+        assert all(v >= _MIN_RUN_TIME - 1e-9 for v in lits), "every run_time floored"
+
+    def test_floor_constant_is_named(self):
+        assert _MIN_RUN_TIME == pytest.approx(0.1)
+
+
+class TestRunTimeScalingPreservesStructure:
+    def test_cue_comments_preserved(self):
+        code = textwrap.dedent("""\
+            # CUE 0 — 4.0s
+            self.play(Write(title), run_time=1.0)
+
+            # CUE 1 — 6.0s
+            self.play(ShowCreation(curve), run_time=1.0)
+        """)
+        fixed, _ = auto_fix_timing(code, [4.0, 6.0])
+        assert "# CUE 0" in fixed
+        assert "# CUE 1" in fixed
+        # Both cue blocks survive as distinct boundaries.
+        assert len(_split_into_cue_blocks(fixed)) == 2
+
+    def test_multiline_play_run_time_on_own_line_scaled(self):
+        # run_time on its own line inside a multi-line self.play(...) call.
+        code = textwrap.dedent("""\
+            # CUE 0 — 4.0s
+            self.play(
+                Write(title),
+                ShowCreation(curve),
+                run_time=2.0,
+            )
+        """)
+        fixed, applied = auto_fix_timing(code, [4.0])
+        assert applied
+        lits = _runtime_literals(fixed)
+        assert lits == pytest.approx([4.0])
+        assert verify_timing(fixed, [4.0])["ok"]
+        ast.parse(fixed)
+
+    def test_run_time_in_comment_or_string_not_touched(self):
+        # A comment AND a string literal both contain "run_time=" but are not
+        # real keyword arguments — they must be left byte-for-byte intact.
+        code = textwrap.dedent("""\
+            # CUE 0 — 4.0s
+            # note: run_time=99.0 was the old value, do not use
+            label = Text("run_time=99.0")
+            self.play(Write(title), run_time=2.0)
+        """)
+        fixed, applied = auto_fix_timing(code, [4.0])
+        assert applied
+        # The decoy occurrences are untouched.
+        assert "run_time=99.0 was the old value" in fixed
+        assert 'Text("run_time=99.0")' in fixed
+        # Only the real keyword argument was scaled (2.0 → 4.0).
+        lits = _runtime_literals(fixed)
+        assert lits == pytest.approx([4.0])
+        ast.parse(fixed)
+
+    def test_wait_absorbs_residual_when_scaling_capped(self):
+        # A wait-heavy cue: plays sum 1.0, a wait of 1.0, D=10.0. Scaling plays
+        # alone (1.0→10.0 would be 10x) is allowed, but the existing behavior
+        # for cues WITH a wait is preserved — verify the cue ends on target and
+        # the code stays valid regardless of which lever is used.
+        code = textwrap.dedent("""\
+            # CUE 0 — 10.0s
+            self.play(Write(title), run_time=1.0)
+            self.wait(1.0)
+        """)
+        fixed, applied = auto_fix_timing(code, [10.0])
+        assert applied
+        assert verify_timing(fixed, [10.0])["ok"]
+        ast.parse(fixed)
