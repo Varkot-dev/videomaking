@@ -9,7 +9,7 @@ An automated pipeline that converts a topic string or PDF of lecture notes into 
 
 ## How it works
 
-The core challenge is that generating correct [ManimGL](https://github.com/3b1b/manim) animation code is hard — ManimGL has a narrow, finicky API that differs significantly from its community fork, and LLMs consistently produce code that crashes on the first attempt. This project's main engineering contribution is a multi-stage validation and repair pipeline that gets generated code to render reliably without human intervention.
+The core challenge is that generating correct [ManimGL](https://github.com/3b1b/manim) animation code is hard — ManimGL has a narrow, finicky API that differs significantly from its community fork, and LLMs consistently produce code that crashes on the first attempt. This project's main engineering contribution is a multi-stage validation and repair harness that gets generated code to render reliably without human intervention.
 
 ### Pipeline
 
@@ -17,133 +17,130 @@ The core challenge is that generating correct [ManimGL](https://github.com/3b1b/
 Input (topic string or PDF)
         │
         ▼
-┌─────────────────┐
-│  Lesson Planner │  LLM → structured JSON lesson plan
-│                 │  (title, sections, narration scripts, visual descriptions)
-└────────┬────────┘
-         │  up to 8 sections (topic) / 10 sections (PDF)
-         ▼
-┌─────────────────────────────────────────────────────────┐
-│  For each section:                                      │
-│                                                         │
-│  1. Scene Generator ──► LLM writes ManimGL Python       │
-│                         (one Scene class per file)      │
-│                                                         │
-│  2. Codeguard ──────────► Static analysis + auto-fix    │
-│     (token-free)          regex-based repair of 20+     │
-│                           known ManimGL API mistakes    │
-│                                                         │
-│  3. Runner ─────────────► subprocess: manimgl file.py   │
-│                           1920×1080 @ 30fps, H.264      │
-│                                                         │
-│  4. Retry loop ─────────► classify error type →         │
-│     (up to 3×)            targeted LLM fix prompt →     │
-│                           codeguard → re-render         │
-│                                                         │
-│  5. Fallback ───────────► title card scene if all       │
-│                           retries fail                  │
-│                                                         │
-│  6. TTS ────────────────► edge-tts narration → .mp3     │
-│                                                         │
-│  7. Muxer ──────────────► ffmpeg: sync audio+video,     │
-│                           loop or pad to match durations│
-└─────────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────┐
-│   Assembler     │  ffmpeg concat → final .mp4
-└─────────────────┘
+┌─────────────────────┐
+│  Researcher         │  LLM → structured knowledge brief
+│                     │  (Panel of Experts: professor, pedagogy expert, explainer)
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│  Lesson Planner     │  LLM → storyboard JSON with:
+│                     │   - narration with [CUE] markers
+│                     │   - cues[]: [{index, visual}] per cue
+└──────────┬──────────┘
+           │  up to 8 sections (topic) / 10 sections (PDF)
+           ▼
+┌────────────────────────────────────────────────────────────┐
+│  Global Audio Phase (runs BEFORE any codegen)              │
+│                                                            │
+│  For each section:                                         │
+│  TTS (edge-tts WordBoundary) → .mp3 + per-word timestamps  │
+│  segmenter.compute_segments() → exact cue durations        │
+│  audio_slicer → N cue-aligned .m4a clips                   │
+└──────────┬─────────────────────────────────────────────────┘
+           │
+           ▼
+┌────────────────────────────────────────────────────────────┐
+│  For each section:                                         │
+│                                                            │
+│  1. Director ────────────────► ONE LLM call                │
+│     (scene_generator.py)        storyboard + cue durations │
+│                                 → single ManimGL Scene     │
+│                                                            │
+│  2. Codeguard ───────────────► AST + regex static fixes    │
+│     (token-free)                50+ known ManimGL API      │
+│                                 mistakes auto-corrected    │
+│                                                            │
+│  3. AST gate ────────────────► scene_ast_gate: only allows │
+│     (security, token-free)      whitelisted top-level      │
+│                                 statements (no shell-out)  │
+│                                                            │
+│  4. Timing verifier ─────────► static loop-aware timing    │
+│     (token-free)                analysis; auto-fix or      │
+│                                 route to retry             │
+│                                                            │
+│  5. Runner ──────────────────► subprocess: manimgl file.py │
+│                                 1920×1080 @ 60fps, H.264   │
+│                                                            │
+│  6. Render validator ────────► frame_checker (PIL, free)   │
+│     (two-tier)                  + layout_checker (LLM      │
+│                                 vision, on failure only)   │
+│                                                            │
+│  7. Retry loop ──────────────► classify error → targeted   │
+│     (up to 3×)                  LLM fix → codeguard →      │
+│                                 re-render; fallback scene  │
+│                                 if all retries exhausted   │
+│                                                            │
+│  8. Cutter ──────────────────► cut section .mp4 into       │
+│                                 N per-cue clips (FFmpeg)   │
+│                                                            │
+│  9. Muxer ───────────────────► overlay narration audio per │
+│                                 cue clip; pad-only, never  │
+│                                 speed-warp                 │
+└──────────┬─────────────────────────────────────────────────┘
+           │
+           ▼
+┌─────────────────────┐
+│  Assembler          │  normalize + xfade → final .mp4
+└─────────────────────┘
 ```
 
 ---
 
 ## The hard part: reliable code generation for ManimGL
 
-ManimGL's API is not well-represented in LLM training data and has diverged significantly from ManimCommunity (the fork most tutorials cover). Raw LLM output fails ~60% of the time on first attempt with errors like:
+ManimGL's API is not well-represented in LLM training data and has diverged significantly from ManimCommunity (the fork most tutorials cover). Raw LLM output fails on the first attempt with errors like:
 
 - Wrong import (`from manim import *` vs `from manimlib import *`)
 - Nonexistent methods (`Create`, `MathTex`, `Circumscribe`)
-- Banned kwargs (`tip_length`, `corner_radius`, `scale_factor` on FadeIn)
+- Invalid kwargs (`tip_length`, `corner_radius`, `scale_factor` on FadeIn)
 - Wrong color names (`DARK_GREY`, `DARK_BLUE` don't exist — use `GREY_D`, `BLUE_D`)
 - Zero-length Arrow construction (divide-by-zero crash)
-- Mixed `.animate` + `FadeIn` in a single `self.play()` call (TypeError)
-- `color_gradient()` receiving float instead of int
+- Loop timing errors — subtracting one iteration's `run_time` instead of all n iterations, leaving multi-second freeze-frame tails
 
 ### Codeguard (`validator/codeguard.py`)
 
-Before any LLM retry, a token-free static analysis pass runs regex replacements and AST validation to fix known-bad patterns deterministically:
+Before any render attempt, a token-free static analysis pass runs AST rewrites and regex replacements to fix known-bad patterns deterministically. Key auto-fixes:
 
 ```python
-# auto-fix examples
-"from manim import *"          → "from manimlib import *"
-"MathTex(r'x^2')"              → "Tex(r'x^2')"
-"Create(circle)"               → "ShowCreation(circle)"
-"FadeIn(obj, scale_factor=1.5)"→ "FadeIn(obj)"
-"DARK_GREY"                    → "GREY_D"
-"color_gradient([A, B], n)"    → "color_gradient([A, B], int(n))"
-Arrow(ORIGIN, ORIGIN)          → Arrow(ORIGIN, DOWN * 0.5)
+"from manim import *"               → "from manimlib import *"
+"MathTex(r'x^2')"                   → "Tex(r'x^2')"
+"Create(circle)"                    → "ShowCreation(circle)"
+"FadeIn(obj, scale_factor=1.5)"     → "FadeIn(obj)"
+"DARK_GREY"                         → "GREY_D"
+"color_gradient([A, B], n)"         → "color_gradient([A, B], int(n))"
+Arrow(ORIGIN, ORIGIN)               → Arrow(ORIGIN, DOWN * 0.5)
+set_camera_orientation(phi, theta)  → self.frame.reorient(theta, phi)
+x_length= / y_length= in Axes      → width= / height=
+negative self.wait()                → self.wait(0.01)
 ```
 
-This eliminates ~70% of failures without spending tokens. Only errors codeguard can't fix deterministically go to the LLM for repair.
+Eliminates the majority of failures without spending tokens. Only errors codeguard can't fix deterministically reach the LLM.
+
+### Timing verifier (`validator/timing_verifier.py`)
+
+Statically analyses each generated scene before rendering to compute animation time per cue. Detects loop timing bugs and auto-corrects `self.wait()` values to fill the cue's exact narration duration. Runs zero-cost before every render attempt — closing the feedback loop that previously only triggered at mux time (after a 30–120 s render).
 
 ### Error-aware retry (`validator/retry.py`)
 
-When codeguard can't fix the code, the retry loop:
-1. Classifies the error type from stderr (`syntax`, `import`, `attribute`, `type`, `runtime`)
+When codeguard can't fix the code:
+1. Classifies error type from stderr (`syntax`, `import`, `attribute`, `type`, `runtime`)
 2. Generates targeted fix guidance for that error class
 3. Sends `original_code + error + guidance` to the LLM for a targeted fix
-4. Runs codeguard on the result, then re-renders
+4. Runs codeguard + timing verifier on result, then re-renders
 5. Repeats up to 3× with a configurable LLM call budget (`MANIMGEN_MAX_RETRY_LLM_CALLS`)
 
-```python
-# Error classification example
-def _classify_error(stderr: str) -> str:
-    if "SyntaxError" in stderr:    return "syntax"
-    if "AttributeError" in stderr: return "attribute"
-    if "TypeError" in stderr:      return "type"
-    return "runtime"
-```
-
-### Duration sync (`generator/scene_generator.py`)
-
-Narration audio and animation video have to match duration or the muxer has to distort one of them. Rather than fixing this post-render, the generator estimates narration duration before generating code and passes it as a hard constraint:
-
-```python
-_WORDS_PER_MINUTE = 130
-
-def _estimate_narration_duration(narration: str) -> int:
-    words = len(narration.split())
-    return max(10, math.ceil(words / _WORDS_PER_MINUTE * 60))
-```
-
-The scene generator prompt then instructs the LLM to distribute `self.wait()` calls to hit exactly that duration.
-
 ---
 
-## PDF ingestion (`input/pdf_parser.py`)
+## Audio-first CUE architecture
 
-Converts academic PDFs (lecture notes, papers) into structured chunks for lesson planning:
+Narration audio drives animation timing — not the other way around.
 
-1. **Extract** — `pypdf` reads page text, skips image-only pages with a warning
-2. **Clean** — fix hyphenation breaks, remove page numbers, collapse whitespace
-3. **Chunk** — heading-based segmentation (numbered sections, Chapter/Section prefixes, all-caps lines), falls back to paragraph-density chunking
-4. **Cap** — content truncated at 24k chars before LLM call to control token cost
-
-The PDF planner prompt enforces a 9-stage explanation arc: hook → intuition → formalism → worked example → mistakes → deeper insight → complex example → edge cases → summary.
-
----
-
-## Audio-video sync (`renderer/muxer.py`)
-
-Three strategies depending on the duration mismatch:
-
-| Condition | Strategy |
-|---|---|
-| Audio ≤ video duration | Pad audio with silence (`apad` filter) |
-| Audio slightly longer (< 2×) | Speed up video (`setpts=VIDEO/AUDIO*PTS`) |
-| Audio much longer (≥ 2×, e.g. fallback 6s + 30s narration) | Loop video (`-stream_loop -1`) |
-
-Warns on any mismatch > 30% — a large mismatch indicates the narration duration estimator or the generator prompt needs tuning.
+1. TTS runs for all sections **before** any code is generated
+2. `edge-tts WordBoundary` events give per-word timestamps at sub-millisecond precision
+3. `segmenter.compute_segments()` converts word timestamps + `[CUE]` marker indices into exact per-cue durations
+4. The Director receives these durations as hard constraints and writes `self.wait()` calls to match them
+5. `muxer.py` pads (never speed-warps) — small mismatches from stream alignment are absorbed silently
 
 ---
 
@@ -151,38 +148,52 @@ Warns on any mismatch > 30% — a large mismatch indicates the narration duratio
 
 ```
 manimgen/
-├── manimgen/
-│   ├── cli.py                    # entry point: manimgen <topic> | --pdf file.pdf
-│   ├── llm.py                    # Gemini (dev) / Claude (prod) toggle
+├── manimgen/                     # source package
+│   ├── cli.py                    # entry: manimgen <topic> | --pdf <file> | --resume
+│   ├── llm.py                    # shared LLM client (Gemini / Anthropic / Ollama toggle)
 │   ├── input/
-│   │   ├── parser.py             # topic string normalization
-│   │   └── pdf_parser.py         # PDF → cleaned text chunks
+│   │   ├── parser.py             # normalize topic string
+│   │   └── pdf_parser.py         # PDF → cleaned text chunks (heading-based segmentation)
 │   ├── planner/
-│   │   ├── lesson_planner.py     # topic/PDF → structured lesson plan JSON
-│   │   └── prompts/
-│   │       ├── planner_system.md         # topic planner prompt
-│   │       └── planner_pdf_system.md     # PDF planner prompt (9-stage arc)
+│   │   ├── lesson_planner.py     # research_topic() + plan_lesson() → storyboard JSON
+│   │   ├── cue_parser.py         # parse [CUE] markers → cue_word_indices
+│   │   ├── segmenter.py          # word timestamps + cue indices → CueSegment durations
+│   │   └── prompts/              # planner_system.md, planner_pdf_system.md, researcher_system.md
 │   ├── generator/
-│   │   ├── scene_generator.py    # section JSON → ManimGL .py file
-│   │   └── prompts/
-│   │       ├── generator_system.md  # full ManimGL API reference prompt
-│   │       └── rules_core.md        # shared rules for generator + retry
+│   │   ├── scene_generator.py    # Director: LLM → one ManimGL Scene per section
+│   │   └── prompts/              # director_system.md
 │   ├── validator/
-│   │   ├── codeguard.py          # static analysis + 20+ auto-fixes
-│   │   ├── runner.py             # manimgl subprocess + logging
-│   │   ├── retry.py              # error classification + LLM repair loop
-│   │   ├── fallback.py           # title card fallback scene
-│   │   └── env.py                # render environment setup
+│   │   ├── codeguard.py          # static analysis + 50+ auto-fixes
+│   │   ├── manimlib_signatures.py# type-aware kwarg introspection (Phase 2 shadow)
+│   │   ├── manimlib_symbols.py   # call-target name validation
+│   │   ├── scene_ast_gate.py     # security: AST allowlist for top-level statements
+│   │   ├── timing_verifier.py    # loop-aware cue timing analysis + auto-fix
+│   │   ├── render_validator.py   # unified post-render quality gate (frame + layout)
+│   │   ├── frame_checker.py      # zero-cost PIL: black/frozen/clipping detection
+│   │   ├── layout_checker.py     # LLM vision: overlap/overflow/layout defect detection
+│   │   ├── runner.py             # manimgl subprocess with -c #1C1C1C flag
+│   │   ├── retry.py              # retry loop: codeguard → timing → error fix → LLM fix
+│   │   ├── fallback.py           # styled bullet-point fallback scene (with TTS)
+│   │   └── env.py                # render environment vars (LaTeX PATH)
 │   ├── renderer/
-│   │   ├── assembler.py          # ffmpeg concat of section videos
-│   │   ├── tts.py                # edge-tts narration generation
-│   │   └── muxer.py              # audio-video sync with 3 strategies
+│   │   ├── tts.py                # edge-tts with WordBoundary → per-word timestamps
+│   │   ├── audio_slicer.py       # full audio → N cue-aligned .m4a slices (AAC)
+│   │   ├── cutter.py             # cut rendered section .mp4 into per-cue clips
+│   │   ├── muxer.py              # audio+video mux (pad-only, no speed warp)
+│   │   └── assembler.py          # normalize 1920x1080@60fps, xfade transitions
 │   └── editor/
 │       ├── server.py             # Flask clip editor server
-│       └── templates/editor.html # browser-based trim/reorder UI
-├── examples/                     # 5 hand-written ManimGL scenes (few-shot seeds)
-├── tests/                        # 117 unit tests, zero LLM/subprocess calls
-└── config.yaml                   # LLM provider, TTS voice, render quality
+│       └── templates/editor.html # browser-based trim/reorder/export UI
+├── examples/                     # hand-written verified ManimGL scenes (Director few-shot)
+│                                 # Each has `techniques: <name>` in class docstring
+├── tests/                        # 732+ unit tests, zero LLM or subprocess calls
+├── docs/
+│   └── KNOWN_ISSUES.md           # active failure log + env-doctor guards
+├── scripts/
+│   └── env_doctor.py             # session-start health checks (editable install, deps, etc.)
+├── config.yaml                   # LLM provider, model names, TTS config, render quality
+├── requirements.txt
+└── setup.py                      # console_scripts: manimgen, manimgen-edit
 ```
 
 ---
@@ -194,12 +205,12 @@ manimgen/
 | Animation engine | [ManimGL](https://github.com/3b1b/manim) (3b1b version, not ManimCommunity) |
 | LLM — development | Google Gemini 2.5 Flash |
 | LLM — production | Anthropic Claude Sonnet |
-| TTS | Microsoft edge-tts (Neural voices) |
+| TTS | Microsoft edge-tts (Neural voices, WordBoundary timestamps) |
 | Video processing | FFmpeg |
 | PDF parsing | pypdf |
 | Clip editor | Flask + vanilla JS |
-| Tests | pytest (117 tests) |
-| Output format | H.264, 1920×1080, 30fps |
+| Tests | pytest (732+ tests, fully mocked) |
+| Output format | H.264, 1920×1080, 60fps |
 
 ---
 
@@ -209,8 +220,8 @@ manimgen/
 git clone https://github.com/Varkot-dev/videomaking.git
 cd videomaking
 
-pip install -e .
-pip install pypdf edge-tts google-genai anthropic pyyaml flask
+pip install -e manimgen/
+pip install pypdf edge-tts google-genai anthropic pyyaml flask pillow
 
 # Set your LLM provider
 export GEMINI_API_KEY=your_key        # development (default)
@@ -222,6 +233,13 @@ export GEMINI_API_KEY=your_key        # development (default)
 ```bash
 brew install ffmpeg
 brew install --cask basictex
+pip install 'manimgl==1.7.2'
+pip install 'setuptools<81'   # manimgl 1.7.2 requires pkg_resources
+```
+
+Run the environment health check before your first pipeline run:
+```bash
+python3 manimgen/scripts/env_doctor.py
 ```
 
 ---
@@ -231,17 +249,23 @@ brew install --cask basictex
 ```bash
 # Topic mode — cheapest, best for testing
 manimgen "binary search"
-manimgen "depth-first search"
+manimgen "gradient descent"
 manimgen "dynamic programming"
 
-# PDF mode — from lecture notes
+# PDF mode — from lecture notes or papers
 manimgen --pdf lecture.pdf
 
-# Disable TTS for faster iteration (no audio)
-# set tts.enabled: false in config.yaml
+# Resume a previous run from cached plan
+manimgen --resume
 
 # Cap LLM retry calls (reduces cost during testing)
 export MANIMGEN_MAX_RETRY_LLM_CALLS=0   # deterministic fixes only, no LLM retries
+
+# Enable Phase 3 kwarg enforcement (strips provably-invalid kwargs before render)
+export MANIMGEN_KWARG_ENFORCE=1
+
+# Adjust freeze-frame detection threshold (default: 2.5s)
+export MANIMGEN_FREEZE_BLOCK_THRESHOLD=2.0
 
 # Edit rendered clips before final export
 manimgen-edit                           # auto-loads muxed/ or videos/
@@ -255,15 +279,22 @@ Output: `manimgen/output/videos/<title>.mp4`
 ## Testing
 
 ```bash
-python3 -m pytest tests/ -v
+# Full suite (skip LLM-calling tests — zero cost, zero subprocess calls)
+python3 -m pytest manimgen/tests/ \
+  --ignore=manimgen/tests/test_scene_generator.py \
+  --ignore=manimgen/tests/test_planner.py \
+  --ignore=manimgen/tests/test_pipeline_e2e.py -q
 ```
 
-117 tests, all passing, zero LLM or subprocess calls (fully mocked). Tests cover:
+732+ tests covering:
 - Every codeguard auto-fix and banned pattern
-- Error-aware repair from real stderr tracebacks  
+- Type-aware kwarg introspection (manimlib_signatures)
+- Loop-aware timing analysis and auto-fix (timing_verifier)
+- AST security gate (scene_ast_gate)
+- Error-aware repair from real stderr tracebacks
 - Section cap enforcement in the planner
-- Narration duration estimation
-- Muxer strategy selection per duration ratio
+- A/V sync contracts (muxer, slicer, segmenter)
+- Frame defect detection (frame_checker)
 - PDF parser output structure and chunking logic
 
 ---
@@ -271,10 +302,11 @@ python3 -m pytest tests/ -v
 ## Cost model
 
 Each `manimgen` run makes approximately `2 + (N × 1.5)` LLM calls where N = number of sections:
+- 1 call for research
 - 1 call for lesson planning
-- 1 call per section for code generation
+- 1 call per section for scene generation
 - ~0.5 calls/section average for retries (with `MAX_LLM_FIX_CALLS=1`)
 
-At Gemini Flash pricing, a 5-section topic run costs ~$0.02. A 10-section PDF run costs ~$0.05. Running against a large astrophysics paper that generated 19 sections cost ~$0.15.
+At Gemini Flash pricing, a 5-section topic run costs ~$0.02–$0.05. A 10-section PDF run costs ~$0.05–$0.15.
 
-Set `tts.enabled: false` in `config.yaml` to skip narration during development — TTS adds no LLM cost but takes 30–60s per section.
+Set `tts.enabled: false` in `config.yaml` to skip narration during development.

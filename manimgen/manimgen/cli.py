@@ -12,6 +12,7 @@ from manimgen.generator.scene_generator import generate_scenes
 from manimgen.input.parser import parse_input
 from manimgen.planner.lesson_planner import plan_lesson, plan_lesson_from_pdf
 from manimgen.renderer.assembler import assemble_video
+from manimgen.renderer.muxer import clear_mismatch_log, get_mismatch_log
 from manimgen.types import CueMuxResult, GateResult, MuxStatus
 from manimgen.utils import safe_section_id
 from manimgen.validator.fallback import fallback_scene
@@ -614,6 +615,9 @@ def main():
     cfg = _load_config()
     tts_on = _tts_enabled(cfg)
 
+    # Reset per-run mismatch log so a new run doesn't accumulate stale entries.
+    clear_mismatch_log()
+
     # --- Plan ---
     if args.resume and os.path.exists(_PLAN_CACHE):
         logger.info("[manimgen] Resuming from cached plan: %s", _PLAN_CACHE)
@@ -709,6 +713,29 @@ def main():
         )
 
     output = assemble_video(rendered_videos, lesson_plan["title"])
+
+    # --- A/V mismatch summary ---
+    mismatches = get_mismatch_log()
+    if mismatches:
+        large = [m for m in mismatches if abs(m.get("diff", 0)) > 1.0]
+        logger.info(
+            "[manimgen] A/V sync summary: %d cue mismatch(es) (%d large >1s)",
+            len(mismatches),
+            len(large),
+        )
+        for m in mismatches:
+            diff = m.get("diff", 0)
+            level = logger.warning if abs(diff) > 1.0 else logger.info
+            level(
+                "[manimgen]   %s: video=%.3fs audio=%.3fs diff=%+.3fs",
+                os.path.basename(m.get("output_path", "?")),
+                m.get("video_dur", 0),
+                m.get("audio_dur", 0),
+                diff,
+            )
+    else:
+        logger.info("[manimgen] A/V sync: all cues matched within threshold")
+
     logger.info("[manimgen] Done: %s", output)
 
 

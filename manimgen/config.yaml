@@ -28,6 +28,17 @@ rendering:
   fps: 60
   max_retries: 3        # LLM retry calls per scene (increase for production)
 
+# Codeguard Phase 3 — kwarg enforcement
+# When MANIMGEN_KWARG_ENFORCE=1, provably-invalid constructor kwargs are stripped
+# before render (Phase 2 shadow-mode data confirms safety). Default: off (shadow only).
+# Enable after verifying zero false positives in a shadow log run.
+#   export MANIMGEN_KWARG_ENFORCE=1
+#
+# Freeze-frame detection threshold (seconds). Cues with animation finishing this
+# many seconds before narration ends are hard-blocked and routed to retry.
+# Lower = stricter. Default: 2.5s (env: MANIMGEN_FREEZE_BLOCK_THRESHOLD).
+#   export MANIMGEN_FREEZE_BLOCK_THRESHOLD=2.0
+
 tts:
   engine: edge-tts  # edge-tts | elevenlabs | openai
   voice: en-US-AndrewMultilingualNeural
