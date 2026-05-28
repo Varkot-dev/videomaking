@@ -95,6 +95,23 @@ self.wait(2.1)   # 2.0 + 0.5 + 1.5 + 2.1 = 6.1 ✓
 
 A literal `self.wait(number)` is acceptable **only** when every `self.play()` in the cue has a constant, statically-visible `run_time` and none of them is inside a loop. The moment a loop is involved, the accumulator law above is mandatory.
 
+```python
+# stagger_reveal with loop — CORRECT timing accumulation
+# CUE k — 5.0s: items appear one by one, then hold
+items = VGroup(*[Text(label, font_size=32) for label in labels]).arrange(DOWN, buff=0.4)
+anim_time = 0.0
+for item in items:
+    self.play(FadeIn(item, shift=RIGHT * 0.2), run_time=0.35)
+    anim_time += 0.35
+self.wait(max(0.01, 5.0 - anim_time))   # e.g. 5.0 - (0.35 * n), NOT 5.0 - 0.35
+
+# stagger_reveal with LaggedStart — single self.play(), no accumulator needed
+# Because the ENTIRE LaggedStart is one play() call with a fixed run_time:
+self.play(LaggedStart(*[FadeIn(item, shift=RIGHT * 0.2) for item in items],
+                      lag_ratio=0.15), run_time=2.0)
+self.wait(max(0.01, 5.0 - 2.0))   # safe: 2.0 is a literal, no loop involved
+```
+
 ## Directing time & attention — what separates 3B1B from amateur
 
 The rules above keep the scene *legal*. These rules make it *directed*. A technically correct scene that ignores this section still looks amateurish. Apply all five.
@@ -115,7 +132,7 @@ self.play(ShowCreation(curve), run_time=4.2, rate_func=smooth)
 self.wait(0.8)                                  # brief settle = held beat
 ```
 
-### 2. Transform, don't replace — the single biggest amateur tell
+### 2. Transform, don't replace — the single biggest amateur tell ⚡ #2 most-impactful rule after loop timing
 
 When a cue introduces an object related to one already on screen, **morph the existing object into it** (`ReplacementTransform`, `TransformFromCopy`, `TransformMatchingTex`) instead of `FadeOut(old)` + `FadeIn(new)`. FadeOut→FadeIn reads as "next slide." A transform reads as "the same idea evolving" — that continuity *is* the 3B1B feel. A derived object should visibly emerge **from its source's location** (`TransformFromCopy(source, derived)` or `FadeIn(derived, shift=toward_source)`), not pop in elsewhere.
 
@@ -586,13 +603,13 @@ tex_obj.get_parts_by_tex_expression(r"\symbol")  → DOES NOT EXIST in ManimGL T
 
 ## Cinematic Technique Reference
 
+**Decision rule:** Read the "When to use" column for each technique. If the cue's narration contains a verb or concept from that column, use that technique. If multiple match, prefer the one with the more specific verb match. Apply this filter BEFORE looking at the table rows.
+
+**Under-used (bias toward these):** `array_swap`, `apply_matrix`, `3d_surface`, `code_reveal`, `lagged_path`
+
 Every scene must use at least 2 of these techniques. A scene that only does `Write(title) → ShowCreation(axes) → ShowCreation(curve) → FadeOut` is a failure.
 
 The verified reference scenes at the bottom of this prompt show each technique implemented correctly. Copy their structure — do not invent new APIs.
-
-**Decision rule:** If narration contains a verb from the "When to use" column, use that technique. If multiple match, prefer the one with a more specific verb match.
-
-**Under-used (bias toward these):** `array_swap`, `apply_matrix`, `3d_surface`, `code_reveal`, `lagged_path`
 
 | Technique | When to use | Anti-use (don't use when) |
 |---|---|---|
