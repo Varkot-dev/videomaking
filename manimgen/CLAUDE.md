@@ -20,8 +20,8 @@ Uses an audio-first CUE pipeline where spoken word timestamps drive animation du
 
 **Stack:** Python 3.13, ManimGL (3b1b fork), Gemini 2.5 Flash, FFmpeg 8.1, LaTeX, edge-tts, Flask (editor)
 
-**Repo:** `https://github.com/Varkot-dev/videomaking.git` — active branch: `antigravity`
-**399 tests, all passing** (`python3 -m pytest tests/ --ignore=tests/test_scene_generator.py --ignore=tests/test_planner.py --ignore=tests/test_pipeline_e2e.py -q`)
+**Repo:** `https://github.com/Varkot-dev/videomaking.git` — branch `main`
+**732 tests, all passing** (`python3 -m pytest tests/ --ignore=tests/test_scene_generator.py --ignore=tests/test_planner.py --ignore=tests/test_pipeline_e2e.py -q`)
 
 ---
 
@@ -74,7 +74,7 @@ manimgen/
 │   │   ├── fallback.py          # styled bullet-point fallback scene (with TTS)
 │   │   ├── layout_checker.py    # LLM vision check on rendered frames (multi-frame)
 │   │   ├── frame_checker.py     # zero-cost PIL-based black/frozen/clipping detection
-│   │   ├── timing_verifier.py   # static AST timing analysis (built, not yet wired in)
+│   │   ├── timing_verifier.py   # loop-aware static timing analysis + auto-fix (wired via retry.apply_timing_gate)
 │   │   ├── env.py               # render environment vars (LaTeX PATH)
 │   │   └── prompts/             # retry_system.md, fallback_system.md, layout_checker_system.md
 │   ├── renderer/
@@ -406,8 +406,8 @@ Most visible quality issue. Cues often have 1–8 seconds of frozen still at the
 ### 2. ✅ RESOLVED — timing_verifier wiring
 `timing_verifier` is wired in via `retry.apply_timing_gate` (verify → auto-fix → re-verify). It runs: (a) once on initial code before the first render in `cli.py`; (b) on initial code in `retry_scene`; (c) after every error fix and visual fix. The previous duplicated ad-hoc copy in `cli.py` was removed in favor of the shared gate. Unresolvable warnings block the first render and force the retry path.
 
-### 3. MEDIUM — frame_checker.py wiring unclear
-Built with tests but unclear if it's actually called in the retry loop.
+### 3. ✅ RESOLVED — frame_checker.py wiring
+Confirmed wired in `validator/retry.py` — `check_frames()` runs after every successful render. Hard failures (black/frozen frames confirmed by timing oracle) block muxing and force retry. Soft failures (layout issues) are injected into the next LLM fix prompt.
 
 ### 4. LOW — `.hypothesis/` and `.DS_Store` committed
 Should be in `.gitignore`. Clutters diffs.
