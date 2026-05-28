@@ -479,6 +479,32 @@ def _build_overview(plan: dict, all_section_audio: dict) -> dict:
     }
 
 
+def _segment_and_slice(
+    section: dict,
+    tts_result: tuple[str, list, float],
+    section_id: str,
+) -> tuple[list, list[str]]:
+    """Compute cue segments from TTS timestamps and slice the audio file."""
+    from manimgen.planner.segmenter import compute_segments
+    from manimgen.renderer.audio_slicer import slice_audio
+
+    audio_path, timestamps, audio_duration = tts_result
+    cue_word_indices = section.get("cue_word_indices", [0])
+    segments = compute_segments(
+        timestamps,
+        cue_word_indices,
+        audio_duration,
+        clean_text=section.get("narration", ""),
+    )
+    audio_slices = slice_audio(
+        audio_path,
+        segments,
+        output_dir=paths.audio_dir(),
+        section_id=section_id,
+    )
+    return segments, audio_slices
+
+
 def _run_section(
     section: dict,
     idx: int,
@@ -514,29 +540,13 @@ def _run_section(
     elif tts_on:
         tts_result = _run_tts_for_section(section, idx)
         if tts_result:
-            from manimgen.planner.segmenter import compute_segments
-            from manimgen.renderer.audio_slicer import slice_audio
-
-            audio_path, timestamps, audio_duration = tts_result
-            cue_word_indices = section.get("cue_word_indices", [0])
-            segments = compute_segments(
-                timestamps,
-                cue_word_indices,
-                audio_duration,
-                clean_text=section.get("narration", ""),
-            )
+            segments, audio_slices = _segment_and_slice(section, tts_result, section_id)
             log.info("[manimgen] %d cue segment(s) for this section", len(segments))
 
             if _all_cues_muxed(section, idx, len(segments)):
                 log.info("[manimgen] All cues already muxed, skipping section")
                 return [_muxed_path_for(section, idx, i) for i in range(len(segments))]
 
-            audio_slices = slice_audio(
-                audio_path,
-                segments,
-                output_dir=paths.audio_dir(),
-                section_id=section_id,
-            )
             log.info(
                 "[manimgen] Audio slices: %s",
                 [os.path.basename(p) for p in audio_slices],
@@ -662,23 +672,8 @@ def main():
             section_id = safe_section_id(section, idx)
             tts_result = _run_tts_for_section(section, idx)
             if tts_result:
-                from manimgen.planner.segmenter import compute_segments
-                from manimgen.renderer.audio_slicer import slice_audio
-
                 audio_path, timestamps, audio_duration = tts_result
-                cue_word_indices = section.get("cue_word_indices", [0])
-                segments = compute_segments(
-                    timestamps,
-                    cue_word_indices,
-                    audio_duration,
-                    clean_text=section.get("narration", ""),
-                )
-                audio_slices = slice_audio(
-                    audio_path,
-                    segments,
-                    output_dir=paths.audio_dir(),
-                    section_id=section_id,
-                )
+                segments, audio_slices = _segment_and_slice(section, tts_result, section_id)
                 all_section_audio[section_id] = {
                     "audio_path": audio_path,
                     "timestamps": timestamps,

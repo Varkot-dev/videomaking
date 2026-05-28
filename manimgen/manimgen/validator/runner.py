@@ -3,9 +3,7 @@ import subprocess
 from datetime import datetime
 
 from manimgen import paths
-from manimgen.validator.codeguard import (
-    precheck_and_autofix_file as precheck_and_autofix,
-)
+from manimgen.validator.codeguard import precheck_and_autofix_file
 from manimgen.validator.env import get_render_env
 from manimgen.validator.render_command import build_manimgl_command
 from manimgen.validator.scene_ast_gate import inspect_scene_file
@@ -75,7 +73,7 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = os.path.join(logs_dir, f"{class_name}_{timestamp}.log")
 
-    precheck = precheck_and_autofix(scene_path)
+    precheck = precheck_and_autofix_file(scene_path)
     if not precheck["ok"]:
         with open(log_path, "w") as f:
             if precheck.get("applied_fixes"):

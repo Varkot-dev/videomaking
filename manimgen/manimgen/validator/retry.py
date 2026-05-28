@@ -5,12 +5,11 @@ import subprocess
 
 from manimgen import paths
 from manimgen.llm import chat
+from manimgen.utils import strip_fencing
 from manimgen.validator.codeguard import (
     apply_error_aware_fixes,
 )
-from manimgen.validator.codeguard import (
-    precheck_and_autofix_file as precheck_and_autofix,
-)
+from manimgen.validator.codeguard import precheck_and_autofix_file
 from manimgen.validator.env import get_render_env
 from manimgen.validator.layout_checker import check_layout
 from manimgen.validator.render_command import build_manimgl_command
@@ -333,7 +332,7 @@ def retry_scene(
             visual_llm_calls_used += 1
             with open(scene_path, "w") as f:
                 f.write(code)
-            precheck_and_autofix(scene_path)
+            precheck_and_autofix_file(scene_path)
             # Always reload — precheck may have applied auto-fixes in-place
             with open(scene_path) as f:
                 code = f.read()
@@ -410,9 +409,7 @@ Original code:
         error_llm_calls_used += 1
         seen_error_signatures.add(error_signature)
 
-        if fixed.startswith("```"):
-            fixed = re.sub(r"^```\w*\n?", "", fixed)
-            fixed = re.sub(r"\n?```$", "", fixed)
+        fixed = strip_fencing(fixed)
 
         code = fixed
         with open(scene_path, "w") as f:
@@ -420,7 +417,7 @@ Original code:
 
         # Local auto-fixes are free and often resolve common ManimGL mismatches.
         # Always reload — precheck may have applied auto-fixes in-place.
-        precheck_and_autofix(scene_path)
+        precheck_and_autofix_file(scene_path)
         with open(scene_path) as f:
             code = f.read()
 
@@ -450,7 +447,7 @@ Original code:
 
 
 def _run_and_capture(scene_path: str, class_name: str) -> dict:
-    precheck = precheck_and_autofix(scene_path)
+    precheck = precheck_and_autofix_file(scene_path)
     if not precheck["ok"]:
         stderr = precheck["stderr"]
         if precheck.get("layout_warnings"):
@@ -522,10 +519,7 @@ Original code:
 {prompt_code}""",
         images=ref_frames + frames,
     )
-    if fixed.startswith("```"):
-        fixed = re.sub(r"^```\w*\n?", "", fixed)
-        fixed = re.sub(r"\n?```$", "", fixed)
-    return fixed
+    return strip_fencing(fixed)
 
 
 def _write_attempt_artifacts(

@@ -9,15 +9,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from manimgen.utils import probe_video_duration
 from manimgen.validator.layout_checker import (
     check_layout,
-    _get_video_duration,
     _extract_frame,
     _sample_frames,
 )
 
 
-# ── _get_video_duration ───────────────────────────────────────────────────────
+# ── probe_video_duration ──────────────────────────────────────────────────────
 
 class TestGetVideoDuration:
 
@@ -25,19 +25,19 @@ class TestGetVideoDuration:
         mock_result = MagicMock()
         mock_result.returncode = 0
         mock_result.stdout = "12.34\n"
-        with patch("subprocess.run", return_value=mock_result):
-            assert _get_video_duration("/fake/video.mp4") == pytest.approx(12.34)
+        with patch("manimgen.utils.subprocess.run", return_value=mock_result):
+            assert probe_video_duration("/fake/video.mp4") == pytest.approx(12.34)
 
     def test_returns_none_on_nonzero_returncode(self):
         mock_result = MagicMock()
         mock_result.returncode = 1
         mock_result.stdout = ""
-        with patch("subprocess.run", return_value=mock_result):
-            assert _get_video_duration("/fake/video.mp4") is None
+        with patch("manimgen.utils.subprocess.run", return_value=mock_result):
+            assert probe_video_duration("/fake/video.mp4") is None
 
     def test_returns_none_on_exception(self):
-        with patch("subprocess.run", side_effect=Exception("ffprobe not found")):
-            assert _get_video_duration("/fake/video.mp4") is None
+        with patch("manimgen.utils.subprocess.run", side_effect=Exception("ffprobe not found")):
+            assert probe_video_duration("/fake/video.mp4") is None
 
 
 # ── _extract_frame ────────────────────────────────────────────────────────────
@@ -79,7 +79,7 @@ class TestExtractFrame:
 class TestSampleFrames:
 
     def test_samples_at_25_50_75_percent_of_duration(self):
-        with patch("manimgen.validator.layout_checker._get_video_duration", return_value=8.0), \
+        with patch("manimgen.validator.layout_checker.probe_video_duration", return_value=8.0), \
              patch("manimgen.validator.layout_checker._extract_frame", return_value="b64data") as mock_extract:
             frames = _sample_frames("/fake/video.mp4")
 
@@ -88,7 +88,7 @@ class TestSampleFrames:
         assert timestamps_called == pytest.approx([2.0, 4.0, 6.0])
 
     def test_falls_back_to_fixed_timestamps_when_duration_unknown(self):
-        with patch("manimgen.validator.layout_checker._get_video_duration", return_value=None), \
+        with patch("manimgen.validator.layout_checker.probe_video_duration", return_value=None), \
              patch("manimgen.validator.layout_checker._extract_frame", return_value="b64data") as mock_extract:
             frames = _sample_frames("/fake/video.mp4")
 
@@ -98,7 +98,7 @@ class TestSampleFrames:
 
     def test_skips_failed_frames(self):
         # First frame fails, rest succeed
-        with patch("manimgen.validator.layout_checker._get_video_duration", return_value=6.0), \
+        with patch("manimgen.validator.layout_checker.probe_video_duration", return_value=6.0), \
              patch("manimgen.validator.layout_checker._extract_frame", side_effect=[None, "b64data", "b64data"]):
             frames = _sample_frames("/fake/video.mp4")
 
@@ -212,7 +212,7 @@ class TestRetryVisualLoop:
              patch("manimgen.validator.retry.check_layout",
                    return_value={"ok": False, "issues": issues, "skipped": False}), \
              patch("manimgen.validator.retry.chat", return_value=fixed_code) as mock_chat, \
-             patch("manimgen.validator.retry.precheck_and_autofix",
+             patch("manimgen.validator.retry.precheck_and_autofix_file",
                    return_value={"ok": True, "stderr": "", "layout_warnings": []}):
             import manimgen.validator.retry as retry_module
             retry_module.MAX_RETRIES = 3
@@ -268,7 +268,7 @@ class TestRetryVisualLoop:
         with patch("manimgen.validator.retry._run_and_capture", run_mock), \
              patch("manimgen.validator.retry.apply_error_aware_fixes",
                    return_value=(original_code, [])), \
-             patch("manimgen.validator.retry.precheck_and_autofix",
+             patch("manimgen.validator.retry.precheck_and_autofix_file",
                    return_value={"ok": True, "stderr": "", "layout_warnings": []}), \
              patch("manimgen.validator.retry.chat",
                    return_value=original_code) as mock_chat:
@@ -329,7 +329,7 @@ class TestRetryVisualLoop:
              patch("manimgen.validator.retry.check_layout",
                    return_value={"ok": False, "issues": issues, "skipped": False}), \
              patch("manimgen.validator.retry.chat", return_value=fixed_code) as mock_chat, \
-             patch("manimgen.validator.retry.precheck_and_autofix",
+             patch("manimgen.validator.retry.precheck_and_autofix_file",
                    return_value={"ok": True, "stderr": "", "layout_warnings": []}):
             from manimgen.validator import retry as retry_module
             retry_module.MAX_RETRIES = 3
@@ -377,7 +377,7 @@ class TestRetryVisualLoop:
              patch("manimgen.validator.retry.check_layout",
                    return_value={"ok": True, "issues": "", "skipped": False}), \
              patch("manimgen.validator.retry.chat") as mock_chat, \
-             patch("manimgen.validator.retry.precheck_and_autofix",
+             patch("manimgen.validator.retry.precheck_and_autofix_file",
                    return_value={"ok": True, "stderr": "", "layout_warnings": []}):
             import manimgen.validator.retry as retry_module
             retry_module.MAX_RETRIES = 3
@@ -449,7 +449,7 @@ class TestRetryVisualLoop:
         ) as mock_layout, patch(
             "manimgen.validator.retry.chat", return_value=fixed
         ) as mock_chat, patch(
-            "manimgen.validator.retry.precheck_and_autofix",
+            "manimgen.validator.retry.precheck_and_autofix_file",
             return_value={"ok": True, "stderr": "", "layout_warnings": []},
         ):
             import manimgen.validator.retry as retry_module

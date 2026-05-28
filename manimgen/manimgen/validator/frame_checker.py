@@ -19,9 +19,10 @@ from __future__ import annotations
 
 import logging
 import os
-import subprocess
 import tempfile
 from dataclasses import dataclass, field
+
+from manimgen.utils import probe_video_duration
 
 logger = logging.getLogger(__name__)
 
@@ -104,29 +105,6 @@ def _extract_frame_pil(video_path: str, timestamp: float) -> "Image.Image | None
                 pass
 
 
-def _get_video_duration(video_path: str) -> float | None:
-    """Return video duration in seconds via ffprobe."""
-    try:
-        result = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                video_path,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode == 0:
-            return float(result.stdout.strip())
-    except Exception:
-        pass
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -295,7 +273,7 @@ def check_frames(video_path: str) -> FrameCheckResult:
     if not os.path.exists(video_path):
         return FrameCheckResult(ok=True, skipped=True)
 
-    duration = _get_video_duration(video_path)
+    duration = probe_video_duration(video_path)
     if not duration or duration < 0.5:
         return FrameCheckResult(ok=True, skipped=True)
 

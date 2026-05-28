@@ -4,6 +4,7 @@ import base64
 import glob
 import os
 import re
+import subprocess
 from typing import Any
 
 # A section id must be safe to interpolate into a filesystem path AND into a
@@ -50,6 +51,28 @@ def safe_probe_duration(data: Any) -> float | None:
         return float(text)
     except ValueError:
         return None
+
+
+def probe_video_duration(video_path: str, timeout: int = 15) -> float | None:
+    """Return video duration in seconds via ffprobe, or None on failure."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                video_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if result.returncode == 0:
+            return float(result.stdout.strip())
+    except Exception:
+        pass
+    return None
 
 
 def strip_fencing(raw: str) -> str:

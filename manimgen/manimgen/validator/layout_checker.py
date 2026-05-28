@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 
 from manimgen.llm import chat
-from manimgen.utils import load_reference_frames
+from manimgen.utils import load_reference_frames, probe_video_duration
 
 logger = logging.getLogger(__name__)
 
@@ -24,29 +24,6 @@ def _load_layout_system_prompt() -> str:
         return f.read()
 
 
-def _get_video_duration(video_path: str) -> float | None:
-    """Return video duration in seconds via ffprobe, or None on failure."""
-    try:
-        result = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                video_path,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        if result.returncode == 0:
-            return float(result.stdout.strip())
-    except Exception as exc:
-        logger.warning("[layout_checker] ffprobe duration failed: %s", exc)
-    return None
 
 
 def _extract_frame(video_path: str, timestamp: float) -> str | None:
@@ -101,7 +78,7 @@ def _sample_frames(video_path: str) -> list[str]:
     Falls back to fixed timestamps (0.5s, 1.0s) if duration cannot be determined.
     Returns a list of base64-encoded PNG strings (may be empty).
     """
-    duration = _get_video_duration(video_path)
+    duration = probe_video_duration(video_path)
 
     if duration and duration > 0.5:
         timestamps = [duration * 0.25, duration * 0.5, duration * 0.75]
