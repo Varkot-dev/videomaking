@@ -15,3 +15,5 @@ videos/
 downloads/
 test_clips/
 .claude/scheduled_tasks.lock
+.claude/worktrees/
+*.mp4
