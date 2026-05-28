@@ -6,9 +6,8 @@ All network calls are mocked — no actual TTS calls are made.
 
 import json
 import os
-import tempfile
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import patch, MagicMock
 
 from manimgen.renderer.tts import (
     WordTimestamp,

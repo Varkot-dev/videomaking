@@ -5,7 +5,6 @@ Covers every auto-fix, every banned pattern detection, and the
 error-aware repair path. Zero LLM calls, zero subprocess calls.
 """
 
-import pytest
 from manimgen.validator.codeguard import (
     apply_known_fixes,
     apply_error_aware_fixes,

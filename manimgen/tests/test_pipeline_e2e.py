@@ -21,7 +21,6 @@ let ``layout_checker.check_layout`` run unmocked.
 
 import importlib
 import inspect
-import os
 
 import pytest
 

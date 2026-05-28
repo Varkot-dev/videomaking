@@ -10,13 +10,12 @@ missing input file, and empty segment list.
 
 import os
 import pytest
-from unittest.mock import patch, call, MagicMock
+from unittest.mock import patch, MagicMock
 
 from manimgen.planner.segmenter import CueSegment
 from manimgen.renderer.audio_slicer import (
     slice_audio,
     _ffmpeg_slice,
-    _ffmpeg_copy,
     _check_ffmpeg,
     _MIN_SEGMENT_DURATION,
 )

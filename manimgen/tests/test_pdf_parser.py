@@ -5,11 +5,9 @@ Tests text cleaning, chunking logic, and output structure.
 Uses real pypdf parsing on a synthetic in-memory PDF.
 """
 
-import io
 import pytest
 
 try:
-    import pypdf
     HAS_PYPDF = True
 except ImportError:
     HAS_PYPDF = False

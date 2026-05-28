@@ -16,11 +16,10 @@ Key invariants to enforce:
 
 import logging
 import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 from manimgen.renderer.muxer import (
     mux_audio_video,
-    _get_duration,
     _WARN_THRESHOLD_SECONDS,
 )
 

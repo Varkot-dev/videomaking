@@ -311,7 +311,6 @@ def retry_scene(
 
             # Scene rendered but has visual defects. Feed structured feedback
             # back into the retry loop if budget allows.
-            issues_text = "\n".join(combined_issues)
             print(
                 f"[retry] Attempt {attempt}/{MAX_RETRIES} rendered but has visual defects:"
             )

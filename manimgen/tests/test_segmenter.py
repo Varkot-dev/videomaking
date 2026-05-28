@@ -2,7 +2,6 @@
 Tests for manimgen/planner/segmenter.py — pure logic, no LLM, no network.
 """
 
-import pytest
 from manimgen.renderer.tts import WordTimestamp
 from manimgen.planner.segmenter import CueSegment, compute_segments
 

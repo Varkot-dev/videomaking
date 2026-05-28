@@ -10,7 +10,7 @@ All subprocess calls are mocked — no real ffmpeg needed.
 
 import os
 import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 from manimgen.renderer.assembler import (
     assemble_video,

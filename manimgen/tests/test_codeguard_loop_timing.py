@@ -4,7 +4,6 @@ Tests for codeguard._check_loop_timing_smells()
 Zero LLM calls, zero subprocess calls.
 """
 
-import pytest
 from manimgen.validator.codeguard import _check_loop_timing_smells
 
 

@@ -7,7 +7,6 @@ Zero LLM calls — mocks chat() to return canned JSON.
 import json
 from unittest.mock import patch
 
-import pytest
 
 from manimgen.planner.lesson_planner import research_topic, _format_research_brief
 

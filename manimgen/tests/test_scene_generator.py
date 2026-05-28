@@ -5,7 +5,6 @@ Tests narration duration estimation and class name generation.
 LLM calls are mocked — zero API cost.
 """
 
-import pytest
 from manimgen.generator.scene_generator import _estimate_duration, _WORDS_PER_MINUTE
 from manimgen.utils import section_class_name
 

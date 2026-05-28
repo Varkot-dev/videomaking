@@ -14,7 +14,6 @@ fail at least one test here.
 No LLM, no network. TTS tests are skipped without edge-tts.
 """
 
-import pytest
 from unittest.mock import patch, MagicMock
 
 from manimgen.renderer.tts import WordTimestamp

@@ -4,7 +4,6 @@ Tests for manimgen/planner/cue_parser.py
 parse_cues() and inject_cues() — no LLM calls, pure string processing.
 """
 
-import pytest
 from manimgen.planner.cue_parser import align_cue_indices, parse_cues, inject_cues
 
 

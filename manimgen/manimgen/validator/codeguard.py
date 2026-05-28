@@ -473,8 +473,6 @@ def _wrap_bare_rect_in_show_creation(code: str) -> tuple[str, str | None]:
             break
 
         # Check if already wrapped in ShowCreation/FadeIn/Write
-        prefix = code[m.start(0) : m.start(1)]
-        # m.start(0) is "self.play(", m.start(1) is the rect name
         # Capture text between "self.play(" and the rect name
         between = code[m.start(0) + len("self.play(") : m.start(1)].strip()
         if between:
@@ -497,10 +495,6 @@ def _wrap_bare_rect_in_show_creation(code: str) -> tuple[str, str | None]:
 
         # The full rect call including its closing paren
         rect_call = code[m.start(1) : rect_close + 1]
-
-        # What comes after the rect call: should be ')' to close self.play()
-        # or ', run_time=...' etc. — we keep those unchanged
-        after_rect = code[rect_close + 1 :]
 
         result_parts.append(code[pos : m.start(1)])
         result_parts.append(f"ShowCreation({rect_call})")
@@ -1217,7 +1211,6 @@ def _check_horizontal_chain_overflow(lines: list[str], warnings: list[str]) -> N
     accumulate x-position and overflow past x=7. Equation derivation steps
     should stack vertically (DOWN), not horizontally (RIGHT).
     """
-    next_to_right_re = re.compile(r"\.next_to\(\s*(\w+)\s*,\s*RIGHT")
     # Track chains: for each object, record what it is placed right-of
     right_of: dict[str, str] = {}  # variable -> anchor
     assignment_re = re.compile(r"(\w+)\s*=\s*.*\.next_to\(\s*(\w+)\s*,\s*RIGHT")

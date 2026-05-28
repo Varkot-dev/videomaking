@@ -7,7 +7,7 @@ All LLM calls are mocked — zero API cost.
 
 import json
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from manimgen.planner.lesson_planner import (
     _cap_sections,

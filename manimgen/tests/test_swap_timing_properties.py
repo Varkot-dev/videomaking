@@ -13,12 +13,11 @@ Hypothesis generates the inputs; we verify the invariants hold across all of the
 
 import sys
 import os
-import pytest
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from hypothesis import given, assume, settings, HealthCheck
+from hypothesis import given, settings, HealthCheck
 from hypothesis import strategies as st
 
 

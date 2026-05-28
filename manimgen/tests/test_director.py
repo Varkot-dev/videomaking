@@ -6,12 +6,11 @@ Tests for the new Director architecture:
 - codeguard precheck_and_autofix works on code strings
 - cutter computes start times correctly
 """
-import json
 import os
 import sys
 import textwrap
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 # Ensure package is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))

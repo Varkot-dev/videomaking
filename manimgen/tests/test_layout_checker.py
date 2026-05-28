@@ -5,8 +5,7 @@ Zero LLM calls, zero subprocess calls, zero real video files.
 All external calls are mocked.
 """
 
-import os
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
