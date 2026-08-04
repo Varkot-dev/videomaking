@@ -23,7 +23,7 @@ A smoke test ("bubble sort") confirmed 3/5 sections now render. 2 still fall bac
 
 **337 tests pass.** Run them first before touching anything:
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+cd <repo-root>
 python3 -m pytest tests/ --ignore=tests/test_scene_generator.py --ignore=tests/test_planner.py --ignore=tests/test_pipeline_e2e.py -v
 ```
 
