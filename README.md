@@ -221,12 +221,21 @@ git clone https://github.com/Varkot-dev/videomaking.git
 cd videomaking
 
 pip install -e manimgen/
-pip install pypdf edge-tts google-genai anthropic pyyaml flask pillow
+pip install -r manimgen/requirements.txt
 
-# Set your LLM provider
-export GEMINI_API_KEY=your_key        # development (default)
-# export ANTHROPIC_API_KEY=your_key  # production
-# export LLM_PROVIDER=anthropic
+# Gemini is the configured default and the only key a stock checkout needs.
+export GEMINI_API_KEY=your_key
+
+# Optional alternatives — both fully implemented:
+# export ANTHROPIC_API_KEY=your_key && export LLM_PROVIDER=anthropic
+# export LLM_PROVIDER=ollama    # fully local, no API key
+```
+
+Verify the install before going further:
+
+```bash
+manimgen --help              # must print usage, not ModuleNotFoundError
+python3 -m pytest -q         # full suite, mocked, no API key required
 ```
 
 **Dependencies:** FFmpeg and BasicTeX (for LaTeX rendering in ManimGL)
