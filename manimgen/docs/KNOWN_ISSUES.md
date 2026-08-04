@@ -34,7 +34,7 @@ version; the deprecation `UserWarning` is harmless).
 (`.../videomaking/manimgen/manimgen`) instead of its **parent**, so Python
 resolved a namespace package one level too deep.
 **Fix:** point `site-packages/__editable__.manimgen-0.1.0.pth` at the parent
-(`/Users/varshithkotagiri/videomaking/manimgen`), or `pip install -e .` from the
+(`<repo-root>`), or `pip install -e .` from the
 project root.
 **Guard:** `check_manimgen_entrypoint()` (imports from a neutral cwd so it can't
 be masked).

@@ -133,7 +133,7 @@ class TestVGroupBannedPatternFalsePositives:
 - [ ] **Step 2: Run — confirm all false-positive tests FAIL**
 
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+cd <repo-root>
 python3 -m pytest tests/test_codeguard.py::TestVGroupBannedPatternFalsePositives -v
 ```
 
@@ -239,7 +239,7 @@ array_swap_scene.py now passes precheck."
 - [ ] **Step 1: Check if test_retry.py exists**
 
 ```bash
-ls /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/tests/test_retry.py
+ls <repo-root>/tests/test_retry.py
 ```
 
 - [ ] **Step 2: Write failing tests**
@@ -969,7 +969,7 @@ git commit -m "docs: mark VGroup swap and A/V timing issues fixed in CLAUDE.md"
 After all branches are merged, run this to confirm end-to-end:
 
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+cd <repo-root>
 
 # Clear previous outputs
 rm -f manimgen/output/scenes/section_0*.py

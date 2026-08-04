@@ -40,7 +40,11 @@ rendering:
 #   export MANIMGEN_FREEZE_BLOCK_THRESHOLD=2.0
 
 tts:
-  engine: edge-tts  # edge-tts | elevenlabs | openai
+  # edge-tts is the ONLY implemented engine. renderer/tts.py does not read this
+  # key at all — it calls edge-tts directly. ElevenLabs / OpenAI backends are a
+  # possible future addition (UNIMPLEMENTED); until one lands, changing this
+  # value has no effect on which engine runs.
+  engine: edge-tts
   voice: en-US-AndrewMultilingualNeural
   enabled: true
   speed: "+5%"

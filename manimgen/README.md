@@ -34,7 +34,7 @@ Input (topic string or PDF)
 │                           known ManimGL API mistakes    │
 │                                                         │
 │  3. Runner ─────────────► subprocess: manimgl file.py   │
-│                           1920×1080 @ 30fps, H.264      │
+│                           1920×1080 @ 60fps, H.264      │
 │                                                         │
 │  4. Retry loop ─────────► classify error type →         │
 │     (up to 3×)            targeted LLM fix prompt →     │
@@ -46,7 +46,7 @@ Input (topic string or PDF)
 │  6. TTS ────────────────► edge-tts narration → .mp3     │
 │                                                         │
 │  7. Muxer ──────────────► ffmpeg: sync audio+video,     │
-│                           loop or pad to match durations│
+│                           pad to match durations         │
 └─────────────────────────────────────────────────────────┘
          │
          ▼
@@ -135,15 +135,18 @@ The PDF planner prompt enforces a 9-stage explanation arc: hook → intuition �
 
 ## Audio-video sync (`renderer/muxer.py`)
 
-Three strategies depending on the duration mismatch:
+The muxer never speed-warps either stream — pitch-shifted narration and
+time-distorted animation both look wrong. It pads instead:
 
 | Condition | Strategy |
 |---|---|
-| Audio ≤ video duration | Pad audio with silence (`apad` filter) |
-| Audio slightly longer (< 2×) | Speed up video (`setpts=VIDEO/AUDIO*PTS`) |
-| Audio much longer (≥ 2×, e.g. fallback 6s + 30s narration) | Loop video (`-stream_loop -1`) |
+| Audio ≤ video duration | Pad audio with silence (`apad=whole_dur=...`) |
+| Audio > video duration | Freeze the last video frame (`tpad=stop_mode=clone`) |
+| Video missing or unreadable | Synthesize a solid-colour background for the audio |
 
-Warns on any mismatch > 30% — a large mismatch indicates the narration duration estimator or the generator prompt needs tuning.
+Logs a WARNING at a duration diff > 1.0s and a LARGE MISMATCH at > 1.5s — a
+large mismatch indicates the narration duration estimator or the generator
+prompt needs tuning.
 
 ---
 
@@ -153,7 +156,7 @@ Warns on any mismatch > 30% — a large mismatch indicates the narration duratio
 manimgen/
 ├── manimgen/
 │   ├── cli.py                    # entry point: manimgen <topic> | --pdf file.pdf
-│   ├── llm.py                    # Gemini (dev) / Claude (prod) toggle
+│   ├── llm.py                    # provider toggle: gemini | anthropic | ollama
 │   ├── input/
 │   │   ├── parser.py             # topic string normalization
 │   │   └── pdf_parser.py         # PDF → cleaned text chunks
@@ -161,27 +164,34 @@ manimgen/
 │   │   ├── lesson_planner.py     # topic/PDF → structured lesson plan JSON
 │   │   └── prompts/
 │   │       ├── planner_system.md         # topic planner prompt
-│   │       └── planner_pdf_system.md     # PDF planner prompt (9-stage arc)
+│   │       ├── planner_pdf_system.md     # PDF planner prompt (9-stage arc)
+│   │       ├── researcher_system.md      # Panel of Experts knowledge brief
+│   │       └── storyboard_critic_system.md
 │   ├── generator/
 │   │   ├── scene_generator.py    # section JSON → ManimGL .py file
 │   │   └── prompts/
-│   │       ├── generator_system.md  # full ManimGL API reference prompt
-│   │       └── rules_core.md        # shared rules for generator + retry
+│   │       └── director_system.md   # full ManimGL API reference prompt
 │   ├── validator/
 │   │   ├── codeguard.py          # static analysis + 20+ auto-fixes
+│   │   ├── scene_ast_gate.py     # AST-level structural gate
 │   │   ├── runner.py             # manimgl subprocess + logging
 │   │   ├── retry.py              # error classification + LLM repair loop
+│   │   ├── frame_checker.py      # zero-cost PIL black/frozen/clipping checks
+│   │   ├── layout_checker.py     # LLM vision check on rendered frames
+│   │   ├── timing_verifier.py    # static timing analysis + auto-fix
 │   │   ├── fallback.py           # title card fallback scene
 │   │   └── env.py                # render environment setup
 │   ├── renderer/
-│   │   ├── assembler.py          # ffmpeg concat of section videos
-│   │   ├── tts.py                # edge-tts narration generation
-│   │   └── muxer.py              # audio-video sync with 3 strategies
+│   │   ├── tts.py                # edge-tts narration + word timestamps
+│   │   ├── audio_slicer.py       # full audio → cue-aligned slices
+│   │   ├── cutter.py             # rendered .mp4 → per-cue clips
+│   │   ├── muxer.py              # audio-video sync (pad-only, no speed warp)
+│   │   └── assembler.py          # ffmpeg concat of section videos
 │   └── editor/
 │       ├── server.py             # Flask clip editor server
 │       └── templates/editor.html # browser-based trim/reorder UI
-├── examples/                     # 5 hand-written ManimGL scenes (few-shot seeds)
-├── tests/                        # 117 unit tests, zero LLM/subprocess calls
+├── examples/                     # 32 hand-written ManimGL scenes (few-shot seeds)
+├── tests/                        # unit tests, zero LLM/subprocess calls
 └── config.yaml                   # LLM provider, TTS voice, render quality
 ```
 
@@ -192,14 +202,14 @@ manimgen/
 | Layer | Technology |
 |---|---|
 | Animation engine | [ManimGL](https://github.com/3b1b/manim) (3b1b version, not ManimCommunity) |
-| LLM — development | Google Gemini 2.5 Flash |
-| LLM — production | Anthropic Claude Sonnet |
+| LLM — default | Google Gemini 2.5 Flash (`llm_provider: "gemini"`) |
+| LLM — alternatives | Anthropic Claude Sonnet, or a local Ollama model |
 | TTS | Microsoft edge-tts (Neural voices) |
 | Video processing | FFmpeg |
 | PDF parsing | pypdf |
 | Clip editor | Flask + vanilla JS |
-| Tests | pytest (117 tests) |
-| Output format | H.264, 1920×1080, 30fps |
+| Tests | pytest (`python3 -m pytest -q`) |
+| Output format | H.264, 1920×1080, 60fps |
 
 ---
 
@@ -212,11 +222,20 @@ cd videomaking
 pip install -e .
 pip install pypdf edge-tts google-genai anthropic pyyaml flask
 
-# Set your LLM provider
-export GEMINI_API_KEY=your_key        # development (default)
-# export ANTHROPIC_API_KEY=your_key  # production
-# export LLM_PROVIDER=anthropic
+# Set your LLM provider.
+# The default provider is Gemini (config.yaml: llm_provider: "gemini"),
+# so GEMINI_API_KEY is the only key a stock checkout needs. Put it in
+# manimgen/.env or export it:
+export GEMINI_API_KEY=your_key
+
+# Anthropic and Ollama are also fully implemented. To use one instead:
+# export LLM_PROVIDER=anthropic && export ANTHROPIC_API_KEY=your_key
+# export LLM_PROVIDER=ollama     # local Ollama server, no API key needed
 ```
+
+Resolution order for the provider is `LLM_PROVIDER` env var → `llm_provider` in
+`config.yaml` → default `"gemini"`. Model names live under `llm:` in
+`config.yaml` and are never hardcoded.
 
 **Dependencies:** FFmpeg and BasicTeX (for LaTeX rendering in ManimGL)
 ```bash
@@ -255,16 +274,35 @@ Output: `manimgen/output/videos/<title>.mp4`
 ## Testing
 
 ```bash
-python3 -m pytest tests/ -v
+python3 -m pytest -q
 ```
 
-117 tests, all passing, zero LLM or subprocess calls (fully mocked). Tests cover:
+`pyproject.toml` is the single source of truth for how the suite runs — a bare
+`pytest` runs the exact set CI runs. Do not add `--ignore` flags; they hide
+local↔CI divergence. The suite makes zero LLM or subprocess calls (fully
+mocked), so it is free to run. Tests cover:
 - Every codeguard auto-fix and banned pattern
 - Error-aware repair from real stderr tracebacks  
 - Section cap enforcement in the planner
 - Narration duration estimation
 - Muxer strategy selection per duration ratio
 - PDF parser output structure and chunking logic
+- Documentation accuracy (`tests/test_docs_accuracy.py` — every relative path
+  the docs cite must exist, no doc may hardcode a test count, and no tracked
+  doc may contain a personal home-directory path)
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs on every push and pull request:
+
+| Job | What it does |
+|---|---|
+| `test` | `python -m pytest -q` on Python 3.11, 3.12, and 3.13 |
+| `lint` | `ruff check` (advisory), plus a blocking pass for `E9,F63,F7,F82` — real syntax/undefined-name errors |
+| `secrets` | Scans the tree for credential patterns and asserts `.env` is untracked |
+
+CI needs no API keys: the suite is fully mocked, makes no network calls, and
+renders nothing.
 
 ---
 

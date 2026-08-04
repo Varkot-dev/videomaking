@@ -3,12 +3,12 @@
 ## Context
 Project: `manimgen` — automated pipeline: topic → 3Blue1Brown-style video.
 Repo: `https://github.com/Varkot-dev/videomaking.git`
-Working dir: `/Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/`
+Working dir: `<repo-root>/`
 Read `manimgen/CLAUDE.md` before touching any code.
 
 ## Setup
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+cd <repo-root>
 git checkout main
 git merge feature/swap-timing-fixes   # if not already merged
 git pull

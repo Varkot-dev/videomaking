@@ -21,7 +21,14 @@ Uses an audio-first CUE pipeline where spoken word timestamps drive animation du
 **Stack:** Python 3.13, ManimGL (3b1b fork), Gemini 2.5 Flash, FFmpeg 8.1, LaTeX, edge-tts, Flask (editor)
 
 **Repo:** `https://github.com/Varkot-dev/videomaking.git` — branch `main`
-**732 tests, all passing** (`python3 -m pytest tests/ --ignore=tests/test_scene_generator.py --ignore=tests/test_planner.py --ignore=tests/test_pipeline_e2e.py -q`)
+
+**Tests:** run `python3 -m pytest -q` — bare, no flags. `pyproject.toml` is the
+single source of truth for how the suite runs, and it deliberately carries no
+default `--ignore`. Never add `--ignore=tests/test_scene_generator.py`
+(or `test_planner.py` / `test_pipeline_e2e.py`): those files are fully mocked
+and cost nothing, so skipping them only hides local↔CI divergence. Do not
+transcribe the pass count into any doc — it goes stale within a day; run the
+command instead. `tests/test_docs_accuracy.py` enforces this.
 
 ---
 
@@ -89,7 +96,7 @@ manimgen/
 ├── examples/                    # hand-written verified ManimGL scenes (Director few-shot reference)
 │                                # Each scene has `techniques: <name>, <name>` as first line of class
 │                                # docstring — scene_generator._index_examples() indexes them at runtime
-├── tests/                       # 399 pytest tests
+├── tests/                       # pytest suite (run `python3 -m pytest -q`)
 ├── config.yaml                  # LLM provider, model names, TTS config, render quality
 ├── requirements.txt
 └── setup.py                     # console_scripts: manimgen, manimgen-edit
@@ -166,8 +173,8 @@ GEMINI_API_KEY=<key> manimgen --resume   # resume from cached plan.json
 
 manimgen-edit   # launch clip editor
 
-# Run tests (zero cost)
-python3 -m pytest tests/ --ignore=tests/test_scene_generator.py --ignore=tests/test_planner.py --ignore=tests/test_pipeline_e2e.py -q
+# Run tests (zero cost — everything LLM/subprocess is mocked)
+python3 -m pytest -q
 ```
 
 **API key location:** `manimgen/.env` (GEMINI_API_KEY=...)
@@ -208,8 +215,12 @@ All `manimgl` subprocess calls use `-c "#1C1C1C"`. The flag is `-c`, NOT `--back
 
 ### 3. Video quality
 - Assembler uses `-preset slow -crf 17` (near-lossless). Previously `veryfast` caused blurry output.
-- Output normalized to `1920x1080@60fps`.
-- All FFmpeg/ffprobe subprocess calls have 300s timeouts.
+- Output normalized to `1920x1080@60fps` (from `rendering.resolution` / `rendering.fps` in `config.yaml`).
+- Subprocess timeouts are **per-call and sized to the work**, not one global
+  value. Roughly: ffprobe duration probes 15s, short ffmpeg/frame-extract calls
+  10–30s, full ffmpeg encodes 300s, `manimgl` scene renders 240s (360s for 3D).
+  When adding a new subprocess call, pass an explicit `timeout=` — an ffmpeg or
+  ffprobe call with no timeout can hang the whole pipeline indefinitely.
 
 ### 4. codeguard.py auto-fixes (token-free)
 Every fix runs before any render attempt. Key fixes:
@@ -264,7 +275,8 @@ After every fix, the file is **always reloaded from disk** — previously a bug 
 5. **codeguard is the first line of defense** — extend it for any new known-bad pattern before touching prompts
 6. **No duplicate source files** — never create top-level mirrors of source files
 7. **Adding a new example scene:** add to `examples/`, add `techniques: <name>` as first docstring line. No code changes needed.
-8. **Master Guidelines (`MASTER GUIDELINES.md`)** — no hardcoded mappings, no duplicate sources of truth, no speculative abstractions.
+8. **Core design principles** — no hardcoded mappings, no duplicate sources of truth, no speculative abstractions. (These were previously cited as an external `MASTER GUIDELINES.md`; no such file exists in this repo, so they are stated here directly.)
+9. **Docs must match code.** `tests/test_docs_accuracy.py` mechanically checks that every relative path the docs cite exists, that no doc hardcodes a test count, and that no tracked doc leaks a personal home-directory absolute path. If it fails, fix the doc — never weaken the test.
 
 ---
 
@@ -426,8 +438,10 @@ Renders every page to PNG even for text-heavy PDFs. Should use 3-way logic.
 ## Testing (zero cost)
 
 ```bash
-# Full suite (skip LLM-calling tests)
-python3 -m pytest tests/ --ignore=tests/test_scene_generator.py --ignore=tests/test_planner.py --ignore=tests/test_pipeline_e2e.py -q
+# Full suite. Bare invocation — pyproject.toml already scopes it to tests/.
+# There are no "LLM-calling tests" to skip: test_scene_generator.py,
+# test_planner.py and test_pipeline_e2e.py mock every LLM seam and cost nothing.
+python3 -m pytest -q
 
 # Specific areas
 python3 -m pytest tests/test_codeguard.py -v          # all codeguard fixes + bans

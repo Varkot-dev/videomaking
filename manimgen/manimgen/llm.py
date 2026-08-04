@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
 
 # Network resilience defaults. Both providers hang indefinitely on a flaky
-# TLS handshake without explicit timeouts (MASTER GUIDELINES §4.2).
+# TLS handshake without explicit timeouts.
 # 120s is comfortable for multi-second generations; 3 retries with
 # exponential backoff survive transient blips without failing a whole run.
 _REQUEST_TIMEOUT_SECONDS = 120.0

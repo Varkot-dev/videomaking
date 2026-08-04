@@ -65,7 +65,7 @@ class TestSurroundingRectangleAutoWrap:
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+cd <repo-root>
 python3 -m pytest tests/test_codeguard.py::TestSurroundingRectangleAutoWrap -v
 ```
 
@@ -105,7 +105,7 @@ In `manimgen/manimgen/validator/codeguard.py`, add these two entries to the `rep
 - [ ] **Step 5: Run tests to verify they pass**
 
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+cd <repo-root>
 python3 -m pytest tests/test_codeguard.py::TestSurroundingRectangleAutoWrap -v
 ```
 
@@ -114,7 +114,7 @@ Expected: 5 PASSes.
 - [ ] **Step 6: Run full test suite to check for regressions**
 
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+cd <repo-root>
 python3 -m pytest tests/test_codeguard.py -v
 ```
 
@@ -123,7 +123,7 @@ Expected: all existing tests still pass.
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+cd <repo-root>
 git add manimgen/validator/codeguard.py tests/test_codeguard.py
 git commit -m "fix: auto-wrap bare SurroundingRectangle/BackgroundRectangle in ShowCreation()"
 ```
@@ -182,7 +182,7 @@ class TestTexTextOuterWrapperStrip:
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+cd <repo-root>
 python3 -m pytest tests/test_codeguard.py::TestTexTextOuterWrapperStrip -v
 ```
 
@@ -236,7 +236,7 @@ At the bottom of `apply_known_fixes()` in `codeguard.py`, just before the `retur
 - [ ] **Step 6: Run tests to verify they pass**
 
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+cd <repo-root>
 python3 -m pytest tests/test_codeguard.py::TestTexTextOuterWrapperStrip -v
 ```
 
@@ -245,7 +245,7 @@ Expected: 5 PASSes.
 - [ ] **Step 7: Run full codeguard test suite**
 
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+cd <repo-root>
 python3 -m pytest tests/test_codeguard.py -v
 ```
 
@@ -254,7 +254,7 @@ Expected: all passing.
 - [ ] **Step 8: Commit**
 
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+cd <repo-root>
 git add manimgen/validator/codeguard.py tests/test_codeguard.py
 git commit -m "fix: strip outer \\text{} wrapper from Tex() — keep LaTeX, remove erroneous wrapper"
 ```
@@ -301,7 +301,7 @@ class TestVGroupItemAssignmentBan:
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+cd <repo-root>
 python3 -m pytest tests/test_codeguard.py::TestVGroupItemAssignmentBan -v
 ```
 
@@ -323,7 +323,7 @@ In `manimgen/manimgen/validator/codeguard.py`, add to `_BANNED_PATTERNS`:
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+cd <repo-root>
 python3 -m pytest tests/test_codeguard.py::TestVGroupItemAssignmentBan -v
 ```
 
@@ -332,7 +332,7 @@ Expected: 4 PASSes.
 - [ ] **Step 5: Run full codeguard test suite**
 
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+cd <repo-root>
 python3 -m pytest tests/test_codeguard.py -v
 ```
 
@@ -341,7 +341,7 @@ Expected: all passing. If `test_normal_index_read_not_flagged` unexpectedly fail
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+cd <repo-root>
 git add manimgen/validator/codeguard.py tests/test_codeguard.py
 git commit -m "fix: ban VGroup item assignment — surfaces precise error for retry LLM"
 ```
@@ -394,7 +394,7 @@ class TestFontSizeOnTexNotDoubleScaled:
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+cd <repo-root>
 python3 -m pytest tests/test_codeguard.py::TestFontSizeOnTexNotDoubleScaled -v
 ```
 
@@ -444,7 +444,7 @@ Replace the entire `if bad_kw == "font_size": ... else:` block with just the `el
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+cd <repo-root>
 python3 -m pytest tests/test_codeguard.py::TestFontSizeOnTexNotDoubleScaled -v
 ```
 
@@ -453,7 +453,7 @@ Expected: 3 PASSes.
 - [ ] **Step 5: Run full codeguard test suite**
 
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+cd <repo-root>
 python3 -m pytest tests/test_codeguard.py -v
 ```
 
@@ -482,7 +482,7 @@ Replace rule 2 with:
 - [ ] **Step 7: Run the full test suite**
 
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+cd <repo-root>
 python3 -m pytest tests/ --ignore=tests/test_scene_generator.py --ignore=tests/test_planner.py --ignore=tests/test_pipeline_e2e.py -v
 ```
 
@@ -491,7 +491,7 @@ Expected: all tests pass. Count should be ≥ 314 (the baseline) plus the new te
 - [ ] **Step 8: Commit**
 
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+cd <repo-root>
 git add manimgen/validator/codeguard.py tests/test_codeguard.py CLAUDE.md
 git commit -m "fix: remove double-scale bug for font_size= on Tex(), correct CLAUDE.md rule"
 ```

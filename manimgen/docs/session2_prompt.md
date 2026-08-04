@@ -3,12 +3,12 @@
 ## Context
 Project: `manimgen` — automated pipeline: topic → 3Blue1Brown-style video.
 Repo: `https://github.com/Varkot-dev/videomaking.git`
-Working dir: `/Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/`
+Working dir: `<repo-root>/`
 Read `manimgen/CLAUDE.md` before touching any code — it has the full verified ManimGL API (3D camera, surfaces, text pinning, codeguard rules).
 
 ## Setup
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+cd <repo-root>
 git checkout main
 git merge feature/swap-timing-fixes   # if not already merged
 git pull
@@ -74,7 +74,7 @@ One line each: name + one-sentence description of when to use it.
 
 ### 4. Smoke test
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+cd <repo-root>
 MANIMGEN_MAX_RETRY_LLM_CALLS=1 python3 -m manimgen.cli "gradient descent"
 ```
 Observe: does the planner use any new techniques? Do new scenes render without fallback?
