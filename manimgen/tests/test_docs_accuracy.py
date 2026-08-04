@@ -29,10 +29,32 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 
-# The two curated docs a reader is most likely to trust and act on.
-PRIMARY_DOCS = ("README.md", "CLAUDE.md")
+# The git repository root is one level above this Python package — the checkout
+# is `videomaking/`, and this package lives in `videomaking/manimgen/`. That
+# distinction matters: GitHub renders the README at the *git* root, so that file
+# is the one visitors actually read.
+GIT_ROOT = PACKAGE_ROOT.parent
+
+REPO_ROOT = PACKAGE_ROOT
+
+# Docs a reader is most likely to trust and act on, each paired with the
+# directory its relative paths resolve against.
+#
+# The git-root README was originally omitted here, and that omission is exactly
+# how the drift this module exists to catch went unnoticed: the package README
+# was corrected while the one GitHub displays kept claiming 732 tests. A
+# drift-detector that skips the most-read document is worse than none, because
+# it reports "docs verified" while the visible ones rot.
+PRIMARY_DOCS = (
+    ("README.md", PACKAGE_ROOT),
+    ("CLAUDE.md", PACKAGE_ROOT),
+    ("README.md", GIT_ROOT),
+)
+
+# Backwards-compatible aliases for tests that only need the package docs.
+PACKAGE_DOCS = ("README.md", "CLAUDE.md")
 
 
 # ---------------------------------------------------------------------------
@@ -144,15 +166,22 @@ def _resolves(rel: str) -> bool:
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("doc_name", PRIMARY_DOCS)
-def test_cited_file_paths_exist(doc_name: str) -> None:
-    """Every file path README.md / CLAUDE.md cite must exist on disk.
+@pytest.mark.parametrize(
+    "doc_name,doc_root",
+    PRIMARY_DOCS,
+    ids=[f"{root.name}/{name}" for name, root in PRIMARY_DOCS],
+)
+def test_cited_file_paths_exist(doc_name: str, doc_root: Path) -> None:
+    """Every file path a primary doc cites must exist on disk.
 
-    Regression guard: both docs previously cited `generator_system.md`,
+    Regression guard: the docs previously cited `generator_system.md`,
     `rules_core.md`, and `MASTER GUIDELINES.md`, none of which existed.
+
+    Covers the git-root README as well as the package one — the git-root file is
+    what GitHub renders, and omitting it is how a stale copy went unnoticed.
     """
-    doc = REPO_ROOT / doc_name
-    assert doc.exists(), f"{doc_name} is missing from the repo root"
+    doc = doc_root / doc_name
+    assert doc.exists(), f"{doc_name} is missing from {doc_root}"
     text = doc.read_text(encoding="utf-8")
 
     missing: list[str] = []
@@ -274,11 +303,11 @@ def test_docs_do_not_recommend_ignore_flags_for_pytest() -> None:
     invocation = re.compile(r"pytest\b[^\n`]*--ignore=")
 
     offenders: list[str] = []
-    for doc_name in PRIMARY_DOCS:
-        text = (REPO_ROOT / doc_name).read_text(encoding="utf-8")
+    for doc_name, doc_root in PRIMARY_DOCS:
+        text = (doc_root / doc_name).read_text(encoding="utf-8")
         for lineno, line in enumerate(text.splitlines(), start=1):
             if invocation.search(line):
-                offenders.append(f"{doc_name}:{lineno}: {line.strip()}")
+                offenders.append(f"{doc_root.name}/{doc_name}:{lineno}: {line.strip()}")
 
     assert not offenders, (
         "Documentation recommends a pytest invocation with --ignore flags:\n  "

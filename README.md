@@ -184,9 +184,9 @@ manimgen/
 │   └── editor/
 │       ├── server.py             # Flask clip editor server
 │       └── templates/editor.html # browser-based trim/reorder/export UI
-├── examples/                     # hand-written verified ManimGL scenes (Director few-shot)
+├── examples/                     # 32 hand-written verified ManimGL scenes (Director few-shot)
 │                                 # Each has `techniques: <name>` in class docstring
-├── tests/                        # 732+ unit tests, zero LLM or subprocess calls
+├── tests/                        # unit + integration tests, zero LLM or subprocess calls
 ├── docs/
 │   └── KNOWN_ISSUES.md           # active failure log + env-doctor guards
 ├── scripts/
@@ -203,13 +203,13 @@ manimgen/
 | Layer | Technology |
 |---|---|
 | Animation engine | [ManimGL](https://github.com/3b1b/manim) (3b1b version, not ManimCommunity) |
-| LLM — development | Google Gemini 2.5 Flash |
-| LLM — production | Anthropic Claude Sonnet |
+| LLM — default | Google Gemini 2.5 Flash (`GEMINI_API_KEY` is the only key a stock checkout needs) |
+| LLM — also supported | Anthropic Claude, and Ollama for fully local runs |
 | TTS | Microsoft edge-tts (Neural voices, WordBoundary timestamps) |
 | Video processing | FFmpeg |
 | PDF parsing | pypdf |
 | Clip editor | Flask + vanilla JS |
-| Tests | pytest (732+ tests, fully mocked) |
+| Tests | pytest — fully mocked, zero API cost (`python3 -m pytest -q`) |
 | Output format | H.264, 1920×1080, 60fps |
 
 ---
@@ -286,7 +286,7 @@ python3 -m pytest manimgen/tests/ \
   --ignore=manimgen/tests/test_pipeline_e2e.py -q
 ```
 
-732+ tests covering:
+The suite covers:
 - Every codeguard auto-fix and banned pattern
 - Type-aware kwarg introspection (manimlib_signatures)
 - Loop-aware timing analysis and auto-fix (timing_verifier)
