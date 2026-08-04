@@ -138,7 +138,21 @@ def section_class_name(section: dict) -> str:
 
 
 def load_reference_frames() -> list[str]:
-    """Load the gold standard 1080p ManimGL aesthetic reference frames as base64."""
+    """Load 1080p ManimGL aesthetic reference frames as base64, if any are present.
+
+    These are sent to the vision model as style exemplars during layout review.
+
+    **This directory ships empty.** It previously held 20 frames captured from
+    3Blue1Brown videos. Manim itself is MIT licensed, but the rendered videos
+    are not, so those frames were removed rather than redistributed — see
+    NOTICE for the full record.
+
+    An empty list is a supported state, not an error: both the layout checker
+    and the retry path treat "no reference frames" as "skip style comparison".
+    To restore the capability, render your own frames from ``examples/`` and
+    drop the PNGs here — which also yields exemplars matching this project's own
+    visual conventions rather than someone else's.
+    """
     here = os.path.dirname(__file__)
     ref_dir = os.path.join(here, "reference_frames")
     pngs = glob.glob(os.path.join(ref_dir, "*.png"))

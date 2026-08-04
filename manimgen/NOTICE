@@ -1,0 +1,53 @@
+NOTICE
+======
+
+Third-party material and attribution for ManimGen.
+
+
+Removed: 3Blue1Brown reference frames
+-------------------------------------
+
+`manimgen/reference_frames/` previously contained 20 PNG frames captured from
+3Blue1Brown videos (neural networks, Fourier series, and linear algebra). They
+were used as visual style exemplars sent to a vision model during layout review.
+
+They have been removed. Manim — the animation engine 3Blue1Brown authored — is
+MIT licensed, but the *rendered videos* are separately copyrighted and are not
+covered by that licence. Redistributing frames from them in a public repository
+was not something this project had permission to do.
+
+This is recorded rather than quietly scrubbed. The files remain reachable in
+this repository's history at commit `ce1acb4` and its descendants; removing them
+from history entirely would require rewriting a public repository and breaking
+every existing clone, which is a disproportionate response to a style-reference
+directory. If you are reading this and have a claim to that material, please
+open an issue.
+
+`load_reference_frames()` treats an empty directory as a supported state — style
+comparison is skipped rather than failing. To restore the capability, render
+frames from `examples/` and place the PNGs in that directory. Self-rendered
+exemplars are also a better fit, since they encode this project's own visual
+conventions rather than someone else's.
+
+
+Dependencies
+------------
+
+ManimGL (`manimlib`) — MIT License, Copyright (c) 2018 3Blue1Brown LLC
+    https://github.com/3b1b/manim
+
+edge-tts — GPL-3.0, used as an external service client for narration synthesis
+    https://github.com/rany2/edge-tts
+
+FFmpeg — invoked as an external binary; not bundled or linked
+    https://ffmpeg.org
+
+Python dependencies and their licences are declared in `pyproject.toml`.
+
+
+Generated content
+-----------------
+
+Videos produced by this pipeline contain LLM-generated narration and
+LLM-generated Manim scene code. Neither is reviewed for originality. If you
+publish output from this tool, the responsibility for what it contains is yours.
