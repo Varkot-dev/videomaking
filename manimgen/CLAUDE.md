@@ -217,10 +217,13 @@ All `manimgl` subprocess calls use `-c "#1C1C1C"`. The flag is `-c`, NOT `--back
 - Assembler uses `-preset slow -crf 17` (near-lossless). Previously `veryfast` caused blurry output.
 - Output normalized to `1920x1080@60fps` (from `rendering.resolution` / `rendering.fps` in `config.yaml`).
 - Subprocess timeouts are **per-call and sized to the work**, not one global
-  value. Roughly: ffprobe duration probes 15s, short ffmpeg/frame-extract calls
-  10–30s, full ffmpeg encodes 300s, `manimgl` scene renders 240s (360s for 3D).
-  When adding a new subprocess call, pass an explicit `timeout=` — an ffmpeg or
-  ffprobe call with no timeout can hang the whole pipeline indefinitely.
+  value. Current tiers: ffprobe/audio probes 5–15s, short ffmpeg and
+  frame-extract calls 30s, audio slicing 120s, full ffmpeg encodes 300s,
+  `manimgl` scene renders 240s (360s for 3D). Values live in named
+  `_*_TIMEOUT_SECONDS` constants near the top of each renderer module — read
+  the constant rather than trusting this list. When adding a new subprocess
+  call, always pass an explicit `timeout=`: an ffmpeg or ffprobe call without
+  one can hang the entire pipeline indefinitely.
 
 ### 4. codeguard.py auto-fixes (token-free)
 Every fix runs before any render attempt. Key fixes:
