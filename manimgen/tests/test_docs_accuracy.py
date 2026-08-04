@@ -63,10 +63,27 @@ def _tracked_docs() -> list[Path]:
     return [p for p in _tracked_files() if p.suffix.lower() == ".md"]
 
 
+_PATH_SUFFIXES = r"(?:py|md|ya?ml|toml|txt|json|html|cfg|ini)"
+
 # A backtick-quoted token that looks like a repo-relative file path:
 # `validator/retry.py`, `docs/KNOWN_ISSUES.md`, `config.yaml`.
 _PATH_IN_BACKTICKS = re.compile(
-    r"`([A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:py|md|ya?ml|toml|txt|json|html|cfg|ini))`"
+    rf"`([A-Za-z0-9_][A-Za-z0-9_./-]*\.{_PATH_SUFFIXES})`"
+)
+
+# The target of a markdown link: [the plan](docs/PLAN.md).
+#
+# Backticks alone were not enough. A broken markdown link is the *most common*
+# form of the drift this module exists to catch — it renders as an inviting
+# hyperlink that 404s — and the original pattern sailed past it because the
+# path was never backticked. Verified by planting
+# [text](docs/DOES_NOT_EXIST.md), which passed before this was added.
+#
+# External links and in-page anchors are skipped: only repo-relative targets
+# are checkable here.
+_PATH_IN_MD_LINK = re.compile(
+    rf"\]\((?!https?://|#|mailto:)([A-Za-z0-9_][A-Za-z0-9_./-]*\.{_PATH_SUFFIXES})"
+    r"(?:#[^)]*)?\)"
 )
 
 # Paths that are illustrative rather than real: user-supplied inputs, generated
@@ -136,13 +153,18 @@ def test_cited_file_paths_exist(doc_name: str) -> None:
     """
     doc = REPO_ROOT / doc_name
     assert doc.exists(), f"{doc_name} is missing from the repo root"
+    text = doc.read_text(encoding="utf-8")
 
     missing: list[str] = []
-    for match in _PATH_IN_BACKTICKS.finditer(doc.read_text(encoding="utf-8")):
-        rel = match.group(1)
-        if _is_exempt(rel) or _resolves(rel):
-            continue
-        missing.append(rel)
+    # Both citation forms: backticked paths and markdown link targets. A broken
+    # link is the more visible failure of the two, since it renders as a
+    # hyperlink that 404s rather than as inert prose.
+    for pattern in (_PATH_IN_BACKTICKS, _PATH_IN_MD_LINK):
+        for match in pattern.finditer(text):
+            rel = match.group(1)
+            if _is_exempt(rel) or _resolves(rel):
+                continue
+            missing.append(rel)
 
     assert not missing, (
         f"{doc_name} cites file(s) that do not exist: {sorted(set(missing))}. "
