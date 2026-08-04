@@ -103,7 +103,7 @@ def test_run_scene_invokes_manimgl_subprocess(mocker, tmp_path):
         "manimgen.validator.runner.subprocess.run", return_value=fake_proc
     )
     mocker.patch(
-        "manimgen.validator.runner.precheck_and_autofix",
+        "manimgen.validator.runner.precheck_and_autofix_file",
         return_value={"ok": True, "applied_fixes": [], "layout_warnings": []},
     )
     mocker.patch(
@@ -133,7 +133,7 @@ def test_run_scene_returns_failure_on_nonzero_exit(mocker, tmp_path):
         "manimgen.validator.runner.subprocess.run", return_value=fake_proc
     )
     mocker.patch(
-        "manimgen.validator.runner.precheck_and_autofix",
+        "manimgen.validator.runner.precheck_and_autofix_file",
         return_value={"ok": True, "applied_fixes": [], "layout_warnings": []},
     )
     find = mocker.patch("manimgen.validator.runner._find_rendered_video")
