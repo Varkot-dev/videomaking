@@ -26,6 +26,12 @@ from manimgen import paths
 _XFADE_DURATION = 0.3
 _CUE00_PATTERN = re.compile(r"_cue00\.mp4$")
 
+# Audio-stream probe budgets. This is a metadata-only ffprobe (no decoding), so
+# it should return near-instantly; 10s is already generous. The reap budget is
+# how long we wait for a killed child to actually die before giving up.
+_AUDIO_PROBE_TIMEOUT_SECONDS = 10
+_AUDIO_PROBE_REAP_TIMEOUT_SECONDS = 5
+
 
 def _vf_scale() -> str:
     """Build the FFmpeg -vf scale filter string from config."""
@@ -309,6 +315,20 @@ def _video_duration(path: str) -> float:
 
 
 def _has_audio_stream(path: str) -> bool:
+    """Return True iff `path` contains at least one audio stream.
+
+    Fails safe to False on ANY probe failure (non-zero exit, timeout, or
+    exception). Rationale, applied uniformly to every failure mode: the
+    no-audio branch in `_normalise_all` injects a silent anullsrc track, which
+    always yields a valid [v][a] clip. Assuming audio *present* when it is not
+    makes ffmpeg's `-c:a aac` map fail outright (there is no stream to encode),
+    aborting assembly. A wrong "no audio" guess costs a silent track on a clip
+    that had one; a wrong "has audio" guess costs the entire render.
+
+    The probe child is always reaped — this runs once per clip, so a leaked
+    ffprobe per failure accumulates across a full assembly.
+    """
+    proc = None
     try:
         proc = subprocess.Popen(
             [
@@ -327,9 +347,20 @@ def _has_audio_stream(path: str) -> bool:
             stderr=subprocess.PIPE,
             text=True,
         )
-        out, _ = proc.communicate(timeout=10)
+        out, _ = proc.communicate(timeout=_AUDIO_PROBE_TIMEOUT_SECONDS)
         if proc.returncode != 0:
-            return True
+            # Fail safe to False — see docstring. Previously returned True,
+            # which contradicted the reasoning documented directly below and
+            # could abort assembly on a transient probe failure.
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "[assembler] Audio stream probe exited %d for %s — assuming NO "
+                "audio (silent track will be injected)",
+                proc.returncode,
+                os.path.basename(path),
+            )
+            return False
         return out.strip() != ""
     except Exception as exc:
         # Fail safe to False: the no-audio branch in _normalise_all injects a
@@ -346,6 +377,20 @@ def _has_audio_stream(path: str) -> bool:
             exc,
         )
         return False
+    finally:
+        # communicate(timeout=...) does NOT kill the child on TimeoutExpired —
+        # it just stops waiting. Without this the ffprobe keeps running and
+        # then lingers as a zombie, once per clip.
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+            try:
+                proc.communicate(timeout=_AUDIO_PROBE_REAP_TIMEOUT_SECONDS)
+            except Exception:
+                # Last resort: at minimum reap the PID so it is not a zombie.
+                try:
+                    proc.wait(timeout=_AUDIO_PROBE_REAP_TIMEOUT_SECONDS)
+                except Exception:
+                    pass
 
 
 def _xfade_pair(a: str, b: str, out: str) -> None:

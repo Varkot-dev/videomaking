@@ -373,7 +373,14 @@ class TestAssemblerSampleRateContract:
             except Exception:
                 pass
 
-        for cmd in commands:
+        # Only the ffmpeg ENCODE commands carry audio flags. _normalise_all's
+        # no-audio branch also issues an ffprobe duration query (to size the
+        # injected anullsrc track); that probe has no -ar by design, so
+        # asserting on it would be asserting on the wrong command.
+        encode_cmds = [c for c in commands if c and c[0] == "ffmpeg"]
+        assert encode_cmds, "no ffmpeg encode command was issued"
+
+        for cmd in encode_cmds:
             cmd_str = " ".join(cmd)
             assert "-ar" in cmd_str and "48000" in cmd_str, (
                 f"_normalise_all command missing -ar 48000: {cmd_str}. "
