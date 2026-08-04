@@ -1,4 +1,5 @@
 import ast
+import os
 import re
 from typing import Any
 
@@ -1461,6 +1462,12 @@ def _shadow_log_unknown_symbols(code: str) -> list[str]:
             len(flagged),
             ", ".join(flagged),
         )
+        # Persist so real runs accumulate evidence (see evidence_log docstring).
+        from manimgen.validator.evidence_log import log_event
+
+        log_event(
+            "shadow_unknown_symbols", count=len(flagged), symbols=sorted(flagged)
+        )
     return flagged
 
 
@@ -1486,6 +1493,16 @@ def _shadow_log_invalid_kwargs(code: str) -> list:
             len(flagged),
             ", ".join(f"{fk.class_name}(...{fk.kwarg}=) L{fk.lineno}" for fk in flagged),
         )
+        from manimgen.validator.evidence_log import log_event
+
+        log_event(
+            "shadow_invalid_kwargs",
+            count=len(flagged),
+            kwargs=[
+                {"class": fk.class_name, "kwarg": fk.kwarg, "lineno": fk.lineno}
+                for fk in flagged
+            ],
+        )
     return flagged
 
 
@@ -1494,6 +1511,16 @@ def precheck_and_autofix(code: str) -> str:
 
     Called by scene_generator before saving the file. Also called by retry.py
     on the file path (see precheck_and_autofix_file for that variant).
+    """
+    fixed, _ = _precheck_and_autofix_verbose(code)
+    return fixed
+
+
+def _precheck_and_autofix_verbose(code: str) -> tuple[str, list[str]]:
+    """Same repair path as precheck_and_autofix, but also returns the rule labels.
+
+    Split out so the evidence log can record WHICH rules fired without changing
+    precheck_and_autofix's public `str` return type, which callers rely on.
     """
     # Fix structural syntax errors first (leading/trailing commas in calls)
     fixed, structural_fixes = _fix_broken_call_args(code)
@@ -1520,7 +1547,7 @@ def precheck_and_autofix(code: str) -> str:
         import logging
 
         logging.getLogger(__name__).debug("[codeguard] applied: %s", applied_fixes)
-    return fixed
+    return fixed, applied_fixes
 
 
 def precheck_and_autofix_file(scene_path: str) -> dict[str, Any]:
@@ -1528,7 +1555,7 @@ def precheck_and_autofix_file(scene_path: str) -> dict[str, Any]:
     with open(scene_path) as f:
         code = f.read()
 
-    fixed = precheck_and_autofix(code)
+    fixed, applied_fixes = _precheck_and_autofix_verbose(code)
     if fixed != code:
         with open(scene_path, "w") as f:
             f.write(fixed)
@@ -1540,6 +1567,25 @@ def precheck_and_autofix_file(scene_path: str) -> dict[str, Any]:
     layout_warnings = run_invariant_warnings(fixed)
     layout_warnings.extend(_check_layout_smells(fixed))
     layout_warnings.extend(_check_loop_timing_smells(fixed))
+
+    # The resolution-rate signal: did the static repair path leave this scene in a
+    # state that passes Codeguard's own validation? Aggregated by
+    # eval/aggregate_logs.py into the same metric eval/run_corpus.py reports, so a
+    # real production run can confirm or refute the corpus number.
+    from manimgen.validator.evidence_log import log_event
+
+    log_event(
+        "precheck",
+        scene=os.path.basename(scene_path),
+        code_changed=fixed != code,
+        rules_fired=applied_fixes,
+        rules_fired_count=len(applied_fixes),
+        validation_clean=not errors,
+        error_count=len(errors),
+        first_error=errors[0] if errors else None,
+        layout_warning_count=len(layout_warnings),
+    )
+
     if errors:
         return {
             "ok": False,

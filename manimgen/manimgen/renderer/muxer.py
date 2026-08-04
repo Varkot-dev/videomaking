@@ -87,6 +87,18 @@ def mux_audio_video(video_path: str, audio_path: str, output_path: str) -> str:
                 "diff": diff,
             }
         )
+        # Persist alongside the in-memory log so A/V mismatches survive the run
+        # and accumulate as real evidence (see validator/evidence_log.py).
+        from manimgen.validator.evidence_log import log_event
+
+        log_event(
+            "av_mismatch",
+            output=os.path.basename(output_path),
+            video_dur=round(video_dur, 3),
+            audio_dur=round(audio_dur, 3),
+            diff=round(diff, 3),
+            large=diff > 1.5,
+        )
     if diff > 1.5:
         logger.warning(
             "[muxer] LARGE MISMATCH (%.3fs) — last %.1fs of this cue will be a freeze-frame. "
