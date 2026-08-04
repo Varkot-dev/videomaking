@@ -185,3 +185,81 @@ class TestFrameCheckResult:
         r = FrameCheckResult(ok=True, skipped=True)
         assert r.ok
         assert r.skipped
+
+
+# -----------------------------------------------------------------------
+# Regression: the extraction path must actually be callable
+# -----------------------------------------------------------------------
+#
+# Every test above exercises a pure image-analysis helper, which is why 791
+# passing tests never noticed that `_extract_frame_pil` raised NameError on
+# every call: `subprocess` was imported only inside a different function, so
+# the module-level reference was unbound. The broad `except Exception` caught
+# it and logged below the CLI's level, so Tier 1 validation silently reported
+# success while doing nothing.
+#
+# These tests cover the seam between this module and the outside world rather
+# than the arithmetic inside it.
+
+def test_module_imports_subprocess_at_module_level():
+    """The extraction path references subprocess outside any function."""
+    import manimgen.validator.frame_checker as fc
+
+    assert hasattr(fc, "subprocess"), (
+        "frame_checker calls subprocess.run at module scope; importing it only "
+        "inside a helper leaves that reference unbound and makes every frame "
+        "extraction fail silently"
+    )
+
+
+def test_extract_frame_invokes_ffmpeg_and_returns_image(mocker, tmp_path):
+    """A successful ffmpeg call yields a PIL image, not None."""
+    from manimgen.validator import frame_checker as fc
+
+    # Write a real PNG where the extractor expects ffmpeg to have written one.
+    captured: dict[str, str] = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        _solid_image((10, 20, 30)).save(cmd[-1])
+        return mocker.MagicMock(returncode=0)
+
+    mocker.patch.object(fc.subprocess, "run", side_effect=fake_run)
+
+    image = fc._extract_frame_pil("/tmp/does-not-matter.mp4", 1.5)
+
+    assert image is not None, "extraction returned None on a successful ffmpeg run"
+    assert image.size == (320, 180)
+    assert captured["cmd"][0] == "ffmpeg"
+    assert "1.5" in captured["cmd"], "requested timestamp not passed to ffmpeg"
+
+
+def test_extract_frame_returns_none_when_ffmpeg_fails(mocker):
+    """A non-zero ffmpeg exit is handled, not raised."""
+    from manimgen.validator import frame_checker as fc
+
+    mocker.patch.object(
+        fc.subprocess, "run", return_value=mocker.MagicMock(returncode=1)
+    )
+    assert fc._extract_frame_pil("/tmp/missing.mp4", 0.5) is None
+
+
+def test_extraction_failure_is_logged_at_warning(mocker, caplog):
+    """A programming error in the extraction path must be visible by default.
+
+    Logging this at debug is what hid the missing import: the CLI runs at INFO,
+    so the failure produced no output at all.
+    """
+    import logging
+
+    from manimgen.validator import frame_checker as fc
+
+    mocker.patch.object(fc.subprocess, "run", side_effect=RuntimeError("boom"))
+
+    with caplog.at_level(logging.WARNING):
+        assert fc._extract_frame_pil("/tmp/x.mp4", 0.25) is None
+
+    assert any(
+        record.levelno >= logging.WARNING and "Frame extraction failed" in record.message
+        for record in caplog.records
+    ), "extraction failure was not surfaced at WARNING or above"

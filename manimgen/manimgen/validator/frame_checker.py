@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 import tempfile
 from dataclasses import dataclass, field
 
@@ -93,8 +94,16 @@ def _extract_frame_pil(video_path: str, timestamp: float) -> "Image.Image | None
             return None
         return Image.open(tmp_path).convert("RGB")
     except Exception as exc:
-        logger.debug(
-            "[frame_checker] Frame extraction failed at %.2fs: %s", timestamp, exc
+        # Warning, not debug. A missing import here raised NameError on every
+        # call, which this handler swallowed and logged below the CLI's INFO
+        # level — so Tier 1 frame validation silently passed for months while
+        # appearing to work. An exception that indicates a programming error
+        # rather than a bad video must be visible by default.
+        logger.warning(
+            "[frame_checker] Frame extraction failed at %.2fs: %s: %s",
+            timestamp,
+            type(exc).__name__,
+            exc,
         )
         return None
     finally:
