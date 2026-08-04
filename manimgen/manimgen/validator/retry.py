@@ -1,4 +1,5 @@
 import enum
+import logging
 import os
 import re
 import subprocess
@@ -8,27 +9,112 @@ from manimgen.llm import chat
 from manimgen.utils import strip_fencing
 from manimgen.validator.codeguard import (
     apply_error_aware_fixes,
+    precheck_and_autofix_file,
 )
-from manimgen.validator.codeguard import precheck_and_autofix_file
 from manimgen.validator.env import get_render_env
 from manimgen.validator.layout_checker import check_layout
 from manimgen.validator.render_command import build_manimgl_command
-from manimgen.validator.runner import _find_rendered_video, _is_3d_scene
+from manimgen.validator.runner import (
+    _find_rendered_video,
+    _is_3d_scene,
+    _render_floor,
+)
 from manimgen.validator.timing_verifier import auto_fix_timing, verify_timing
 
+logger = logging.getLogger(__name__)
+
 MAX_RETRIES = paths.render_max_retries()
+
+# ---------------------------------------------------------------------------
+# LLM spend budgets
+# ---------------------------------------------------------------------------
+#
+# READ THIS BEFORE SETTING ANY OF THESE ENV VARS — the scopes differ.
+#
+# MANIMGEN_MAX_RETRY_LLM_CALLS (MAX_LLM_FIX_CALLS)
+#     PER-SECTION, PER-CATEGORY seed value. It is NOT a total. It sets the
+#     default for the two independent per-category counters below, each of
+#     which is reset every time `retry_scene` is called — and `cli.py` calls
+#     `retry_scene` once per section.
+#
+# MANIMGEN_MAX_ERROR_LLM_CALLS / MANIMGEN_MAX_VISUAL_LLM_CALLS
+#     PER-SECTION caps on error-repair and visual-repair calls respectively.
+#     They are deliberately independent so an error storm cannot bankrupt
+#     visual correction (and vice versa).
+#
+# Worst-case spend for ONE section is therefore roughly:
+#     MAX_ERROR_LLM_FIX_CALLS + MAX_VISUAL_LLM_FIX_CALLS
+# and a video with N sections multiplies that by N. With the default of 2 that
+# is ~4 fix calls plus vision calls per section — far more than "2" suggests.
+#
+# MANIMGEN_MAX_TOTAL_LLM_CALLS (MAX_TOTAL_LLM_CALLS)
+#     The only GLOBAL, PER-RUN cap: total paid retry LLM calls across ALL
+#     sections and BOTH categories. This is the number to set if you want a
+#     hard ceiling on what a run can spend. It defaults high enough that normal
+#     runs are unaffected — it is a backstop against runaway spend, not a
+#     tightening of existing behaviour.
 MAX_LLM_FIX_CALLS = int(
     os.environ.get("MANIMGEN_MAX_RETRY_LLM_CALLS", str(MAX_RETRIES))
 )
-# Error fixes and visual fixes draw from independent budgets so an error storm
-# cannot bankrupt visual correction (and vice versa). Both default to
-# MAX_LLM_FIX_CALLS unless separately overridden.
 MAX_ERROR_LLM_FIX_CALLS = int(
     os.environ.get("MANIMGEN_MAX_ERROR_LLM_CALLS", str(MAX_LLM_FIX_CALLS))
 )
 MAX_VISUAL_LLM_FIX_CALLS = int(
     os.environ.get("MANIMGEN_MAX_VISUAL_LLM_CALLS", str(MAX_LLM_FIX_CALLS))
 )
+
+_DEFAULT_MAX_TOTAL_LLM_CALLS = 200
+MAX_TOTAL_LLM_CALLS = int(
+    os.environ.get("MANIMGEN_MAX_TOTAL_LLM_CALLS", str(_DEFAULT_MAX_TOTAL_LLM_CALLS))
+)
+
+# Global spend counter for the current run. Module-level because the budget is
+# per-RUN and must survive across the many per-section retry_scene() calls that
+# the per-category counters deliberately do not.
+_run_llm_calls_used = 0
+
+
+def reset_run_budget() -> None:
+    """Reset the global per-run LLM budget.
+
+    Call once at the start of a run. Tests also use this for isolation.
+    """
+    global _run_llm_calls_used
+    _run_llm_calls_used = 0
+
+
+def run_budget_used() -> int:
+    """Paid retry LLM calls consumed so far in this run, across all sections."""
+    return _run_llm_calls_used
+
+
+def _consume_run_budget(category: str) -> bool:
+    """Try to reserve one paid LLM call against the global per-run budget.
+
+    Returns True if the call is authorised (and charges it), False if the
+    global budget is exhausted. Both outcomes are logged so spend is
+    observable rather than silent.
+    """
+    global _run_llm_calls_used
+    if _run_llm_calls_used >= MAX_TOTAL_LLM_CALLS:
+        logger.warning(
+            "[retry] GLOBAL LLM budget exhausted: %d/%d calls used this run "
+            "(MANIMGEN_MAX_TOTAL_LLM_CALLS) — refusing %s fix call",
+            _run_llm_calls_used,
+            MAX_TOTAL_LLM_CALLS,
+            category,
+        )
+        return False
+    _run_llm_calls_used += 1
+    logger.info(
+        "[retry] Global LLM budget: %d/%d calls used this run (charged: %s fix)",
+        _run_llm_calls_used,
+        MAX_TOTAL_LLM_CALLS,
+        category,
+    )
+    return True
+
+
 RETRY_ERROR_SIGNATURE_CHARS = 500
 RETRY_PROMPT_STDERR_CHARS = 3000
 RETRY_PROMPT_CODE_CHARS = 7000
@@ -128,6 +214,20 @@ def _build_error_signature(error_type: str, stderr: str) -> str:
     return f"{error_type}:{normalized[:RETRY_ERROR_SIGNATURE_CHARS]}"
 
 
+def _build_visual_signature(issues: list[str]) -> str:
+    """Stable signature for a set of visual defects.
+
+    The visual counterpart of _build_error_signature. Order-insensitive (the
+    checker may report the same defects in a different order) and whitespace-
+    normalised, so an unchanged defect set is recognised as a repeat and does
+    not burn a second paid vision call.
+    """
+    normalized = sorted(
+        re.sub(r"\s+", " ", line).strip() for line in issues if line.strip()
+    )
+    return "|".join(normalized)[:RETRY_ERROR_SIGNATURE_CHARS]
+
+
 def _truncate_for_prompt(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
@@ -184,9 +284,17 @@ def retry_scene(
     logs_dir = paths.logs_dir()
     os.makedirs(logs_dir, exist_ok=True)
     system_prompt = _load_retry_system_prompt()
-    error_llm_calls_used = 0
-    visual_llm_calls_used = 0
+    # NOTE ON SCOPE: these two counters are PER-SECTION — they are re-zeroed on
+    # every retry_scene() call, and cli.py calls retry_scene() once per section.
+    # They bound this section's spend only. The GLOBAL per-run ceiling across
+    # all sections is MAX_TOTAL_LLM_CALLS, enforced via _consume_run_budget().
+    section_error_llm_calls_used = 0
+    section_visual_llm_calls_used = 0
     seen_error_signatures: set[str] = set()
+    # Visual-defect dedup, mirroring seen_error_signatures on the error path.
+    # Without it an unfixable visual defect burns one paid VISION call per
+    # attempt (vision calls are the most expensive thing this loop can do).
+    seen_visual_signatures: set[str] = set()
     # Timing warnings carried forward into the next LLM fix prompt so the
     # model is aware of freeze-frame-tail risk even when it is fixing an
     # unrelated error. Previously these were only printed and lost.
@@ -317,7 +425,7 @@ def retry_scene(
                 print(f"[retry]   {line}")
 
             if (
-                visual_llm_calls_used >= MAX_VISUAL_LLM_FIX_CALLS
+                section_visual_llm_calls_used >= MAX_VISUAL_LLM_FIX_CALLS
                 or attempt == MAX_RETRIES
             ):
                 print(
@@ -325,11 +433,32 @@ def retry_scene(
                 )
                 return True, best_video_path or result["video_path"]
 
+            # Dedup: if we already paid for a vision call on this exact set of
+            # defects and they came back unchanged, the model has nothing new
+            # to offer. Mirrors the error path's seen_error_signatures.
+            visual_signature = _build_visual_signature(combined_issues)
+            if visual_signature in seen_visual_signatures:
+                print(
+                    "[retry] Repeated visual defect signature — a vision call "
+                    "already failed to fix it; accepting best render instead of "
+                    "paying again."
+                )
+                return True, best_video_path or result["video_path"]
+
+            # Global per-run ceiling across ALL sections (MAX_TOTAL_LLM_CALLS).
+            if not _consume_run_budget("visual"):
+                print(
+                    "[retry] Global run LLM budget exhausted — accepting best "
+                    "render instead of requesting a visual fix."
+                )
+                return True, best_video_path or result["video_path"]
+
             print("[retry] Requesting visual fix from LLM...")
             code = _request_visual_fix(
                 code, "\n".join(combined_issues), system_prompt, defective_frames
             )
-            visual_llm_calls_used += 1
+            section_visual_llm_calls_used += 1
+            seen_visual_signatures.add(visual_signature)
             with open(scene_path, "w") as f:
                 f.write(code)
             precheck_and_autofix_file(scene_path)
@@ -375,10 +504,17 @@ def retry_scene(
                 f"available — stopping (attempt {attempt}/{MAX_RETRIES})."
             )
             break
-        if error_llm_calls_used >= MAX_ERROR_LLM_FIX_CALLS:
+        if section_error_llm_calls_used >= MAX_ERROR_LLM_FIX_CALLS:
             print(
-                f"[retry] Error-fix LLM budget reached "
-                f"({MAX_ERROR_LLM_FIX_CALLS} calls) — stopping."
+                f"[retry] Per-section error-fix LLM budget reached "
+                f"({MAX_ERROR_LLM_FIX_CALLS} calls for this section) — stopping."
+            )
+            break
+        # Global per-run ceiling across ALL sections (MAX_TOTAL_LLM_CALLS).
+        if not _consume_run_budget("error"):
+            print(
+                f"[retry] Global run LLM budget exhausted "
+                f"({MAX_TOTAL_LLM_CALLS} calls) — stopping."
             )
             break
 
@@ -406,7 +542,7 @@ Full error:
 Original code:
 {prompt_code}""",
         )
-        error_llm_calls_used += 1
+        section_error_llm_calls_used += 1
         seen_error_signatures.add(error_signature)
 
         fixed = strip_fencing(fixed)
@@ -458,6 +594,10 @@ def _run_and_capture(scene_path: str, class_name: str) -> dict:
 
     # Director scenes can be long; avoid false timeout-driven fallbacks.
     timeout = 360 if _is_3d_scene(scene_path) else 240
+    # Freshness floor: without it, an attempt whose render silently produced no
+    # file would pick up the PREVIOUS attempt's video and validate that instead
+    # — shipping the pre-fix render while we pay for a fix that never landed.
+    render_started_at = _render_floor()
     try:
         result = subprocess.run(
             build_manimgl_command(scene_path, class_name),
@@ -469,7 +609,9 @@ def _run_and_capture(scene_path: str, class_name: str) -> dict:
         if result.returncode == 0:
             return {
                 "success": True,
-                "video_path": _find_rendered_video(class_name),
+                "video_path": _find_rendered_video(
+                    class_name, newer_than=render_started_at
+                ),
                 "stderr": "",
             }
         return {"success": False, "video_path": None, "stderr": result.stderr}
