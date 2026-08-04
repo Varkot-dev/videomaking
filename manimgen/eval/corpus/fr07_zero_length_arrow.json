@@ -1,0 +1,13 @@
+{
+  "case_id": "fr07_zero_length_arrow",
+  "failure_mode": "zero_length_arrow",
+  "error_class": "ValueError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:apply_known_fixes",
+    "evidence": "_BANNED_PATTERNS: 'Arrow start/end cannot be the same point.'"
+  },
+  "stderr": "",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

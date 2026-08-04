@@ -1,0 +1,13 @@
+{
+  "case_id": "gh17_x_axis_config_no_rule",
+  "failure_mode": "unexpected_kwarg_x_axis_config",
+  "error_class": "TypeError",
+  "provenance": {
+    "source": "git-history",
+    "ref": "docs/ROOT_CAUSE_llm_failures.md@f732f49",
+    "evidence": "Section 05 attempt 1:  TypeError: Mobject.__init__() got an unexpected keyword argument 'x_axis_config'. RCA Part 4 table: 'x_axis_config | **No rule at all**'. Commit 452cec7 later resolved it as a false alarm: 'Leave x_axis_config untouched (valid Axes kwarg).'"
+  },
+  "stderr": "TypeError: Mobject.__init__() got an unexpected keyword argument 'x_axis_config'",
+  "expected_outcome": "regression_guard",
+  "notes": "x_axis_config IS a valid ManimGL Axes kwarg (452cec7: 'Leave x_axis_config untouched'). The original Section 05 crash had a different root cause. Correct behavior is to preserve it; the error-aware blind kwarg-strip deletes it, silently removing valid code. Scored as a regression guard, and it currently FAILS."
+}

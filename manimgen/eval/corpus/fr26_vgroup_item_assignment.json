@@ -1,0 +1,13 @@
+{
+  "case_id": "fr26_vgroup_item_assignment",
+  "failure_mode": "vgroup_item_assignment",
+  "error_class": "TypeError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:_BANNED_PATTERNS",
+    "evidence": "_BANNED_PATTERNS: 'VGroup does not support item assignment. Use a parallel Python list: box_list = list(boxes), then swap box_list[i], box_list[j].'"
+  },
+  "stderr": "",
+  "expected_outcome": "not_repairable",
+  "notes": "Detection-only: banned pattern blocks the render, no rewrite exists."
+}

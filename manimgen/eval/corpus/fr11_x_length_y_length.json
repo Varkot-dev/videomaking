@@ -1,0 +1,13 @@
+{
+  "case_id": "fr11_x_length_y_length",
+  "failure_mode": "manimcommunity_kwarg_x_length",
+  "error_class": "TypeError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:apply_known_fixes/replacements",
+    "evidence": "apply_known_fixes comment: 'ManimCommunity Axes uses x_length/y_length; ManimGL uses width/height'"
+  },
+  "stderr": "",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

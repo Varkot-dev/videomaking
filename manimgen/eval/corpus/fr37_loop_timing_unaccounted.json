@@ -1,0 +1,13 @@
+{
+  "case_id": "fr37_loop_timing_unaccounted",
+  "failure_mode": "timing_loop_unaccounted",
+  "error_class": "LayoutDefect",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:_check_loop_timing_smells",
+    "evidence": "docstring: 'Pattern that causes A/V mismatch: the Director computes total loop run_time as n * per_iter_time but only subtracts per_iter_time in the wait.'"
+  },
+  "stderr": "",
+  "expected_outcome": "not_repairable",
+  "notes": "Detection-only warning."
+}

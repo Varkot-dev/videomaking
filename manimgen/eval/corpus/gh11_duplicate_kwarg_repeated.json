@@ -1,0 +1,13 @@
+{
+  "case_id": "gh11_duplicate_kwarg_repeated",
+  "failure_mode": "self_inflicted_duplicate_kwarg",
+  "error_class": "SyntaxError",
+  "provenance": {
+    "source": "git-history",
+    "ref": "9b9db79",
+    "evidence": "commit 9b9db79: 'The rewrite produced duplicate color=/opacity= kwargs -> SyntaxError: keyword argument repeated (#55), forcing scenes to fall back to plain text cards (sections 1/2/3 of every binary-search render).'"
+  },
+  "stderr": "",
+  "expected_outcome": "regression_guard",
+  "notes": "Anti-regression (#55): valid VMobject fill_color/fill_opacity must SURVIVE untouched and stay parseable. Correct behavior is to change nothing, so the defect probe passes before and after by design \u2014 this case measures that Codeguard does NOT corrupt valid code."
+}

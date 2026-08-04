@@ -1,0 +1,13 @@
+{
+  "case_id": "gh12_arrange_in_grid_kwargs",
+  "failure_mode": "wrong_kwarg_names_arrange_in_grid",
+  "error_class": "TypeError",
+  "provenance": {
+    "source": "git-history",
+    "ref": "8b1c2af",
+    "evidence": "commit 8b1c2af: '_fix_arrange_in_grid_kwargs() \u2014 fixes rows->n_rows, cols->n_cols, row_buff->buff, col_buff->buff in one proactive pass, eliminating the one-kwarg-at-a-time failure pattern on arrange_in_grid'"
+  },
+  "stderr": "TypeError: arrange_in_grid() got an unexpected keyword argument 'rows'",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

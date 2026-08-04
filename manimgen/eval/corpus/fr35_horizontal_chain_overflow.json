@@ -1,0 +1,13 @@
+{
+  "case_id": "fr35_horizontal_chain_overflow",
+  "failure_mode": "layout_horizontal_chain_overflow",
+  "error_class": "LayoutDefect",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:_check_horizontal_chain_overflow",
+    "evidence": "docstring: 'Horizontal chains ... accumulate x-position and overflow past x=7. Equation derivation steps should stack vertically (DOWN), not horizontally (RIGHT).'"
+  },
+  "stderr": "",
+  "expected_outcome": "not_repairable",
+  "notes": "Detection-only warning."
+}

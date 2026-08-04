@@ -1,0 +1,13 @@
+{
+  "case_id": "fr34_axes_missing_set_width",
+  "failure_mode": "layout_axes_default_size",
+  "error_class": "LayoutDefect",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:_check_layout_smells",
+    "evidence": "_check_layout_smells: 'Axes created without .set_width(); axes will render at default internal size, producing dead space or overflow.'"
+  },
+  "stderr": "",
+  "expected_outcome": "not_repairable",
+  "notes": "Detection-only warning; does not block and is not rewritten."
+}

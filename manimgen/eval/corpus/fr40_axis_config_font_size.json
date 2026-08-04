@@ -1,0 +1,13 @@
+{
+  "case_id": "fr40_axis_config_font_size",
+  "failure_mode": "invalid_axis_config_font_size",
+  "error_class": "TypeError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:_check_layout_smells",
+    "evidence": "_check_layout_smells: 'font_size passed directly in axis_config will crash (TypeError). Nest it inside decimal_number_config.'"
+  },
+  "stderr": "",
+  "expected_outcome": "not_repairable",
+  "notes": "Detection-only warning; no rewrite rule."
+}

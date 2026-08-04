@@ -1,0 +1,13 @@
+{
+  "case_id": "gh02_nameerror_struct",
+  "failure_mode": "undefined_color_role",
+  "error_class": "NameError",
+  "provenance": {
+    "source": "git-history",
+    "ref": "docs/ROOT_CAUSE_llm_failures.md@f732f49",
+    "evidence": "Two patterns, over and over: ... Undefined name \u2014 MUTED, STRUCT, ease_out_sine."
+  },
+  "stderr": "NameError: name 'STRUCT' is not defined",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

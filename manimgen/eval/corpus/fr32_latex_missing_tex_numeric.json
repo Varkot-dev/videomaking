@@ -1,0 +1,13 @@
+{
+  "case_id": "fr32_latex_missing_tex_numeric",
+  "failure_mode": "latex_unavailable_numeric_tex",
+  "error_class": "OSError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:apply_error_aware_fixes",
+    "evidence": "apply_error_aware_fixes: branch on \"No such file or directory: 'latex'\" rewrites Tex(str(...)) / Tex(numeric literal) to Text(...)"
+  },
+  "stderr": "OSError: [Errno 2] No such file or directory: 'latex'",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

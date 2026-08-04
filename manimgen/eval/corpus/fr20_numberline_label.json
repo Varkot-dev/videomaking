@@ -1,0 +1,13 @@
+{
+  "case_id": "fr20_numberline_label",
+  "failure_mode": "invalid_kwarg_label_on_numberline",
+  "error_class": "TypeError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:_strip_label_kwarg_from_numberline",
+    "evidence": "docstring: 'Strip label= kwarg from NumberLine() \u2014 not a valid ManimGL parameter.'"
+  },
+  "stderr": "",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

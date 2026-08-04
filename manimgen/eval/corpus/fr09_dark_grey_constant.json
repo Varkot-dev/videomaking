@@ -1,0 +1,13 @@
+{
+  "case_id": "fr09_dark_grey_constant",
+  "failure_mode": "nonexistent_color_constant",
+  "error_class": "NameError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:apply_known_fixes/replacements",
+    "evidence": "apply_known_fixes replacement table: DARK_GREY -> GREY_D"
+  },
+  "stderr": "",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

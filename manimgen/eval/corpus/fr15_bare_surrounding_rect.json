@@ -1,0 +1,13 @@
+{
+  "case_id": "fr15_bare_surrounding_rect",
+  "failure_mode": "bare_rect_in_play",
+  "error_class": "TypeError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:_wrap_bare_rect_in_show_creation",
+    "evidence": "_BANNED_PATTERNS: 'Wrap SurroundingRectangle/BackgroundRectangle in ShowCreation()'"
+  },
+  "stderr": "",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

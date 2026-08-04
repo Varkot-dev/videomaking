@@ -1,0 +1,13 @@
+{
+  "case_id": "fr30_scale_factor_kwarg",
+  "failure_mode": "banned_kwarg_scale_factor",
+  "error_class": "TypeError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:_BANNED_KWARGS",
+    "evidence": "_BANNED_PATTERNS: 'Remove `scale_factor`; FadeIn/FadeOut in ManimGL does not support it.'"
+  },
+  "stderr": "",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

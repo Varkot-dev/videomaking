@@ -1,0 +1,13 @@
+{
+  "case_id": "fr14_font_kwarg_on_tex",
+  "failure_mode": "invalid_kwarg_font_on_tex",
+  "error_class": "TypeError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:_remove_font_kwarg_from_tex",
+    "evidence": "docstring: 'font= is only valid on Text(), never on Tex() or TexText().'"
+  },
+  "stderr": "",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

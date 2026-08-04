@@ -1,0 +1,13 @@
+{
+  "case_id": "fr23_off_scale_font_size",
+  "failure_mode": "off_scale_font_size",
+  "error_class": "LayoutDefect",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:_fix_font_size_to_scale",
+    "evidence": "docstring: 'Snap off-scale font_size literals to the nearest canonical value. Token-free enforcement of I4 (type scale).'"
+  },
+  "stderr": "",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

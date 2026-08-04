@@ -1,0 +1,13 @@
+{
+  "case_id": "fr33_unexpected_kwarg_with_hint",
+  "failure_mode": "unexpected_kwarg_with_did_you_mean",
+  "error_class": "TypeError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:apply_error_aware_fixes",
+    "evidence": "apply_error_aware_fixes: 'Rename, don't strip \u2014 the traceback tells us what the right name is.' (Did you mean '<x>'? branch)"
+  },
+  "stderr": "TypeError: NumberLine.__init__() got an unexpected keyword argument 'tick_size'. Did you mean 'tick_frequency'?",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

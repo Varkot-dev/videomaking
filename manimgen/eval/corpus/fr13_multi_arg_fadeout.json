@@ -1,0 +1,13 @@
+{
+  "case_id": "fr13_multi_arg_fadeout",
+  "failure_mode": "multi_arg_fade",
+  "error_class": "TypeError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:apply_known_fixes",
+    "evidence": "apply_known_fixes comment: 'ManimGL FadeIn/FadeOut take one mobject (+ optional kwargs). Models often emit FadeOut(a, b) intending two animations.'"
+  },
+  "stderr": "",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

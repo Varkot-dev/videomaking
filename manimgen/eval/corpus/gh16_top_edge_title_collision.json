@@ -1,0 +1,13 @@
+{
+  "case_id": "gh16_top_edge_title_collision",
+  "failure_mode": "layout_top_edge_collision",
+  "error_class": "LayoutDefect",
+  "provenance": {
+    "source": "git-history",
+    "ref": "da3fec9",
+    "evidence": "commit da3fec9: 'warns when a scene places two un-faded mobjects in the top zone' ... 'The previous behavior was silent until the render produced visibly stacked text-on-text titles.' Docstring names the real defect: 'the dot-product video's Section 4 (3 titles at UP same y)'."
+  },
+  "stderr": "",
+  "expected_outcome": "not_repairable",
+  "notes": "Detection-only by design."
+}

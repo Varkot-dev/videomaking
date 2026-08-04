@@ -1,0 +1,13 @@
+{
+  "case_id": "fr21_color_gradient_float",
+  "failure_mode": "color_gradient_float_length",
+  "error_class": "TypeError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:_fix_color_gradient_int_cast",
+    "evidence": "docstring: 'color_gradient(colors, length) \u2014 length must be int, not float.'"
+  },
+  "stderr": "",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

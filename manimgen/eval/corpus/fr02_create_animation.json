@@ -1,0 +1,13 @@
+{
+  "case_id": "fr02_create_animation",
+  "failure_mode": "manimcommunity_symbol_Create",
+  "error_class": "NameError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:apply_known_fixes/replacements",
+    "evidence": "_BANNED_PATTERNS: 'Use `ShowCreation(...)` in ManimGL, not `Create(...)`.'"
+  },
+  "stderr": "",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

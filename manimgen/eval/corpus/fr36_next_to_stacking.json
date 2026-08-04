@@ -1,0 +1,13 @@
+{
+  "case_id": "fr36_next_to_stacking",
+  "failure_mode": "layout_next_to_stacking",
+  "error_class": "LayoutDefect",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:_check_next_to_stacking",
+    "evidence": "docstring: 'Warn when two .next_to(<same_anchor>, ...) calls appear within 6 lines. This is the primary cause of annotation labels stacking directly on top of each other.'"
+  },
+  "stderr": "",
+  "expected_outcome": "not_repairable",
+  "notes": "Detection-only warning."
+}

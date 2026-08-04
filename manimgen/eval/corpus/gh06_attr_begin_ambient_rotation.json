@@ -1,0 +1,13 @@
+{
+  "case_id": "gh06_attr_begin_ambient_rotation",
+  "failure_mode": "nonexistent_method_begin_ambient_camera_rotation",
+  "error_class": "AttributeError",
+  "provenance": {
+    "source": "git-history",
+    "ref": "docs/ROOT_CAUSE_llm_failures.md@f732f49",
+    "evidence": "Section 03 attempt 1:  AttributeError: 'Section03Scene' object has no attribute 'begin_ambient_camera_rotation'"
+  },
+  "stderr": "AttributeError: 'Section03Scene' object has no attribute 'begin_ambient_camera_rotation'",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

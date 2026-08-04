@@ -1,0 +1,13 @@
+{
+  "case_id": "fr19_reorient_wrong_kwargs",
+  "failure_mode": "wrong_kwarg_names_reorient",
+  "error_class": "TypeError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:_fix_reorient_wrong_kwargs",
+    "evidence": "docstring: 'The Director sometimes emits self.frame.reorient(theta_deg=-45, phi_deg=60). The real param names are theta_degrees= and phi_degrees=.'"
+  },
+  "stderr": "",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

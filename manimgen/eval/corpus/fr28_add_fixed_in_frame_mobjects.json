@@ -1,0 +1,13 @@
+{
+  "case_id": "fr28_add_fixed_in_frame_mobjects",
+  "failure_mode": "nonexistent_method_add_fixed_in_frame_mobjects",
+  "error_class": "AttributeError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:_BANNED_PATTERNS",
+    "evidence": "_BANNED_PATTERNS: 'add_fixed_in_frame_mobjects() does not exist. Use label.fix_in_frame() on each mobject.'"
+  },
+  "stderr": "",
+  "expected_outcome": "not_repairable",
+  "notes": "Detection-only: banned pattern blocks the render, no rewrite exists."
+}

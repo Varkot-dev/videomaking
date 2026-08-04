@@ -1,0 +1,13 @@
+{
+  "case_id": "gh05_kwarg_z_length",
+  "failure_mode": "unexpected_kwarg_z_length",
+  "error_class": "TypeError",
+  "provenance": {
+    "source": "git-history",
+    "ref": "docs/ROOT_CAUSE_llm_failures.md@f732f49",
+    "evidence": "Section 03 attempt 2:  TypeError: CoordinateSystem.__init__() got an unexpected keyword argument 'z_length'"
+  },
+  "stderr": "TypeError: CoordinateSystem.__init__() got an unexpected keyword argument 'z_length'",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

@@ -1,0 +1,13 @@
+{
+  "case_id": "gh13_broken_call_leading_comma",
+  "failure_mode": "syntax_error_leading_comma_in_args",
+  "error_class": "SyntaxError",
+  "provenance": {
+    "source": "git-history",
+    "ref": "8b1c2af",
+    "evidence": "commit 8b1c2af: 'Add _fix_broken_call_args() \u2014 strips leading/trailing commas in call argument lists (SyntaxError)'"
+  },
+  "stderr": "SyntaxError: invalid syntax",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

@@ -1,0 +1,13 @@
+{
+  "case_id": "gh03_nameerror_easing",
+  "failure_mode": "undefined_easing_function",
+  "error_class": "NameError",
+  "provenance": {
+    "source": "git-history",
+    "ref": "docs/ROOT_CAUSE_llm_failures.md@f732f49",
+    "evidence": "Section 06 attempt 1:  NameError: name 'ease_out_sine' is not defined"
+  },
+  "stderr": "NameError: name 'ease_out_sine' is not defined",
+  "expected_outcome": "not_repairable",
+  "notes": "Only reachable through the error-aware path (_name_fixes maps slow_into_fast, not ease_out_sine)."
+}

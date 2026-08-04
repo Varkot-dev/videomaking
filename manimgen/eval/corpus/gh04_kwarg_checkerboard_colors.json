@@ -1,0 +1,13 @@
+{
+  "case_id": "gh04_kwarg_checkerboard_colors",
+  "failure_mode": "unexpected_kwarg_checkerboard_colors",
+  "error_class": "TypeError",
+  "provenance": {
+    "source": "git-history",
+    "ref": "docs/ROOT_CAUSE_llm_failures.md@f732f49",
+    "evidence": "Section 01 attempt 3:  TypeError: Mobject.__init__() got an unexpected keyword argument 'checkerboard_colors'"
+  },
+  "stderr": "TypeError: Mobject.__init__() got an unexpected keyword argument 'checkerboard_colors'",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

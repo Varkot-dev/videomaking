@@ -1,0 +1,13 @@
+{
+  "case_id": "gh15_side_by_side_array_overflow",
+  "failure_mode": "layout_side_by_side_array_collision",
+  "error_class": "LayoutDefect",
+  "provenance": {
+    "source": "git-history",
+    "ref": "4d255de",
+    "evidence": "commit 4d255de: 'Two full N-element arrays placed side-by-side (LEFT*n / RIGHT*n) collide mid-frame.'"
+  },
+  "stderr": "",
+  "expected_outcome": "not_repairable",
+  "notes": "Detection-only by design."
+}

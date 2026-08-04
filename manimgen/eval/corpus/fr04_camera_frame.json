@@ -1,0 +1,13 @@
+{
+  "case_id": "fr04_camera_frame",
+  "failure_mode": "manimcommunity_attr_camera_frame",
+  "error_class": "AttributeError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:apply_known_fixes/replacements",
+    "evidence": "_BANNED_PATTERNS: 'Use `self.frame`, not `self.camera.frame`.'"
+  },
+  "stderr": "",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

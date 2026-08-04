@@ -1,0 +1,13 @@
+{
+  "case_id": "fr17_tmt_on_text",
+  "failure_mode": "transform_matching_tex_on_text",
+  "error_class": "LayoutDefect",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:_fix_transform_matching_tex_on_text",
+    "evidence": "docstring: 'TransformMatchingTex matches LaTeX glyph submobjects. On Text() objects it produces scrambled animation output (not a crash, but visually broken).'"
+  },
+  "stderr": "",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

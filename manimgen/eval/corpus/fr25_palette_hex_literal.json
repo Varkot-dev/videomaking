@@ -1,0 +1,13 @@
+{
+  "case_id": "fr25_palette_hex_literal",
+  "failure_mode": "raw_palette_hex_literal",
+  "error_class": "LayoutDefect",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:apply_known_fixes/_HEX_TO_CONSTANT",
+    "evidence": "apply_known_fixes comment: 'Palette role hex -> ManimGL constant (I3). Maps the canonical hex values from COLOR_PALETTE.md to their ManimGL constant equivalents.'"
+  },
+  "stderr": "",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

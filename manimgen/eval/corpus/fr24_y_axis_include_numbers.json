@@ -1,0 +1,13 @@
+{
+  "case_id": "fr24_y_axis_include_numbers",
+  "failure_mode": "y_axis_include_numbers_true",
+  "error_class": "LayoutDefect",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:_fix_y_axis_include_numbers",
+    "evidence": "docstring: 'ManimGL rotates y-axis number labels 90 degrees and stacks them when include_numbers=True, making them crash into each other and become unreadable.'"
+  },
+  "stderr": "",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

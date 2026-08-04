@@ -1,0 +1,13 @@
+{
+  "case_id": "fr39_mobjects_private_attr",
+  "failure_mode": "private_attr_mobjects",
+  "error_class": "AttributeError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:apply_known_fixes/replacements",
+    "evidence": "apply_known_fixes replacement table: ._mobjects -> .submobjects"
+  },
+  "stderr": "",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

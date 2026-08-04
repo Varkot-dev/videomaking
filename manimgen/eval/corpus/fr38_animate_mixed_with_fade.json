@@ -1,0 +1,13 @@
+{
+  "case_id": "fr38_animate_mixed_with_fade",
+  "failure_mode": "mixed_animate_and_fade_in_play",
+  "error_class": "TypeError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:apply_error_aware_fixes",
+    "evidence": "apply_error_aware_fixes: TypeError + '.animate' branch splits a play() that mixes .animate with FadeIn/FadeOut into separate play calls"
+  },
+  "stderr": "TypeError: Object <Text> cannot be converted to an animation (.animate)",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

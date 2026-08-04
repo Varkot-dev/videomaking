@@ -1,0 +1,13 @@
+{
+  "case_id": "fr22_negative_wait",
+  "failure_mode": "nonpositive_wait",
+  "error_class": "ValueError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:apply_known_fixes",
+    "evidence": "apply_known_fixes: 'clamped negative/zero self.wait() to 0.01'"
+  },
+  "stderr": "",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

@@ -1,0 +1,13 @@
+{
+  "case_id": "gh01_nameerror_muted",
+  "failure_mode": "undefined_color_role",
+  "error_class": "NameError",
+  "provenance": {
+    "source": "git-history",
+    "ref": "docs/ROOT_CAUSE_llm_failures.md@f732f49",
+    "evidence": "Section 01 attempt 1:  NameError: name 'MUTED' is not defined"
+  },
+  "stderr": "NameError: name 'MUTED' is not defined",
+  "expected_outcome": "repairable",
+  "notes": "Director prompt shows the palette roles but never requires emitting the assignments."
+}

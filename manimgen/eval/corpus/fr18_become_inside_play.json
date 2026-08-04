@@ -1,0 +1,13 @@
+{
+  "case_id": "fr18_become_inside_play",
+  "failure_mode": "become_passed_to_play",
+  "error_class": "TypeError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:_fix_become_inside_play",
+    "evidence": "docstring: 'In ManimGL, become() returns self (the mutated Mobject), not an Animation. Passing it to self.play() ... crashes with \"Object X cannot be converted to an animation\".'"
+  },
+  "stderr": "",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

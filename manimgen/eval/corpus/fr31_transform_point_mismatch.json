@@ -1,0 +1,13 @@
+{
+  "case_id": "fr31_transform_point_mismatch",
+  "failure_mode": "transform_point_count_mismatch",
+  "error_class": "ValueError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:apply_error_aware_fixes",
+    "evidence": "apply_error_aware_fixes comment: 'Transform between mobjects with different point counts (e.g. Text(\"5\") vs Text(\"11\")). Replace Transform(a, b) with FadeOut(a)/FadeIn(b).'"
+  },
+  "stderr": "ValueError: could not broadcast input array from shape (32,3) into shape (48,3)",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

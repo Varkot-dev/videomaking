@@ -1,0 +1,13 @@
+{
+  "case_id": "gh14_title_width_overflow",
+  "failure_mode": "layout_title_too_wide",
+  "error_class": "LayoutDefect",
+  "provenance": {
+    "source": "git-history",
+    "ref": "4d255de",
+    "evidence": "commit 4d255de: 'Overlong titles (e.g. a 49-char title at font_size=36) render clipped/garbled.' Docstring names the real string: Text(\"The Algorithm: Pointers, Midpoint, and Comparison\", font_size=36).to_edge(UP)"
+  },
+  "stderr": "",
+  "expected_outcome": "not_repairable",
+  "notes": "Detection-only by design ('no code rewriting' per commit 4d255de) \u2014 feeds the retry LLM."
+}

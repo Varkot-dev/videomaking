@@ -1,0 +1,13 @@
+{
+  "case_id": "fr29_set_text_method",
+  "failure_mode": "nonexistent_method_set_text",
+  "error_class": "AttributeError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:_BANNED_PATTERNS",
+    "evidence": "_BANNED_PATTERNS: 'Text has no set_text() method in ManimGL. To update a counter label: create a new Text(...) and use FadeOut(old), FadeIn(new).'"
+  },
+  "stderr": "",
+  "expected_outcome": "not_repairable",
+  "notes": "Detection-only: banned pattern blocks the render, no rewrite exists."
+}

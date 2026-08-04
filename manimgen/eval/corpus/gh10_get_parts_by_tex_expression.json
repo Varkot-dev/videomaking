@@ -1,0 +1,13 @@
+{
+  "case_id": "gh10_get_parts_by_tex_expression",
+  "failure_mode": "nonexistent_method_get_parts_by_tex_expression",
+  "error_class": "AttributeError",
+  "provenance": {
+    "source": "git-history",
+    "ref": "b22e1e1",
+    "evidence": "commit b22e1e1: 'codeguard: ban get_parts_by_tex_expression() \u2014 does not exist in ManimGL Tex' ... '(section 3 fallback root cause)'"
+  },
+  "stderr": "AttributeError: 'Tex' object has no attribute 'get_parts_by_tex_expression'",
+  "expected_outcome": "not_repairable",
+  "notes": "Banned/detected only \u2014 no rewrite rule exists; it blocks the render for the retry LLM."
+}

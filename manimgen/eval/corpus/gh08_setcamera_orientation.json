@@ -1,0 +1,13 @@
+{
+  "case_id": "gh08_setcamera_orientation",
+  "failure_mode": "nonexistent_method_set_camera_orientation",
+  "error_class": "AttributeError",
+  "provenance": {
+    "source": "git-history",
+    "ref": "docs/ROOT_CAUSE_llm_failures.md@f732f49",
+    "evidence": "Translation table, Part 4: `self.set_camera_orientation(...)` | doesn't exist | `self.frame.reorient(theta, phi)`"
+  },
+  "stderr": "AttributeError: 'Section03Scene' object has no attribute 'set_camera_orientation'",
+  "expected_outcome": "repairable",
+  "notes": ""
+}

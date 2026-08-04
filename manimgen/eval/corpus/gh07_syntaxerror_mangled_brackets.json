@@ -1,0 +1,13 @@
+{
+  "case_id": "gh07_syntaxerror_mangled_brackets",
+  "failure_mode": "self_inflicted_syntax_error",
+  "error_class": "SyntaxError",
+  "provenance": {
+    "source": "git-history",
+    "ref": "docs/ROOT_CAUSE_llm_failures.md@f732f49",
+    "evidence": "Section 02 attempt 2:  SyntaxError: closing parenthesis ']' does not match opening parenthesis '(' ... attempt 2 of Section 02 was literally broken Python (`resolution=20, BLUE_E],` \u2014 a mangled line). That's the retry loop's own auto-fixer corrupting the file while trying to patch it."
+  },
+  "stderr": "SyntaxError: closing parenthesis ']' does not match opening parenthesis '('",
+  "expected_outcome": "not_repairable",
+  "notes": "RCA Part 4 explicitly records this as detected-but-unrepairable: 'Detected (blocks render) but its own fixer can't repair it.'"
+}
