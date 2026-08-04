@@ -893,3 +893,72 @@ class TestSideBySideArrayOverflow:
         )
         warnings = self._smells(code)
         assert not any("side-by-side" in w.lower() for w in warnings)
+
+
+# -----------------------------------------------------------------------
+# Regression: banned-kwarg stripping must not corrupt the call it edits
+# -----------------------------------------------------------------------
+#
+# The strip pattern matched values with [^,)\n]+, which stops at the first
+# comma. A list value such as checkerboard_colors=[BLUE_D, BLUE_E] therefore
+# had only "[BLUE_D" removed, leaving ", BLUE_E]" orphaned inside the call:
+#
+#     Surface(, BLUE_E], v_range=[-2, 2])
+#
+# The auto-fixer was producing a SyntaxError while repairing one. The project's
+# own root-cause notes recorded this exact mangling in a real run and
+# attributed it to "the retry loop's own auto-fixer corrupting the file".
+#
+# A second defect surfaced while fixing the first: consuming only a *leading*
+# comma leaves a dangling one when the banned kwarg is the first argument.
+
+import ast as _ast
+
+import pytest as _pytest
+
+from manimgen.validator.codeguard import apply_known_fixes as _apply
+
+
+def _fix(line: str) -> str:
+    src = f"class S(Scene):\n    def construct(self):\n        {line}\n"
+    out = _apply(src)
+    return out[0] if isinstance(out, tuple) else out
+
+
+@_pytest.mark.parametrize(
+    "position,line",
+    [
+        ("first", "s = Surface(checkerboard_colors=[BLUE_D, BLUE_E], v_range=[-2, 2])"),
+        ("middle", "s = Surface(u_range=[0, 1], checkerboard_colors=[BLUE_D, BLUE_E], v_range=[-2, 2])"),
+        ("last", "s = Surface(v_range=[-2, 2], checkerboard_colors=[BLUE_D, BLUE_E])"),
+        ("only", "s = Surface(checkerboard_colors=[BLUE_D, BLUE_E])"),
+        ("tuple", "s = Surface(checkerboard_colors=(BLUE_D, BLUE_E), u_range=[0, 1])"),
+        ("scalar_first", "a = Arrow(tip_length=0.2, buff=0)"),
+        ("scalar_middle", "a = Arrow(ORIGIN, UP, tip_length=0.2, buff=0)"),
+    ],
+)
+def test_stripping_a_banned_kwarg_leaves_valid_python(position, line):
+    fixed = _fix(line)
+
+    try:
+        _ast.parse(fixed)
+    except SyntaxError as exc:  # pragma: no cover - failure path
+        _pytest.fail(
+            f"stripping a banned kwarg in {position} position produced invalid "
+            f"Python ({exc.msg}):\n{fixed}"
+        )
+
+
+def test_banned_kwarg_value_is_removed_entirely():
+    """No fragment of a multi-element value may survive the strip."""
+    fixed = _fix("s = Surface(checkerboard_colors=[BLUE_D, BLUE_E], v_range=[-2, 2])")
+
+    assert "checkerboard_colors" not in fixed
+    assert "BLUE_D" not in fixed
+    assert "BLUE_E" not in fixed, "second list element was orphaned in the call"
+    assert "v_range=[-2, 2]" in fixed, "an unrelated argument was damaged"
+
+
+def test_calls_without_banned_kwargs_are_untouched():
+    line = "s = Surface(u_range=[0, 1], v_range=[-2, 2])"
+    assert line in _fix(line)

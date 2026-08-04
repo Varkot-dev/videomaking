@@ -2,8 +2,8 @@
   "summary": {
     "overall": {
       "total": 57,
-      "resolved": 39,
-      "rate_pct": 68.4
+      "resolved": 40,
+      "rate_pct": 70.2
     },
     "by_source": {
       "derived-from-fix-rule": {
@@ -13,8 +13,8 @@
       },
       "git-history": {
         "total": 17,
-        "resolved": 9,
-        "rate_pct": 52.9
+        "resolved": 10,
+        "rate_pct": 58.8
       }
     },
     "by_failure_mode": {
@@ -250,8 +250,8 @@
       },
       "unexpected_kwarg_checkerboard_colors": {
         "total": 1,
-        "resolved": 0,
-        "rate_pct": 0.0
+        "resolved": 1,
+        "rate_pct": 100.0
       },
       "unexpected_kwarg_with_did_you_mean": {
         "total": 1,
@@ -337,8 +337,8 @@
       },
       "TypeError": {
         "total": 19,
-        "resolved": 14,
-        "rate_pct": 73.7
+        "resolved": 15,
+        "rate_pct": 78.9
       },
       "ValueError": {
         "total": 3,
@@ -472,13 +472,6 @@
         "reason": "no rule rewrote the defect (detection-only or unhandled)"
       },
       {
-        "case_id": "gh04_kwarg_checkerboard_colors",
-        "failure_mode": "unexpected_kwarg_checkerboard_colors",
-        "source": "git-history",
-        "expected_outcome": "repairable",
-        "reason": "repair left validation errors: SyntaxError: closing parenthesis ']' does not match opening parenthesis '(' on line 6 (line 9)"
-      },
-      {
         "case_id": "gh07_syntaxerror_mangled_brackets",
         "failure_mode": "self_inflicted_syntax_error",
         "source": "git-history",
@@ -524,11 +517,6 @@
     "expectation_mismatches": [
       {
         "case_id": "fr38_animate_mixed_with_fade",
-        "expected": "repairable",
-        "measured": "unresolved"
-      },
-      {
-        "case_id": "gh04_kwarg_checkerboard_colors",
         "expected": "repairable",
         "measured": "unresolved"
       }
@@ -1225,17 +1213,15 @@
       "error_class": "TypeError",
       "source": "git-history",
       "expected_outcome": "repairable",
-      "resolved": false,
+      "resolved": true,
       "code_changed": true,
       "defect_cleared": true,
-      "validation_clean": false,
-      "validation_errors": [
-        "SyntaxError: closing parenthesis ']' does not match opening parenthesis '(' on line 6 (line 9)"
-      ],
+      "validation_clean": true,
+      "validation_errors": [],
       "rules_fired": [
         "removed checkerboard_colors (1)"
       ],
-      "unresolved_reason": "repair left validation errors: SyntaxError: closing parenthesis ']' does not match opening parenthesis '(' on line 6 (line 9)"
+      "unresolved_reason": null
     },
     {
       "case_id": "gh05_kwarg_z_length",

@@ -339,7 +339,29 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
         fixed = new_fixed
 
     for kw in _BANNED_KWARGS:
-        new_fixed, count = re.subn(rf",?\s*{kw}\s*=\s*[^,\)\n]+", "", fixed)
+        # The value alternation must try bracketed forms before the scalar one.
+        # A plain [^,)\n]+ stops at the first comma, so a list value such as
+        # checkerboard_colors=[BLUE_D, BLUE_E] had only "[BLUE_D" removed and
+        # left ", BLUE_E]" orphaned inside the call — Surface(, BLUE_E], ...) —
+        # a SyntaxError. The auto-fixer was corrupting valid code while trying
+        # to repair it, and the project's own root-cause notes recorded exactly
+        # that mangling in a real run.
+        #
+        # Bracket contents are matched without spanning newlines, so a nested or
+        # unbalanced literal is left untouched rather than swallowing the rest
+        # of the call.
+        # A separator is consumed on exactly one side. Taking the leading comma
+        # when present, and otherwise the trailing one, keeps the argument list
+        # well-formed whether the banned kwarg is first, middle, or last —
+        # stripping neither leaves Surface(, v_range=...) when it was first.
+        value = (
+            r"(?:\[[^\[\]\n]*\]"      # list literal
+            r"|\([^()\n]*\)"          # tuple literal
+            r"|\{[^{}\n]*\}"          # dict or set literal
+            r"|[^,)\n]+)"             # plain scalar
+        )
+        pattern = rf",\s*{kw}\s*=\s*{value}|{kw}\s*=\s*{value}\s*,?\s*"
+        new_fixed, count = re.subn(pattern, "", fixed)
         if count:
             applied.append(f"removed {kw} ({count})")
             fixed = new_fixed
