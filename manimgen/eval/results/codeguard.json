@@ -1,0 +1,1441 @@
+{
+  "summary": {
+    "overall": {
+      "total": 57,
+      "resolved": 39,
+      "rate_pct": 68.4
+    },
+    "by_source": {
+      "derived-from-fix-rule": {
+        "total": 40,
+        "resolved": 30,
+        "rate_pct": 75.0
+      },
+      "git-history": {
+        "total": 17,
+        "resolved": 9,
+        "rate_pct": 52.9
+      }
+    },
+    "by_failure_mode": {
+      "banned_kwarg_corner_radius": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "banned_kwarg_scale_factor": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "banned_kwarg_tip_length": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "bare_rect_in_play": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "become_passed_to_play": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "color_gradient_float_length": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "invalid_axis_config_font_size": {
+        "total": 1,
+        "resolved": 0,
+        "rate_pct": 0.0
+      },
+      "invalid_kwarg_font_on_tex": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "invalid_kwarg_label_on_numberline": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "latex_outer_text_wrapper": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "latex_unavailable_numeric_tex": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "layout_axes_default_size": {
+        "total": 1,
+        "resolved": 0,
+        "rate_pct": 0.0
+      },
+      "layout_horizontal_chain_overflow": {
+        "total": 1,
+        "resolved": 0,
+        "rate_pct": 0.0
+      },
+      "layout_next_to_stacking": {
+        "total": 1,
+        "resolved": 0,
+        "rate_pct": 0.0
+      },
+      "layout_side_by_side_array_collision": {
+        "total": 1,
+        "resolved": 0,
+        "rate_pct": 0.0
+      },
+      "layout_title_too_wide": {
+        "total": 1,
+        "resolved": 0,
+        "rate_pct": 0.0
+      },
+      "layout_top_edge_collision": {
+        "total": 1,
+        "resolved": 0,
+        "rate_pct": 0.0
+      },
+      "manimcommunity_attr_camera_frame": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "manimcommunity_kwarg_x_length": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "manimcommunity_method_get_graph_point": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "manimcommunity_method_get_point_at_angle": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "manimcommunity_method_set_fill_color": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "manimcommunity_symbol_Circumscribe": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "manimcommunity_symbol_Create": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "manimcommunity_symbol_MathTex": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "mixed_animate_and_fade_in_play": {
+        "total": 1,
+        "resolved": 0,
+        "rate_pct": 0.0
+      },
+      "multi_arg_fade": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "nonexistent_color_constant": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "nonexistent_method_add_fixed_in_frame_mobjects": {
+        "total": 1,
+        "resolved": 0,
+        "rate_pct": 0.0
+      },
+      "nonexistent_method_begin_ambient_camera_rotation": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "nonexistent_method_get_parts_by_tex_expression": {
+        "total": 1,
+        "resolved": 0,
+        "rate_pct": 0.0
+      },
+      "nonexistent_method_set_camera_orientation": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "nonexistent_method_set_text": {
+        "total": 1,
+        "resolved": 0,
+        "rate_pct": 0.0
+      },
+      "nonpositive_wait": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "off_scale_font_size": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "private_attr_mobjects": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "raw_palette_hex_literal": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "self_inflicted_duplicate_kwarg": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "self_inflicted_syntax_error": {
+        "total": 1,
+        "resolved": 0,
+        "rate_pct": 0.0
+      },
+      "syntax_error_leading_comma_in_args": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "tex_value_readback": {
+        "total": 1,
+        "resolved": 0,
+        "rate_pct": 0.0
+      },
+      "timing_loop_unaccounted": {
+        "total": 1,
+        "resolved": 0,
+        "rate_pct": 0.0
+      },
+      "transform_matching_tex_on_text": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "transform_point_count_mismatch": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "undefined_color_role": {
+        "total": 2,
+        "resolved": 2,
+        "rate_pct": 100.0
+      },
+      "undefined_easing_function": {
+        "total": 1,
+        "resolved": 0,
+        "rate_pct": 0.0
+      },
+      "unexpected_kwarg_checkerboard_colors": {
+        "total": 1,
+        "resolved": 0,
+        "rate_pct": 0.0
+      },
+      "unexpected_kwarg_with_did_you_mean": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "unexpected_kwarg_x_axis_config": {
+        "total": 1,
+        "resolved": 0,
+        "rate_pct": 0.0
+      },
+      "unexpected_kwarg_z_length": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "vgroup_item_assignment": {
+        "total": 1,
+        "resolved": 0,
+        "rate_pct": 0.0
+      },
+      "wrong_import_root": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "wrong_kwarg_names_arrange_in_grid": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "wrong_kwarg_names_reorient": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "y_axis_include_numbers_true": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "zero_length_arrow": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      }
+    },
+    "by_error_class": {
+      "AttributeError": {
+        "total": 10,
+        "resolved": 7,
+        "rate_pct": 70.0
+      },
+      "ImportError": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "LatexError": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "LayoutDefect": {
+        "total": 12,
+        "resolved": 4,
+        "rate_pct": 33.3
+      },
+      "NameError": {
+        "total": 7,
+        "resolved": 6,
+        "rate_pct": 85.7
+      },
+      "OSError": {
+        "total": 1,
+        "resolved": 1,
+        "rate_pct": 100.0
+      },
+      "SyntaxError": {
+        "total": 3,
+        "resolved": 2,
+        "rate_pct": 66.7
+      },
+      "TypeError": {
+        "total": 19,
+        "resolved": 14,
+        "rate_pct": 73.7
+      },
+      "ValueError": {
+        "total": 3,
+        "resolved": 3,
+        "rate_pct": 100.0
+      }
+    },
+    "rules_fired": {
+      "x_length -> width (ManimGL Axes)": 2,
+      "y_length -> height (ManimGL Axes)": 2,
+      "MathTex -> Tex": 1,
+      "Create -> ShowCreation": 1,
+      "fixed import": 1,
+      "self.camera.frame -> self.frame": 1,
+      "removed tip_length": 1,
+      "removed corner_radius": 1,
+      "fixed zero-length Arrow": 1,
+      "set_fill_color -> set_fill": 1,
+      "DARK_GREY -> GREY_D": 1,
+      "LIGHT_GREY -> GREY_A": 1,
+      "Circumscribe -> FlashAround": 1,
+      "get_graph_point -> input_to_graph_point": 1,
+      "split multi-arg FadeOut": 1,
+      "removed font= from Tex": 1,
+      "wrapped bare SurroundingRectangle/BackgroundRectangle in ShowCreation": 1,
+      "stripped outer \\text{} wrapper from Tex()": 1,
+      "TransformMatchingTex(Text, ...) -> FadeOut/FadeIn": 1,
+      "self.play(obj.become(...)) -> become()+ShowCreation": 1,
+      "fixed reorient kwarg names: theta_deg= -> theta_degrees= (1), phi_deg= -> phi_degrees=": 1,
+      "removed label= from NumberLine": 1,
+      "color_gradient int cast": 1,
+      "clamped negative/zero self.wait() to 0.01": 1,
+      "font_size=53 -> 48": 1,
+      "font_size=31 -> 28": 1,
+      "forced y_axis include_numbers=False": 1,
+      "PRIMARY hex -> TEAL_A": 1,
+      "SECONDARY hex -> GOLD": 1,
+      "removed scale_factor": 1,
+      "[error-aware] Transform -> FadeOut/FadeIn (point count mismatch)": 1,
+      "[error-aware] Tex(str(...)) -> Text(str(...))": 1,
+      "[error-aware] Tex(numeric literal) -> Text(...)": 1,
+      "[error-aware] renamed kwarg 'tick_size' \u2192 'tick_frequency'": 1,
+      "[error-aware] split mixed .animate + FadeIn/FadeOut": 1,
+      "_mobjects -> submobjects": 1,
+      "injected color-role header (MUTED = GREY_A)": 1,
+      "injected color-role header (PRIMARY = TEAL_A, STRUCT = GREY_B)": 1,
+      "removed checkerboard_colors": 1,
+      "z_length -> depth (ManimGL ThreeDAxes)": 1,
+      "begin_ambient_camera_rotation -> add_ambient_rotation": 1,
+      "set_camera_orientation -> self.frame.reorient": 1,
+      "get_point_at_angle -> point_at_angle": 1,
+      "fixed arrange_in_grid kwargs: rows= \u2192 n_rows (1), cols= \u2192 n_cols (1), row_buff= \u2192 buff": 1,
+      "[error-aware] removed unexpected kwarg 'x_axis_config'": 1
+    },
+    "unresolved": [
+      {
+        "case_id": "fr26_vgroup_item_assignment",
+        "failure_mode": "vgroup_item_assignment",
+        "source": "derived-from-fix-rule",
+        "expected_outcome": "not_repairable",
+        "reason": "defect remains and validation still fails"
+      },
+      {
+        "case_id": "fr27_get_tex_string_readback",
+        "failure_mode": "tex_value_readback",
+        "source": "derived-from-fix-rule",
+        "expected_outcome": "not_repairable",
+        "reason": "defect remains and validation still fails"
+      },
+      {
+        "case_id": "fr28_add_fixed_in_frame_mobjects",
+        "failure_mode": "nonexistent_method_add_fixed_in_frame_mobjects",
+        "source": "derived-from-fix-rule",
+        "expected_outcome": "not_repairable",
+        "reason": "defect remains and validation still fails"
+      },
+      {
+        "case_id": "fr29_set_text_method",
+        "failure_mode": "nonexistent_method_set_text",
+        "source": "derived-from-fix-rule",
+        "expected_outcome": "not_repairable",
+        "reason": "defect remains and validation still fails"
+      },
+      {
+        "case_id": "fr34_axes_missing_set_width",
+        "failure_mode": "layout_axes_default_size",
+        "source": "derived-from-fix-rule",
+        "expected_outcome": "not_repairable",
+        "reason": "no rule rewrote the defect (detection-only or unhandled)"
+      },
+      {
+        "case_id": "fr35_horizontal_chain_overflow",
+        "failure_mode": "layout_horizontal_chain_overflow",
+        "source": "derived-from-fix-rule",
+        "expected_outcome": "not_repairable",
+        "reason": "no rule rewrote the defect (detection-only or unhandled)"
+      },
+      {
+        "case_id": "fr36_next_to_stacking",
+        "failure_mode": "layout_next_to_stacking",
+        "source": "derived-from-fix-rule",
+        "expected_outcome": "not_repairable",
+        "reason": "no rule rewrote the defect (detection-only or unhandled)"
+      },
+      {
+        "case_id": "fr37_loop_timing_unaccounted",
+        "failure_mode": "timing_loop_unaccounted",
+        "source": "derived-from-fix-rule",
+        "expected_outcome": "not_repairable",
+        "reason": "no rule rewrote the defect (detection-only or unhandled)"
+      },
+      {
+        "case_id": "fr38_animate_mixed_with_fade",
+        "failure_mode": "mixed_animate_and_fade_in_play",
+        "source": "derived-from-fix-rule",
+        "expected_outcome": "repairable",
+        "reason": "defect remains and validation still fails"
+      },
+      {
+        "case_id": "fr40_axis_config_font_size",
+        "failure_mode": "invalid_axis_config_font_size",
+        "source": "derived-from-fix-rule",
+        "expected_outcome": "not_repairable",
+        "reason": "no rule rewrote the defect (detection-only or unhandled)"
+      },
+      {
+        "case_id": "gh03_nameerror_easing",
+        "failure_mode": "undefined_easing_function",
+        "source": "git-history",
+        "expected_outcome": "not_repairable",
+        "reason": "no rule rewrote the defect (detection-only or unhandled)"
+      },
+      {
+        "case_id": "gh04_kwarg_checkerboard_colors",
+        "failure_mode": "unexpected_kwarg_checkerboard_colors",
+        "source": "git-history",
+        "expected_outcome": "repairable",
+        "reason": "repair left validation errors: SyntaxError: closing parenthesis ']' does not match opening parenthesis '(' on line 6 (line 9)"
+      },
+      {
+        "case_id": "gh07_syntaxerror_mangled_brackets",
+        "failure_mode": "self_inflicted_syntax_error",
+        "source": "git-history",
+        "expected_outcome": "not_repairable",
+        "reason": "defect remains and validation still fails"
+      },
+      {
+        "case_id": "gh10_get_parts_by_tex_expression",
+        "failure_mode": "nonexistent_method_get_parts_by_tex_expression",
+        "source": "git-history",
+        "expected_outcome": "not_repairable",
+        "reason": "defect remains and validation still fails"
+      },
+      {
+        "case_id": "gh14_title_width_overflow",
+        "failure_mode": "layout_title_too_wide",
+        "source": "git-history",
+        "expected_outcome": "not_repairable",
+        "reason": "no rule rewrote the defect (detection-only or unhandled)"
+      },
+      {
+        "case_id": "gh15_side_by_side_array_overflow",
+        "failure_mode": "layout_side_by_side_array_collision",
+        "source": "git-history",
+        "expected_outcome": "not_repairable",
+        "reason": "no rule rewrote the defect (detection-only or unhandled)"
+      },
+      {
+        "case_id": "gh16_top_edge_title_collision",
+        "failure_mode": "layout_top_edge_collision",
+        "source": "git-history",
+        "expected_outcome": "not_repairable",
+        "reason": "no rule rewrote the defect (detection-only or unhandled)"
+      },
+      {
+        "case_id": "gh17_x_axis_config_no_rule",
+        "failure_mode": "unexpected_kwarg_x_axis_config",
+        "source": "git-history",
+        "expected_outcome": "regression_guard",
+        "reason": "no rule rewrote the defect (detection-only or unhandled)"
+      }
+    ],
+    "expectation_mismatches": [
+      {
+        "case_id": "fr38_animate_mixed_with_fade",
+        "expected": "repairable",
+        "measured": "unresolved"
+      },
+      {
+        "case_id": "gh04_kwarg_checkerboard_colors",
+        "expected": "repairable",
+        "measured": "unresolved"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "case_id": "fr01_mathtex",
+      "failure_mode": "manimcommunity_symbol_MathTex",
+      "error_class": "NameError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "MathTex -> Tex (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr02_create_animation",
+      "failure_mode": "manimcommunity_symbol_Create",
+      "error_class": "NameError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "Create -> ShowCreation (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr03_manim_import",
+      "failure_mode": "wrong_import_root",
+      "error_class": "ImportError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "fixed import (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr04_camera_frame",
+      "failure_mode": "manimcommunity_attr_camera_frame",
+      "error_class": "AttributeError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "self.camera.frame -> self.frame (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr05_tip_length",
+      "failure_mode": "banned_kwarg_tip_length",
+      "error_class": "TypeError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "removed tip_length (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr06_corner_radius",
+      "failure_mode": "banned_kwarg_corner_radius",
+      "error_class": "TypeError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "removed corner_radius (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr07_zero_length_arrow",
+      "failure_mode": "zero_length_arrow",
+      "error_class": "ValueError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "fixed zero-length Arrow (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr08_set_fill_color",
+      "failure_mode": "manimcommunity_method_set_fill_color",
+      "error_class": "AttributeError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "set_fill_color -> set_fill (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr09_dark_grey_constant",
+      "failure_mode": "nonexistent_color_constant",
+      "error_class": "NameError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "DARK_GREY -> GREY_D (1)",
+        "LIGHT_GREY -> GREY_A (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr10_circumscribe",
+      "failure_mode": "manimcommunity_symbol_Circumscribe",
+      "error_class": "NameError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "Circumscribe -> FlashAround (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr11_x_length_y_length",
+      "failure_mode": "manimcommunity_kwarg_x_length",
+      "error_class": "TypeError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "x_length -> width (ManimGL Axes) (1)",
+        "y_length -> height (ManimGL Axes) (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr12_get_graph_point",
+      "failure_mode": "manimcommunity_method_get_graph_point",
+      "error_class": "AttributeError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "get_graph_point -> input_to_graph_point (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr13_multi_arg_fadeout",
+      "failure_mode": "multi_arg_fade",
+      "error_class": "TypeError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "split multi-arg FadeOut (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr14_font_kwarg_on_tex",
+      "failure_mode": "invalid_kwarg_font_on_tex",
+      "error_class": "TypeError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "removed font= from Tex (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr15_bare_surrounding_rect",
+      "failure_mode": "bare_rect_in_play",
+      "error_class": "TypeError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "wrapped bare SurroundingRectangle/BackgroundRectangle in ShowCreation (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr16_outer_text_wrapper",
+      "failure_mode": "latex_outer_text_wrapper",
+      "error_class": "LatexError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "stripped outer \\text{} wrapper from Tex() (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr17_tmt_on_text",
+      "failure_mode": "transform_matching_tex_on_text",
+      "error_class": "LayoutDefect",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "TransformMatchingTex(Text, ...) -> FadeOut/FadeIn (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr18_become_inside_play",
+      "failure_mode": "become_passed_to_play",
+      "error_class": "TypeError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "self.play(obj.become(...)) -> become()+ShowCreation (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr19_reorient_wrong_kwargs",
+      "failure_mode": "wrong_kwarg_names_reorient",
+      "error_class": "TypeError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "fixed reorient kwarg names: theta_deg= -> theta_degrees= (1), phi_deg= -> phi_degrees= (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr20_numberline_label",
+      "failure_mode": "invalid_kwarg_label_on_numberline",
+      "error_class": "TypeError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "removed label= from NumberLine (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr21_color_gradient_float",
+      "failure_mode": "color_gradient_float_length",
+      "error_class": "TypeError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "color_gradient int cast (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr22_negative_wait",
+      "failure_mode": "nonpositive_wait",
+      "error_class": "ValueError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "clamped negative/zero self.wait() to 0.01 (2)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr23_off_scale_font_size",
+      "failure_mode": "off_scale_font_size",
+      "error_class": "LayoutDefect",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "font_size=53 -> 48",
+        "font_size=31 -> 28"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr24_y_axis_include_numbers",
+      "failure_mode": "y_axis_include_numbers_true",
+      "error_class": "LayoutDefect",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "forced y_axis include_numbers=False (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr25_palette_hex_literal",
+      "failure_mode": "raw_palette_hex_literal",
+      "error_class": "LayoutDefect",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "PRIMARY hex -> TEAL_A (1)",
+        "SECONDARY hex -> GOLD (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr26_vgroup_item_assignment",
+      "failure_mode": "vgroup_item_assignment",
+      "error_class": "TypeError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "not_repairable",
+      "resolved": false,
+      "code_changed": false,
+      "defect_cleared": false,
+      "validation_clean": false,
+      "validation_errors": [
+        "VGroup does not support item assignment. Use a parallel Python list: box_list = list(boxes), then swap box_list[i], box_list[j]. Never assign into the VGroup directly.",
+        "VGroup does not support item assignment. Use a parallel Python list: box_list = list(boxes). Never assign into the VGroup directly."
+      ],
+      "rules_fired": [],
+      "unresolved_reason": "defect remains and validation still fails"
+    },
+    {
+      "case_id": "fr27_get_tex_string_readback",
+      "failure_mode": "tex_value_readback",
+      "error_class": "LayoutDefect",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "not_repairable",
+      "resolved": false,
+      "code_changed": false,
+      "defect_cleared": false,
+      "validation_clean": false,
+      "validation_errors": [
+        "Never call .get_tex_string() to read back values \u2014 store data in a plain Python list instead (e.g. current_values = [5, 3, 8, 1]) and compare current_values[i] > current_values[j]. Never read values back from Tex/Text mobjects."
+      ],
+      "rules_fired": [],
+      "unresolved_reason": "defect remains and validation still fails"
+    },
+    {
+      "case_id": "fr28_add_fixed_in_frame_mobjects",
+      "failure_mode": "nonexistent_method_add_fixed_in_frame_mobjects",
+      "error_class": "AttributeError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "not_repairable",
+      "resolved": false,
+      "code_changed": false,
+      "defect_cleared": false,
+      "validation_clean": false,
+      "validation_errors": [
+        "add_fixed_in_frame_mobjects() does not exist. Use label.fix_in_frame() on each mobject."
+      ],
+      "rules_fired": [],
+      "unresolved_reason": "defect remains and validation still fails"
+    },
+    {
+      "case_id": "fr29_set_text_method",
+      "failure_mode": "nonexistent_method_set_text",
+      "error_class": "AttributeError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "not_repairable",
+      "resolved": false,
+      "code_changed": false,
+      "defect_cleared": false,
+      "validation_clean": false,
+      "validation_errors": [
+        "Text has no set_text() method in ManimGL. To update a counter label: create a new Text(...) and use FadeOut(old), FadeIn(new) or ReplacementTransform(old, new)."
+      ],
+      "rules_fired": [],
+      "unresolved_reason": "defect remains and validation still fails"
+    },
+    {
+      "case_id": "fr30_scale_factor_kwarg",
+      "failure_mode": "banned_kwarg_scale_factor",
+      "error_class": "TypeError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "removed scale_factor (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr31_transform_point_mismatch",
+      "failure_mode": "transform_point_count_mismatch",
+      "error_class": "ValueError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "[error-aware] Transform -> FadeOut/FadeIn (point count mismatch) (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr32_latex_missing_tex_numeric",
+      "failure_mode": "latex_unavailable_numeric_tex",
+      "error_class": "OSError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "[error-aware] Tex(str(...)) -> Text(str(...)) (1)",
+        "[error-aware] Tex(numeric literal) -> Text(...) (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr33_unexpected_kwarg_with_hint",
+      "failure_mode": "unexpected_kwarg_with_did_you_mean",
+      "error_class": "TypeError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "[error-aware] renamed kwarg 'tick_size' \u2192 'tick_frequency' (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr34_axes_missing_set_width",
+      "failure_mode": "layout_axes_default_size",
+      "error_class": "LayoutDefect",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "not_repairable",
+      "resolved": false,
+      "code_changed": false,
+      "defect_cleared": false,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [],
+      "unresolved_reason": "no rule rewrote the defect (detection-only or unhandled)"
+    },
+    {
+      "case_id": "fr35_horizontal_chain_overflow",
+      "failure_mode": "layout_horizontal_chain_overflow",
+      "error_class": "LayoutDefect",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "not_repairable",
+      "resolved": false,
+      "code_changed": false,
+      "defect_cleared": false,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [],
+      "unresolved_reason": "no rule rewrote the defect (detection-only or unhandled)"
+    },
+    {
+      "case_id": "fr36_next_to_stacking",
+      "failure_mode": "layout_next_to_stacking",
+      "error_class": "LayoutDefect",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "not_repairable",
+      "resolved": false,
+      "code_changed": false,
+      "defect_cleared": false,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [],
+      "unresolved_reason": "no rule rewrote the defect (detection-only or unhandled)"
+    },
+    {
+      "case_id": "fr37_loop_timing_unaccounted",
+      "failure_mode": "timing_loop_unaccounted",
+      "error_class": "LayoutDefect",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "not_repairable",
+      "resolved": false,
+      "code_changed": false,
+      "defect_cleared": false,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [],
+      "unresolved_reason": "no rule rewrote the defect (detection-only or unhandled)"
+    },
+    {
+      "case_id": "fr38_animate_mixed_with_fade",
+      "failure_mode": "mixed_animate_and_fade_in_play",
+      "error_class": "TypeError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": false,
+      "code_changed": true,
+      "defect_cleared": false,
+      "validation_clean": false,
+      "validation_errors": [
+        "SyntaxError: '(' was never closed (line 9)"
+      ],
+      "rules_fired": [
+        "[error-aware] split mixed .animate + FadeIn/FadeOut"
+      ],
+      "unresolved_reason": "defect remains and validation still fails"
+    },
+    {
+      "case_id": "fr39_mobjects_private_attr",
+      "failure_mode": "private_attr_mobjects",
+      "error_class": "AttributeError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "_mobjects -> submobjects (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "fr40_axis_config_font_size",
+      "failure_mode": "invalid_axis_config_font_size",
+      "error_class": "TypeError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "not_repairable",
+      "resolved": false,
+      "code_changed": true,
+      "defect_cleared": false,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [],
+      "unresolved_reason": "no rule rewrote the defect (detection-only or unhandled)"
+    },
+    {
+      "case_id": "gh01_nameerror_muted",
+      "failure_mode": "undefined_color_role",
+      "error_class": "NameError",
+      "source": "git-history",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "injected color-role header (MUTED = GREY_A)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "gh02_nameerror_struct",
+      "failure_mode": "undefined_color_role",
+      "error_class": "NameError",
+      "source": "git-history",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "injected color-role header (PRIMARY = TEAL_A, STRUCT = GREY_B)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "gh03_nameerror_easing",
+      "failure_mode": "undefined_easing_function",
+      "error_class": "NameError",
+      "source": "git-history",
+      "expected_outcome": "not_repairable",
+      "resolved": false,
+      "code_changed": false,
+      "defect_cleared": false,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [],
+      "unresolved_reason": "no rule rewrote the defect (detection-only or unhandled)"
+    },
+    {
+      "case_id": "gh04_kwarg_checkerboard_colors",
+      "failure_mode": "unexpected_kwarg_checkerboard_colors",
+      "error_class": "TypeError",
+      "source": "git-history",
+      "expected_outcome": "repairable",
+      "resolved": false,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": false,
+      "validation_errors": [
+        "SyntaxError: closing parenthesis ']' does not match opening parenthesis '(' on line 6 (line 9)"
+      ],
+      "rules_fired": [
+        "removed checkerboard_colors (1)"
+      ],
+      "unresolved_reason": "repair left validation errors: SyntaxError: closing parenthesis ']' does not match opening parenthesis '(' on line 6 (line 9)"
+    },
+    {
+      "case_id": "gh05_kwarg_z_length",
+      "failure_mode": "unexpected_kwarg_z_length",
+      "error_class": "TypeError",
+      "source": "git-history",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "x_length -> width (ManimGL Axes) (1)",
+        "y_length -> height (ManimGL Axes) (1)",
+        "z_length -> depth (ManimGL ThreeDAxes) (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "gh06_attr_begin_ambient_rotation",
+      "failure_mode": "nonexistent_method_begin_ambient_camera_rotation",
+      "error_class": "AttributeError",
+      "source": "git-history",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "begin_ambient_camera_rotation -> add_ambient_rotation (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "gh07_syntaxerror_mangled_brackets",
+      "failure_mode": "self_inflicted_syntax_error",
+      "error_class": "SyntaxError",
+      "source": "git-history",
+      "expected_outcome": "not_repairable",
+      "resolved": false,
+      "code_changed": true,
+      "defect_cleared": false,
+      "validation_clean": false,
+      "validation_errors": [
+        "SyntaxError: closing parenthesis ']' does not match opening parenthesis '(' on line 6 (line 9)"
+      ],
+      "rules_fired": [],
+      "unresolved_reason": "defect remains and validation still fails"
+    },
+    {
+      "case_id": "gh08_setcamera_orientation",
+      "failure_mode": "nonexistent_method_set_camera_orientation",
+      "error_class": "AttributeError",
+      "source": "git-history",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "set_camera_orientation -> self.frame.reorient (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "gh09_get_point_at_angle",
+      "failure_mode": "manimcommunity_method_get_point_at_angle",
+      "error_class": "AttributeError",
+      "source": "git-history",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "get_point_at_angle -> point_at_angle (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "gh10_get_parts_by_tex_expression",
+      "failure_mode": "nonexistent_method_get_parts_by_tex_expression",
+      "error_class": "AttributeError",
+      "source": "git-history",
+      "expected_outcome": "not_repairable",
+      "resolved": false,
+      "code_changed": false,
+      "defect_cleared": false,
+      "validation_clean": false,
+      "validation_errors": [
+        "get_parts_by_tex_expression() does not exist on Tex in ManimGL. To highlight a sub-expression, use a separate Tex() object positioned with .move_to() or .next_to(), or use get_part_by_tex(r'\\symbol') if the symbol is a single token."
+      ],
+      "rules_fired": [],
+      "unresolved_reason": "defect remains and validation still fails"
+    },
+    {
+      "case_id": "gh11_duplicate_kwarg_repeated",
+      "failure_mode": "self_inflicted_duplicate_kwarg",
+      "error_class": "SyntaxError",
+      "source": "git-history",
+      "expected_outcome": "regression_guard",
+      "resolved": true,
+      "code_changed": false,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "gh12_arrange_in_grid_kwargs",
+      "failure_mode": "wrong_kwarg_names_arrange_in_grid",
+      "error_class": "TypeError",
+      "source": "git-history",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "fixed arrange_in_grid kwargs: rows= \u2192 n_rows (1), cols= \u2192 n_cols (1), row_buff= \u2192 buff (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "gh13_broken_call_leading_comma",
+      "failure_mode": "syntax_error_leading_comma_in_args",
+      "error_class": "SyntaxError",
+      "source": "git-history",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [],
+      "unresolved_reason": null
+    },
+    {
+      "case_id": "gh14_title_width_overflow",
+      "failure_mode": "layout_title_too_wide",
+      "error_class": "LayoutDefect",
+      "source": "git-history",
+      "expected_outcome": "not_repairable",
+      "resolved": false,
+      "code_changed": false,
+      "defect_cleared": false,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [],
+      "unresolved_reason": "no rule rewrote the defect (detection-only or unhandled)"
+    },
+    {
+      "case_id": "gh15_side_by_side_array_overflow",
+      "failure_mode": "layout_side_by_side_array_collision",
+      "error_class": "LayoutDefect",
+      "source": "git-history",
+      "expected_outcome": "not_repairable",
+      "resolved": false,
+      "code_changed": false,
+      "defect_cleared": false,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [],
+      "unresolved_reason": "no rule rewrote the defect (detection-only or unhandled)"
+    },
+    {
+      "case_id": "gh16_top_edge_title_collision",
+      "failure_mode": "layout_top_edge_collision",
+      "error_class": "LayoutDefect",
+      "source": "git-history",
+      "expected_outcome": "not_repairable",
+      "resolved": false,
+      "code_changed": false,
+      "defect_cleared": false,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [],
+      "unresolved_reason": "no rule rewrote the defect (detection-only or unhandled)"
+    },
+    {
+      "case_id": "gh17_x_axis_config_no_rule",
+      "failure_mode": "unexpected_kwarg_x_axis_config",
+      "error_class": "TypeError",
+      "source": "git-history",
+      "expected_outcome": "regression_guard",
+      "resolved": false,
+      "code_changed": true,
+      "defect_cleared": false,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "[error-aware] removed unexpected kwarg 'x_axis_config' (1)"
+      ],
+      "unresolved_reason": "no rule rewrote the defect (detection-only or unhandled)"
+    }
+  ]
+}
