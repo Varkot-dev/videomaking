@@ -25,6 +25,19 @@ logger = logging.getLogger(__name__)
 
 _MIN_SEGMENT_DURATION = 0.5  # warn if a cue segment is shorter than this
 
+# Subprocess budgets. Every ffmpeg call here is bounded so a wedged process is
+# reaped instead of stalling the pipeline forever. Sized to the actual work:
+#
+#   _FFPROBE_TIMEOUT_SECONDS — `ffmpeg -version` is a pure availability probe
+#       that prints a banner and exits. It never touches media, so it shares
+#       the short 15s budget used elsewhere for metadata-only calls.
+#   _FFMPEG_TIMEOUT_SECONDS  — one cue slice (or one single-segment whole-file
+#       re-encode) of section narration. Seconds of audio, transcoded to AAC;
+#       120s is generous. Deliberately well under the 300s that muxer/assembler
+#       give a whole-video concat, because this is per-cue work in a loop.
+_FFPROBE_TIMEOUT_SECONDS = 15
+_FFMPEG_TIMEOUT_SECONDS = 120
+
 
 def slice_audio(
     audio_path: str,
@@ -116,6 +129,7 @@ def _check_ffmpeg() -> None:
             ["ffmpeg", "-version"],
             capture_output=True,
             check=True,
+            timeout=_FFPROBE_TIMEOUT_SECONDS,
         )
     except FileNotFoundError:
         raise RuntimeError(
@@ -123,6 +137,15 @@ def _check_ffmpeg() -> None:
             "  macOS:   brew install ffmpeg\n"
             "  Ubuntu:  sudo apt install ffmpeg\n"
             "  Windows: https://ffmpeg.org/download.html"
+        )
+    except subprocess.TimeoutExpired:
+        # `ffmpeg -version` hanging means a broken/wedged install. Fail with an
+        # actionable message rather than letting TimeoutExpired escape as an
+        # opaque crash from deep inside the slicer.
+        raise RuntimeError(
+            f"ffmpeg availability check timed out after "
+            f"{_FFPROBE_TIMEOUT_SECONDS}s. The ffmpeg binary appears to be "
+            f"wedged or unresponsive — check your FFmpeg installation."
         )
 
 
@@ -163,7 +186,15 @@ def _ffmpeg_slice(
         output_path,
     ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=_FFMPEG_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"ffmpeg slice timed out after {_FFMPEG_TIMEOUT_SECONDS}s for "
+            f"{output_path} (start={start:.3f}, end={end})"
+        )
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg slice failed for {output_path}:\n{result.stderr}")
 
@@ -183,6 +214,14 @@ def _ffmpeg_copy(input_path: str, output_path: str) -> None:
         "1",
         output_path,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=_FFMPEG_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"ffmpeg encode timed out after {_FFMPEG_TIMEOUT_SECONDS}s for "
+            f"{output_path}"
+        )
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg encode failed for {output_path}:\n{result.stderr}")

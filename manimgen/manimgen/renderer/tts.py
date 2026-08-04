@@ -228,11 +228,25 @@ def get_audio_duration(audio_path: str) -> float:
     return max(0.1, dur)
 
 
+# ebur128 decodes the whole section narration to measure momentary loudness.
+# That is tens of seconds of audio, so it needs a real budget — but it is NOT a
+# whole-video operation, so it stays well under the 300s the muxer/assembler
+# give a full concat. Bounded because this runs once per section during Phase 1,
+# BEFORE any render: an unbounded hang here stalls the entire run with no output.
+_EBUR128_TIMEOUT_SECONDS = 120
+
+
 def check_audio_not_silent(audio_path: str) -> dict:
     """Return silence report for an audio file using ffmpeg ebur128.
 
-    Returns {"ok": bool, "silent_ratio": float, "duration": float}.
+    Returns {"ok": bool, "silent_ratio": float, "duration": float,
+             "timed_out": bool}.
     Flags as silent if >80% of momentary loudness measurements are below -60 LUFS.
+
+    On probe timeout the report degrades to ok=True with timed_out=True: this is
+    an advisory silence *check*, so a wedged ffmpeg must not be reported as
+    "audio is silent" (a false alarm that would discard good narration) nor
+    crash Phase 1 before the pipeline has produced anything.
     """
     import re as _re
 
@@ -246,12 +260,28 @@ def check_audio_not_silent(audio_path: str) -> dict:
         "null",
         "-",
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=_EBUR128_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "[tts] ebur128 silence probe timed out after %ds for %s — "
+            "skipping silence check (audio NOT verified)",
+            _EBUR128_TIMEOUT_SECONDS,
+            audio_path,
+        )
+        return {
+            "ok": True,
+            "silent_ratio": 0.0,
+            "duration": 0.0,
+            "timed_out": True,
+        }
     output = result.stderr
 
     m_values = [float(m) for m in _re.findall(r"M:\s*([-\d.]+)", output)]
     if not m_values:
-        return {"ok": True, "silent_ratio": 0.0, "duration": 0.0}
+        return {"ok": True, "silent_ratio": 0.0, "duration": 0.0, "timed_out": False}
 
     silent = sum(1 for v in m_values if v < -60.0)
     ratio = silent / len(m_values)
@@ -266,4 +296,9 @@ def check_audio_not_silent(audio_path: str) -> dict:
         )
         duration = 0.0
 
-    return {"ok": ratio < 0.8, "silent_ratio": ratio, "duration": duration}
+    return {
+        "ok": ratio < 0.8,
+        "silent_ratio": ratio,
+        "duration": duration,
+        "timed_out": False,
+    }
