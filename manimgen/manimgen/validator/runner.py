@@ -1,5 +1,6 @@
 import os
 import subprocess
+import time
 from datetime import datetime
 
 from manimgen import paths
@@ -7,6 +8,22 @@ from manimgen.validator.codeguard import precheck_and_autofix_file
 from manimgen.validator.env import get_render_env
 from manimgen.validator.render_command import build_manimgl_command
 from manimgen.validator.scene_ast_gate import inspect_scene_file
+
+# Slack subtracted from "now" when computing the freshness floor for
+# _find_rendered_video. Some filesystems store mtime at whole-second
+# granularity, so a video written milliseconds after the render started can
+# report an mtime marginally *before* it. One second of slack absorbs that
+# without letting a genuinely stale previous-attempt render through.
+_RENDER_FLOOR_SLACK_SECONDS = 1.0
+
+
+def _render_floor() -> float:
+    """Timestamp floor marking the start of a render.
+
+    Passed to ``_find_rendered_video(newer_than=...)`` so a video produced by
+    an *earlier* attempt can never be mistaken for this render's output.
+    """
+    return time.time() - _RENDER_FLOOR_SLACK_SECONDS
 
 
 def _is_3d_scene(scene_path: str) -> bool:
@@ -117,6 +134,12 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
     # Use a larger timeout to avoid false "runtime" failures.
     timeout = 360 if _is_3d_scene(scene_path) else 240
 
+    # Freshness floor for _find_rendered_video: any .mp4 older than this cannot
+    # be the output of the render we are about to start. Backdated by one second
+    # to absorb filesystem mtime granularity (some filesystems truncate to whole
+    # seconds, which would otherwise reject a video this render just wrote).
+    render_started_at = _render_floor()
+
     try:
         result = subprocess.run(
             build_manimgl_command(scene_path, class_name),
@@ -142,7 +165,7 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
             f.write(f"=== RETURN CODE ===\n{result.returncode}\n")
 
         if result.returncode == 0:
-            video_path = _find_rendered_video(class_name)
+            video_path = _find_rendered_video(class_name, newer_than=render_started_at)
             return True, video_path
 
         return False, None
@@ -153,8 +176,33 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
         return False, None
 
 
-def _find_rendered_video(class_name: str) -> str | None:
-    """Search common ManimGL output directories for the rendered video."""
+def _find_rendered_video(
+    class_name: str, newer_than: float | None = None
+) -> str | None:
+    """Search common ManimGL output directories for the rendered video.
+
+    Selection is deliberately strict, because a wrong answer here is expensive:
+    a retry that picks up a *previous* attempt's video will validate and ship
+    the pre-fix render, so you pay an LLM for a fix that never reached the
+    output and nothing downstream notices.
+
+    Three rules, in order:
+
+    1. **Exact stem preferred.** Plain substring matching (``class_name in f``)
+       made "Section01Scene" match "Section01SceneOld.mp4". Files whose stem
+       equals ``class_name`` win outright; looser substring matches are only a
+       last resort.
+    2. **Newest first.** ``os.walk`` order is arbitrary, so with several
+       candidates the returned file was effectively random. Candidates are
+       sorted by mtime descending.
+    3. **Freshness floor.** ``newer_than`` (a POSIX timestamp, normally the
+       time the render started) rejects any file that predates the current
+       render — such a file cannot be this render's output.
+
+    ``newer_than=None`` keeps the old permissive behaviour for callers that
+    legitimately want a pre-existing render (the cache / --resume path in
+    ``cli.py``, which does its own ``.hash`` sidecar freshness check).
+    """
     from manimgen import paths as _paths
 
     # ManimGL writes to "videos/" relative to the scene file's directory.
@@ -168,11 +216,47 @@ def _find_rendered_video(class_name: str) -> str | None:
         "media/videos",
         _paths.videos_dir(),
     ]
+
+    exact: list[tuple[float, str]] = []
+    partial: list[tuple[float, str]] = []
+    seen: set[str] = set()
+
     for d in search_dirs:
         if not os.path.isdir(d):
             continue
         for root, _, files in os.walk(d):
             for f in files:
-                if class_name in f and f.endswith(".mp4"):
-                    return os.path.join(root, f)
+                if not f.endswith(".mp4") or class_name not in f:
+                    continue
+                path = os.path.join(root, f)
+                try:
+                    real = os.path.realpath(path)
+                    if real in seen:
+                        continue  # search dirs overlap; don't double-count
+                    mtime = os.path.getmtime(path)
+                except OSError:
+                    continue
+                seen.add(real)
+
+                # Reject anything that predates the current render outright.
+                if newer_than is not None and mtime < newer_than:
+                    import logging as _logging
+
+                    _logging.getLogger(__name__).debug(
+                        "[runner] Ignoring stale render %s (mtime %.0f < floor %.0f)",
+                        path,
+                        mtime,
+                        newer_than,
+                    )
+                    continue
+
+                if os.path.splitext(f)[0] == class_name:
+                    exact.append((mtime, path))
+                else:
+                    partial.append((mtime, path))
+
+    for candidates in (exact, partial):
+        if candidates:
+            candidates.sort(key=lambda item: item[0], reverse=True)
+            return candidates[0][1]
     return None
