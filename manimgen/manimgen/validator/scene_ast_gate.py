@@ -24,11 +24,31 @@ a second class, dunder writes — is reported as a finding.
 Wiring (see ``runner.run_scene``): this gate is currently **warning-only**. It
 logs every finding loudly but does NOT block the render, because hard-breaking
 would regress any scene whose Director happened to emit an extra (benign)
-top-level statement, and the blast radius of a false negative here is a failed
-render, not RCE — codeguard's banned-pattern denylist still blocks the known
-exec/eval/shell primitives outright. Once Director output is constrained
-enough that findings are reliably malicious, flip ``hard_block=True`` at the
-call site. See the TODO in ``runner.run_scene``.
+top-level statement.
+
+.. warning::
+
+   An earlier version of this docstring justified that wiring by claiming
+   "codeguard's banned-pattern denylist still blocks the known exec/eval/shell
+   primitives outright." **That was never true.** All 24 entries in
+   ``codeguard._BANNED_PATTERNS`` are ManimGL API-compatibility rules; not one
+   matches ``exec``, ``eval``, ``__import__``, ``os``, ``subprocess``,
+   ``socket`` or ``open``. Codeguard's "AST pass" is a three-line
+   ``ast.parse()`` in a try/except — a syntax check, not call inspection.
+
+   The two modules were each deferring to a check the other did not perform.
+   **This gate is the only component that inspects generated code for dangerous
+   constructs, and while it stays warning-only, nothing in the pipeline blocks
+   them.**
+
+Threat model, stated plainly: this is a local developer tool. The operator
+supplies the topic or PDF and ``manimgl`` runs as the invoking user, so the
+realistic risk is a prompt-injected source document rather than a hostile
+network peer — moderate exposure, not hosted-service critical. But it is real,
+and this pipeline should not be described as sandboxing generated code. Once
+Director output is constrained enough that findings are reliably malicious,
+flip ``hard_block=True`` at the call site. See the TODO in
+``runner.run_scene``.
 """
 
 from __future__ import annotations
