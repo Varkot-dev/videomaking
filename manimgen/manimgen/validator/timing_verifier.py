@@ -775,9 +775,7 @@ def _scale_run_times_in_block(
             scaled = _MIN_RUN_TIME
             hit_floor = True
         new_block = (
-            new_block[: lit.start]
-            + _format_run_time(scaled)
-            + new_block[lit.end :]
+            new_block[: lit.start] + _format_run_time(scaled) + new_block[lit.end :]
         )
     return new_block, hit_floor
 

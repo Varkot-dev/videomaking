@@ -47,6 +47,7 @@ def enforcement_enabled() -> bool:
     """True when MANIMGEN_KWARG_ENFORCE is set to a truthy value (default False)."""
     return os.environ.get(_ENFORCE_ENV_VAR, "").strip().lower() not in _FALSEY
 
+
 # Classes whose __init__ consumes **kwargs and forwards them LATERALLY (not via
 # super()) to another constructor that static MRO introspection cannot follow.
 # Flagging a kwarg on these would be a false positive — never flag them.
@@ -58,6 +59,7 @@ _LATERAL_FORWARDERS: frozenset[str] = frozenset(
 @dataclass
 class KwargSpec:
     """Introspected acceptance info for a class's constructor across its MRO."""
+
     named: set[str] = field(default_factory=set)  # all named kwargs in the MRO
     chain_is_open: bool = False  # some __init__ in the MRO has **kwargs
     chain_terminates_closed: bool = True  # the **kwargs chain bottoms out closed
@@ -106,18 +108,31 @@ def accepted_kwargs(cls: type) -> KwargSpec:
         # most-base one — its openness decides whether the chain terminates closed.
         last_custom_open = has_var_kw
     # Chain terminates closed iff the most-base custom __init__ has no **kwargs.
-    spec.chain_terminates_closed = (last_custom_open is False)
+    spec.chain_terminates_closed = last_custom_open is False
     return spec
 
 
 # VMobject's full named-param set is always valid for any VMobject descendant.
 # Resolved lazily from the real class when available; falls back to the known set.
-_VMOBJECT_PARAMS_FALLBACK: frozenset[str] = frozenset({
-    "color", "fill_color", "fill_opacity", "stroke_color", "stroke_opacity",
-    "stroke_width", "stroke_behind", "background_image_file", "long_lines",
-    "joint_type", "flat_stroke", "scale_stroke_with_zoom",
-    "use_simple_quadratic_approx", "anti_alias_width", "fill_border_width",
-})
+_VMOBJECT_PARAMS_FALLBACK: frozenset[str] = frozenset(
+    {
+        "color",
+        "fill_color",
+        "fill_opacity",
+        "stroke_color",
+        "stroke_opacity",
+        "stroke_width",
+        "stroke_behind",
+        "background_image_file",
+        "long_lines",
+        "joint_type",
+        "flat_stroke",
+        "scale_stroke_with_zoom",
+        "use_simple_quadratic_approx",
+        "anti_alias_width",
+        "fill_border_width",
+    }
+)
 
 
 @lru_cache(maxsize=1)
@@ -244,8 +259,11 @@ def shadow_check_kwargs(code: str) -> list[FlaggedKwarg]:
                 break
             if is_provably_invalid_kwarg(cls, kw.arg):
                 flagged.append(
-                    FlaggedKwarg(class_name=node.func.id, kwarg=kw.arg,
-                                 lineno=getattr(node, "lineno", 0))
+                    FlaggedKwarg(
+                        class_name=node.func.id,
+                        kwarg=kw.arg,
+                        lineno=getattr(node, "lineno", 0),
+                    )
                 )
     return flagged
 
@@ -289,7 +307,10 @@ def strip_invalid_kwargs(code: str) -> tuple[str, list[tuple[str, str]]]:
                 continue
             # ast.keyword carries col_offset/end_col_offset for the full arg=value
             # span (Python 3.9+). Fail-open if positions are missing.
-            if getattr(kw, "col_offset", None) is None or getattr(kw, "end_col_offset", None) is None:
+            if (
+                getattr(kw, "col_offset", None) is None
+                or getattr(kw, "end_col_offset", None) is None
+            ):
                 continue
             start = _line_col_to_offset(src_lines, kw.lineno, kw.col_offset)
             end = _line_col_to_offset(src_lines, kw.end_lineno, kw.end_col_offset)
@@ -301,7 +322,9 @@ def strip_invalid_kwargs(code: str) -> tuple[str, list[tuple[str, str]]]:
     removed: list[tuple[str, str]] = []
     out = code
     # Apply right-to-left so each excision leaves earlier offsets intact.
-    for start, end, class_name, kwarg in sorted(spans, key=lambda s: s[0], reverse=True):
+    for start, end, class_name, kwarg in sorted(
+        spans, key=lambda s: s[0], reverse=True
+    ):
         # Absorb one bordering comma (and surrounding spaces) so we don't leave a
         # dangling ", ," or "(, ". Prefer the preceding comma; else the following.
         lo, hi = start, end

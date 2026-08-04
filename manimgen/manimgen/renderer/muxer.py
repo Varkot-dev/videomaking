@@ -117,7 +117,9 @@ def mux_audio_video(video_path: str, audio_path: str, output_path: str) -> str:
         logger.warning(
             "[muxer] %s has no video stream — synthesizing %s background for the "
             "%.2fs narration (degraded; section preserved).",
-            video_path, _BG_COLOR, audio_dur,
+            video_path,
+            _BG_COLOR,
+            audio_dur,
         )
         _mux_synth_background(audio_path, output_path, audio_dur)
         return output_path
@@ -250,10 +252,15 @@ def _has_video_stream(path: str) -> bool:
     try:
         result = subprocess.run(
             [
-                "ffprobe", "-v", "error",
-                "-select_streams", "v",
-                "-show_entries", "stream=codec_type",
-                "-of", "csv=p=0",
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v",
+                "-show_entries",
+                "stream=codec_type",
+                "-of",
+                "csv=p=0",
                 path,
             ],
             capture_output=True,

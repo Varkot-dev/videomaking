@@ -355,10 +355,10 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
         # well-formed whether the banned kwarg is first, middle, or last —
         # stripping neither leaves Surface(, v_range=...) when it was first.
         value = (
-            r"(?:\[[^\[\]\n]*\]"      # list literal
-            r"|\([^()\n]*\)"          # tuple literal
-            r"|\{[^{}\n]*\}"          # dict or set literal
-            r"|[^,)\n]+)"             # plain scalar
+            r"(?:\[[^\[\]\n]*\]"  # list literal
+            r"|\([^()\n]*\)"  # tuple literal
+            r"|\{[^{}\n]*\}"  # dict or set literal
+            r"|[^,)\n]+)"  # plain scalar
         )
         pattern = rf",\s*{kw}\s*=\s*{value}|{kw}\s*=\s*{value}\s*,?\s*"
         new_fixed, count = re.subn(pattern, "", fixed)
@@ -744,8 +744,11 @@ def _inject_color_role_header(code: str) -> tuple[str, str | None]:
     if not injected:
         return code, None
 
-    header = "# Color roles (auto-injected by codeguard — see director palette)\n" + \
-        "\n".join(injected) + "\n"
+    header = (
+        "# Color roles (auto-injected by codeguard — see director palette)\n"
+        + "\n".join(injected)
+        + "\n"
+    )
 
     # Insert after the last top-level import line so roles are module-scoped before
     # the Scene class; if there are no imports, prepend at the very top.
@@ -756,7 +759,9 @@ def _inject_color_role_header(code: str) -> tuple[str, str | None]:
             last_import = i
     if last_import >= 0:
         insert_at = last_import + 1
-        new_code = "".join(lines[:insert_at]) + "\n" + header + "".join(lines[insert_at:])
+        new_code = (
+            "".join(lines[:insert_at]) + "\n" + header + "".join(lines[insert_at:])
+        )
     else:
         new_code = header + "\n" + code
 
@@ -1487,9 +1492,7 @@ def _shadow_log_unknown_symbols(code: str) -> list[str]:
         # Persist so real runs accumulate evidence (see evidence_log docstring).
         from manimgen.validator.evidence_log import log_event
 
-        log_event(
-            "shadow_unknown_symbols", count=len(flagged), symbols=sorted(flagged)
-        )
+        log_event("shadow_unknown_symbols", count=len(flagged), symbols=sorted(flagged))
     return flagged
 
 
@@ -1513,7 +1516,9 @@ def _shadow_log_invalid_kwargs(code: str) -> list:
             "[codeguard][kwarg-shadow] would flag %d invalid kwarg(s) "
             "(report-only, render NOT blocked): %s",
             len(flagged),
-            ", ".join(f"{fk.class_name}(...{fk.kwarg}=) L{fk.lineno}" for fk in flagged),
+            ", ".join(
+                f"{fk.class_name}(...{fk.kwarg}=) L{fk.lineno}" for fk in flagged
+            ),
         )
         from manimgen.validator.evidence_log import log_event
 

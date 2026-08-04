@@ -24,8 +24,6 @@ def _load_layout_system_prompt() -> str:
         return f.read()
 
 
-
-
 def _extract_frame(video_path: str, timestamp: float) -> str | None:
     """
     Extract a single frame from a video at `timestamp` seconds.

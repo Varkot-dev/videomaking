@@ -45,7 +45,9 @@ _MAX_EVENT_CHARS = 8000
 def evidence_enabled() -> bool:
     """Instrumentation is on unless explicitly disabled."""
     return os.environ.get("MANIMGEN_EVIDENCE_LOG", "1").lower() not in (
-        "0", "false", "no",
+        "0",
+        "false",
+        "no",
     )
 
 

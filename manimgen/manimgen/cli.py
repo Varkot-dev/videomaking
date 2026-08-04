@@ -673,7 +673,9 @@ def main():
             tts_result = _run_tts_for_section(section, idx)
             if tts_result:
                 audio_path, timestamps, audio_duration = tts_result
-                segments, audio_slices = _segment_and_slice(section, tts_result, section_id)
+                segments, audio_slices = _segment_and_slice(
+                    section, tts_result, section_id
+                )
                 all_section_audio[section_id] = {
                     "audio_path": audio_path,
                     "timestamps": timestamps,
