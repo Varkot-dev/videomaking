@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -40,12 +42,17 @@ class TestGeminiClientConfigured:
 
         fake_response = MagicMock()
         fake_response.text = "hello"
-        fake_genai.Client.return_value.models.generate_content.return_value = fake_response
+        fake_genai.Client.return_value.models.generate_content.return_value = (
+            fake_response
+        )
 
         with patch.dict(
             "sys.modules",
-            {"google": MagicMock(genai=fake_genai), "google.genai": fake_genai,
-             "google.genai.types": fake_types},
+            {
+                "google": MagicMock(genai=fake_genai),
+                "google.genai": fake_genai,
+                "google.genai.types": fake_types,
+            },
         ):
             fake_genai.types = fake_types
             _gemini(system="sys", user="user", images=[])
@@ -82,11 +89,16 @@ class TestGeminiJsonMode:
         fake_types = MagicMock()
         fake_response = MagicMock()
         fake_response.text = "{}"
-        fake_genai.Client.return_value.models.generate_content.return_value = fake_response
+        fake_genai.Client.return_value.models.generate_content.return_value = (
+            fake_response
+        )
         with patch.dict(
             "sys.modules",
-            {"google": MagicMock(genai=fake_genai), "google.genai": fake_genai,
-             "google.genai.types": fake_types},
+            {
+                "google": MagicMock(genai=fake_genai),
+                "google.genai": fake_genai,
+                "google.genai.types": fake_types,
+            },
         ):
             fake_genai.types = fake_types
             _gemini(system="sys", user="user", images=[], **kwargs)
@@ -130,7 +142,9 @@ class TestAnthropicClientConfigured:
         fake_anthropic = MagicMock()
         fake_response = MagicMock()
         fake_response.content = [MagicMock(type="text", text="hello")]
-        fake_anthropic.Anthropic.return_value.messages.create.return_value = fake_response
+        fake_anthropic.Anthropic.return_value.messages.create.return_value = (
+            fake_response
+        )
 
         with patch.dict("sys.modules", {"anthropic": fake_anthropic}):
             _anthropic(system="sys", user="user", images=[])
@@ -210,9 +224,7 @@ class TestOllamaUrlSsrfGuard:
 
         # Resolve a public host to a public address deterministically.
         with patch("manimgen.llm.socket.getaddrinfo") as mock_gai:
-            mock_gai.return_value = [
-                (None, None, None, None, ("93.184.216.34", 0))
-            ]
+            mock_gai.return_value = [(None, None, None, None, ("93.184.216.34", 0))]
             with pytest.raises(ValueError, match="non-local address"):
                 _validate_ollama_url("http://evil.example.com:11434")
 
@@ -242,7 +254,9 @@ class TestAnthropicResponseText:
         fake_response = MagicMock()
         fake_response.content = blocks
         fake_response.stop_reason = stop_reason
-        fake_anthropic.Anthropic.return_value.messages.create.return_value = fake_response
+        fake_anthropic.Anthropic.return_value.messages.create.return_value = (
+            fake_response
+        )
         with patch.dict("sys.modules", {"anthropic": fake_anthropic}):
             return _anthropic(system="sys", user="user", images=[])
 
@@ -277,7 +291,7 @@ class TestStripJsonFence:
 
     def test_chat_json_mode_strips_fence_for_non_gemini(self, monkeypatch):
         monkeypatch.setenv("LLM_PROVIDER", "claude_cli")
-        with patch("manimgen.llm._claude_cli", return_value='```json\n[1]\n```'):
+        with patch("manimgen.llm._claude_cli", return_value="```json\n[1]\n```"):
             assert chat(system="s", user="u", json_mode=True) == "[1]"
 
     def test_chat_leaves_code_fences_without_json_mode(self, monkeypatch):
@@ -304,9 +318,8 @@ class TestClaudeCli:
 
     @pytest.fixture(autouse=True)
     def _claude_on_path(self, monkeypatch):
-        monkeypatch.setattr(
-            llm_mod.shutil, "which", lambda name: f"/fake/bin/{name}"
-        )
+        monkeypatch.setattr(llm_mod.shutil, "which", lambda name: f"/fake/bin/{name}")
+        monkeypatch.setattr(llm_mod.time, "sleep", lambda s: None)
 
     def test_provider_resolves(self, monkeypatch):
         monkeypatch.setenv("LLM_PROVIDER", "claude_cli")
@@ -325,7 +338,7 @@ class TestClaudeCli:
 
     def test_returns_result_text(self):
         stdout = '{"type":"system","subtype":"init"}\n' + _result_line("  scene  ")
-        with patch.object(llm_mod.subprocess, "run", return_value=_completed(stdout)):
+        with patch.object(llm_mod, "_run_cli", return_value=_completed(stdout)):
             assert _claude_cli(system="s", user="u", images=[]) == "scene"
 
     def test_prompt_delivery_and_isolation(self, monkeypatch):
@@ -340,12 +353,13 @@ class TestClaudeCli:
                 seen["system"] = f.read()
             return _completed(_result_line("done"))
 
-        with patch.object(llm_mod.subprocess, "run", side_effect=fake_run):
+        with patch.object(llm_mod, "_run_cli", side_effect=fake_run):
             _claude_cli(system="SYSTEM PROMPT é", user="USER TEXT", images=["QUJD"])
 
         cmd, kwargs = seen["cmd"], seen["kwargs"]
         assert cmd[0] == "/fake/bin/claude"
         assert "-p" in cmd and "--tools=" in cmd and "--strict-mcp-config" in cmd
+        assert "--disable-slash-commands" in cmd
         assert cmd[cmd.index("--model") + 1] == llm_mod._LLM_CONFIG["claude_cli_model"]
         assert seen["system"] == "SYSTEM PROMPT é"
         # No prompt text on the command line (Windows ~32K argv limit).
@@ -365,7 +379,7 @@ class TestClaudeCli:
 
     def test_error_result_is_retried_then_raises(self):
         err = _completed(_result_line("rate limited", is_error=True, subtype="error"))
-        with patch.object(llm_mod.subprocess, "run", return_value=err) as run:
+        with patch.object(llm_mod, "_run_cli", return_value=err) as run:
             with pytest.raises(RuntimeError, match="rate limited"):
                 _claude_cli(system="s", user="u", images=[])
         assert run.call_count == _REQUEST_RETRY_ATTEMPTS
@@ -375,18 +389,18 @@ class TestClaudeCli:
             _completed(stderr="network blip", returncode=1),
             _completed(_result_line("second try")),
         ]
-        with patch.object(llm_mod.subprocess, "run", side_effect=responses):
+        with patch.object(llm_mod, "_run_cli", side_effect=responses):
             assert _claude_cli(system="s", user="u", images=[]) == "second try"
 
     def test_timeout_raises_after_retries(self):
         boom = subprocess.TimeoutExpired(cmd="claude", timeout=1)
-        with patch.object(llm_mod.subprocess, "run", side_effect=boom):
+        with patch.object(llm_mod, "_run_cli", side_effect=boom):
             with pytest.raises(RuntimeError, match="timed out"):
                 _claude_cli(system="s", user="u", images=[])
 
     def test_stderr_surfaces_when_no_result_event(self):
         bad = _completed(stderr="Invalid API key · Please run /login", returncode=1)
-        with patch.object(llm_mod.subprocess, "run", return_value=bad):
+        with patch.object(llm_mod, "_run_cli", return_value=bad):
             with pytest.raises(RuntimeError, match="/login"):
                 _claude_cli(system="s", user="u", images=[])
 
@@ -403,9 +417,7 @@ class TestNoPaidApiGuard:
     @pytest.fixture(autouse=True)
     def _paid_not_allowed(self, monkeypatch):
         monkeypatch.delenv("MANIMGEN_ALLOW_PAID_API", raising=False)
-        monkeypatch.setattr(
-            llm_mod.shutil, "which", lambda name: f"/fake/bin/{name}"
-        )
+        monkeypatch.setattr(llm_mod.shutil, "which", lambda name: f"/fake/bin/{name}")
 
     @pytest.mark.parametrize("provider", ["anthropic", "gemini"])
     def test_paid_provider_blocked_before_any_call(self, monkeypatch, provider):
@@ -443,15 +455,13 @@ class TestNoPaidApiGuard:
 
     def test_cli_subscription_login_accepted(self):
         stdout = _init_line("none") + "\n" + _result_line("fine")
-        with patch.object(llm_mod.subprocess, "run", return_value=_completed(stdout)):
+        with patch.object(llm_mod, "_run_cli", return_value=_completed(stdout)):
             assert _claude_cli(system="s", user="u", images=[]) == "fine"
 
     @pytest.mark.parametrize("source", ["ANTHROPIC_API_KEY", "apiKeyHelper"])
     def test_cli_api_key_auth_refused_without_retry(self, source):
         stdout = _init_line(source) + "\n" + _result_line("billed")
-        with patch.object(
-            llm_mod.subprocess, "run", return_value=_completed(stdout)
-        ) as run:
+        with patch.object(llm_mod, "_run_cli", return_value=_completed(stdout)) as run:
             with pytest.raises(PaidApiBlockedError, match=source):
                 _claude_cli(system="s", user="u", images=[])
         assert run.call_count == 1, "must stop at once, not retry a paid call"
@@ -459,5 +469,135 @@ class TestNoPaidApiGuard:
     def test_cli_api_key_auth_allowed_with_opt_in(self, monkeypatch):
         monkeypatch.setenv("MANIMGEN_ALLOW_PAID_API", "1")
         stdout = _init_line("apiKeyHelper") + "\n" + _result_line("ok")
-        with patch.object(llm_mod.subprocess, "run", return_value=_completed(stdout)):
+        with patch.object(llm_mod, "_run_cli", return_value=_completed(stdout)):
             assert _claude_cli(system="s", user="u", images=[]) == "ok"
+
+
+class TestClaudeCliRobustness:
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch):
+        monkeypatch.delenv("MANIMGEN_ALLOW_PAID_API", raising=False)
+        monkeypatch.setattr(llm_mod.shutil, "which", lambda name: f"/fake/bin/{name}")
+        self.sleeps: list[float] = []
+        monkeypatch.setattr(llm_mod.time, "sleep", self.sleeps.append)
+
+    def test_backoff_between_attempts(self):
+        fail = _completed(stderr="network blip", returncode=1)
+        with patch.object(llm_mod, "_run_cli", return_value=fail):
+            with pytest.raises(RuntimeError):
+                _claude_cli(system="s", user="u", images=[])
+        assert self.sleeps == [
+            llm_mod._CLI_RETRY_BACKOFF_SECONDS,
+            2 * llm_mod._CLI_RETRY_BACKOFF_SECONDS,
+        ]
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Claude AI usage limit reached|1760000000",
+            "Invalid API key · Please run /login",
+            "You are not logged in",
+        ],
+    )
+    def test_unrecoverable_errors_are_not_retried(self, message):
+        err = _completed(_result_line(message, is_error=True, subtype="error"))
+        with patch.object(llm_mod, "_run_cli", return_value=err) as run:
+            with pytest.raises(RuntimeError, match="not retryable"):
+                _claude_cli(system="s", user="u", images=[])
+        assert run.call_count == 1
+
+    def test_truncated_reply_is_logged(self, caplog):
+        stdout = json.dumps(
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "result": "partial",
+                "stop_reason": "max_tokens",
+            }
+        )
+        with patch.object(llm_mod, "_run_cli", return_value=_completed(stdout)):
+            with caplog.at_level("WARNING", logger="manimgen.llm"):
+                assert _claude_cli(system="s", user="u", images=[]) == "partial"
+        assert "truncated" in caplog.text
+
+    def test_parent_claude_session_vars_not_inherited(self, monkeypatch):
+        for name in llm_mod._CLI_PARENT_SESSION_VARS:
+            monkeypatch.setenv(name, "parent")
+        monkeypatch.setenv("CLAUDE_CODE_GIT_BASH_PATH", r"C:\Git\bin\bash.exe")
+        env = llm_mod._claude_cli_env()
+        assert not (llm_mod._CLI_PARENT_SESSION_VARS & env.keys())
+        # Windows needs this one to find Git Bash, so it must survive.
+        assert env["CLAUDE_CODE_GIT_BASH_PATH"] == r"C:\Git\bin\bash.exe"
+
+
+class TestRunCliTimeout:
+    """_run_cli() uses a real subprocess: a timeout must stop the whole tree."""
+
+    def test_returns_output(self, tmp_path):
+        proc = llm_mod._run_cli(
+            [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read())"],
+            input=b"echo me",
+            cwd=str(tmp_path),
+            env=dict(os.environ),
+            timeout=30,
+        )
+        assert proc.returncode == 0 and proc.stdout == b"echo me"
+
+    def test_timeout_raises_promptly(self, tmp_path):
+        started = time.monotonic()
+        with pytest.raises(subprocess.TimeoutExpired):
+            llm_mod._run_cli(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                input=b"",
+                cwd=str(tmp_path),
+                env=dict(os.environ),
+                timeout=1,
+            )
+        assert time.monotonic() - started < 20
+
+    def test_timeout_kills_grandchild_holding_the_pipe(self, tmp_path):
+        """The real-world hang: `claude` is a shim that launches a child (node)
+        which keeps stdout open after the shim itself is killed."""
+        pid_file = tmp_path / "grandchild.pid"
+        code = (
+            "import subprocess, sys, time\n"
+            "c = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+            f"open({str(pid_file)!r}, 'w').write(str(c.pid))\n"
+            "time.sleep(60)\n"
+        )
+        started = time.monotonic()
+        with pytest.raises(subprocess.TimeoutExpired):
+            llm_mod._run_cli(
+                [sys.executable, "-c", code],
+                input=b"",
+                cwd=str(tmp_path),
+                env=dict(os.environ),
+                timeout=2,
+            )
+        assert time.monotonic() - started < 25, "hung on the orphaned grandchild"
+        pid = int(pid_file.read_text(encoding="utf-8"))
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and _pid_alive(pid):
+            time.sleep(0.2)
+        assert not _pid_alive(pid), "grandchild survived the timeout"
+
+
+def _pid_alive(pid: int) -> bool:
+    if os.name == "nt":
+        out = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True
+        ).stdout
+        return str(pid) in out
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    # A killed child of a dead parent can linger as a zombie until reaped.
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as f:
+            return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except OSError:
+        return True
