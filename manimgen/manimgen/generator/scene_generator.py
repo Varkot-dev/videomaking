@@ -26,6 +26,7 @@ from manimgen.validator.codeguard import precheck_and_autofix, precheck_and_auto
 
 logger = logging.getLogger(__name__)
 
+
 class ScenePrecheckError(ValueError):
     """The generated scene was written to disk but failed codeguard's precheck.
 
