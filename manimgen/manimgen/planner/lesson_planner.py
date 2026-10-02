@@ -27,7 +27,10 @@ def _self_correct(plan: dict, limit: int = _SELF_CORRECT_LIMIT) -> dict:
     critic_system = _load_critic_system_prompt()
     for _ in range(limit):
         raw = chat(
-            system=critic_system, user=json.dumps(plan, indent=2), json_mode=True
+            system=critic_system,
+            user=json.dumps(plan, indent=2),
+            json_mode=True,
+            role="critic",
         )
         stripped = _strip_fencing(raw)
         try:
@@ -267,7 +270,9 @@ def _refill_cues_via_llm(
         f"LaTeX backslashes inside Tex() only."
     )
     try:
-        raw = chat(system=_load_system_prompt(), user=user, json_mode=True)
+        raw = chat(
+            system=_load_system_prompt(), user=user, json_mode=True, role="cue_refill"
+        )
         # This path INTENTIONALLY accepts a top-level JSON array (the cue list),
         # so use the lenient parser rather than the dict-guaranteeing wrapper.
         parsed = _safe_json_loads_any(_strip_fencing(raw))
@@ -400,6 +405,7 @@ def research_topic(topic: str) -> dict:
         system=system,
         user=f"Research this topic for an educational video: {topic}",
         json_mode=True,
+        role="researcher",
     )
     try:
         brief = _safe_json_loads(_strip_fencing(raw))
@@ -511,7 +517,7 @@ def plan_lesson(topic: str) -> dict:
     else:
         user_message = f"Create a visual storyboard for: {topic}"
 
-    raw = chat(system=system, user=user_message, json_mode=True)
+    raw = chat(system=system, user=user_message, json_mode=True, role="planner")
     plan = _cap_sections(_safe_json_loads(_strip_fencing(raw)), _MAX_SECTIONS_TOPIC)
     plan = _self_correct(plan)
     # _self_correct wholesale-replaces `plan` with the critic LLM's output,
@@ -579,6 +585,7 @@ def plan_lesson_from_pdf(pdf_path: str) -> dict:
         user=user_message,
         images=images if images else None,
         json_mode=True,
+        role="planner_pdf",
     )
     plan = _cap_sections(_safe_json_loads(_strip_fencing(raw)), _MAX_SECTIONS_PDF)
     plan = _self_correct(plan)
