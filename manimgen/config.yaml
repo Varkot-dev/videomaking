@@ -29,7 +29,7 @@ output:
   plan_cache: manimgen/output/plan.json
 
 rendering:
-  quality: hd           # hd = 1080p | m = 480p | l = 720p
+  quality: hd           # l = 480p | m = 720p | hd = 1080p | uhd = 4K (l is a fast draft)
   resolution: "1920x1080"
   fps: 60
   max_retries: 3        # LLM retry calls per scene (increase for production)
