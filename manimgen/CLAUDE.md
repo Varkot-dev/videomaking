@@ -257,7 +257,7 @@ Every fix runs before any render attempt. Key fixes:
 | `Create(...)` | → `ShowCreation(...)` |
 | `x_length=` / `y_length=` in Axes | → `width=` / `height=` |
 | `set_fill_color(...)` | → `set_fill(...)` |
-| `self.play(obj.become(...))` | → `obj.become(...); self.play(ShowCreation(obj))` |
+| `self.play(obj.become(...), ...)` | → `self.play(obj.animate.become(...), ...)` (other args kept) |
 | `self.play(SurroundingRectangle(...))` | wrap in `ShowCreation()` |
 | `Tex(r"\text{label}")` outer wrapper | strip to `Tex(r"label")` |
 | `font_size=` on `Tex()` | left alone (valid param, handled internally) |

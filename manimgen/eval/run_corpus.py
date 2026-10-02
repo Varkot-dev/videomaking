@@ -123,11 +123,21 @@ _DEFECT_PROBES: dict[str, Callable[[str], bool]] = {
     # --- undefined names: resolved by the injected role header ---------------
     "undefined_color_role": lambda c: all(
         not re.search(rf"\b{role}\b", c) or re.search(rf"^{role}\s*=", c, re.M)
-        for role in ("PRIMARY", "SECONDARY", "STRUCT", "INK", "MUTED",
-                     "SUCCESS", "WARNING", "ALERT")
+        for role in (
+            "PRIMARY",
+            "SECONDARY",
+            "STRUCT",
+            "INK",
+            "MUTED",
+            "SUCCESS",
+            "WARNING",
+            "ALERT",
+        )
     ),
     "undefined_easing_function": _absent(r"\bease_out_sine\b"),
-    "nonexistent_color_constant": _absent(r"\b(DARK_GREY|DARK_GRAY|LIGHT_GREY|LIGHT_GRAY)\b"),
+    "nonexistent_color_constant": _absent(
+        r"\b(DARK_GREY|DARK_GRAY|LIGHT_GREY|LIGHT_GRAY)\b"
+    ),
     # --- ManimCommunity symbols / methods ------------------------------------
     "manimcommunity_symbol_MathTex": _absent(r"\bMathTex\s*\("),
     "manimcommunity_symbol_Create": _absent(r"(?<!Show)\bCreate\s*\("),
@@ -181,7 +191,8 @@ _DEFECT_PROBES: dict[str, Callable[[str], bool]] = {
     ),
     "zero_length_arrow": _absent(r"Arrow\(\s*ORIGIN\s*,\s*ORIGIN\s*[,)]"),
     "multi_arg_fade": _absent(r"FadeOut\(\s*\w+\s*,\s*\w+\s*\)"),
-    "become_passed_to_play": _absent(r"self\.play\([^)]*\w+\.become\("),
+    # obj.animate.become(...) is the valid form and must not count as the defect.
+    "become_passed_to_play": _absent(r"self\.play\([^)]*\b(?!animate\b)\w+\.become\("),
     "bare_rect_in_play": _absent(
         r"self\.play\(\s*(?:Surrounding|Background)Rectangle\s*\("
     ),
@@ -324,22 +335,31 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     for src in sorted({r["source"] for r in results}):
         rows = [r for r in results if r["source"] == src]
         ok = sum(r["resolved"] for r in rows)
-        by_source[src] = {"total": len(rows), "resolved": ok,
-                          "rate_pct": _rate(ok, len(rows))}
+        by_source[src] = {
+            "total": len(rows),
+            "resolved": ok,
+            "rate_pct": _rate(ok, len(rows)),
+        }
 
     by_mode: dict[str, dict[str, Any]] = {}
     for mode in sorted({r["failure_mode"] for r in results}):
         rows = [r for r in results if r["failure_mode"] == mode]
         ok = sum(r["resolved"] for r in rows)
-        by_mode[mode] = {"total": len(rows), "resolved": ok,
-                         "rate_pct": _rate(ok, len(rows))}
+        by_mode[mode] = {
+            "total": len(rows),
+            "resolved": ok,
+            "rate_pct": _rate(ok, len(rows)),
+        }
 
     by_error_class: dict[str, dict[str, Any]] = {}
     for ec in sorted({r["error_class"] for r in results}):
         rows = [r for r in results if r["error_class"] == ec]
         ok = sum(r["resolved"] for r in rows)
-        by_error_class[ec] = {"total": len(rows), "resolved": ok,
-                              "rate_pct": _rate(ok, len(rows))}
+        by_error_class[ec] = {
+            "total": len(rows),
+            "resolved": ok,
+            "rate_pct": _rate(ok, len(rows)),
+        }
 
     rule_counter: Counter[str] = Counter()
     for r in results:
@@ -348,24 +368,35 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
             rule_counter[re.sub(r"\s*\(\d+\)$", "", rule)] += 1
 
     unresolved = [
-        {"case_id": r["case_id"], "failure_mode": r["failure_mode"],
-         "source": r["source"], "expected_outcome": r["expected_outcome"],
-         "reason": r["unresolved_reason"]}
-        for r in results if not r["resolved"]
+        {
+            "case_id": r["case_id"],
+            "failure_mode": r["failure_mode"],
+            "source": r["source"],
+            "expected_outcome": r["expected_outcome"],
+            "reason": r["unresolved_reason"],
+        }
+        for r in results
+        if not r["resolved"]
     ]
 
     # Cases where the sidecar's expectation disagreed with the measurement.
     surprises = [
-        {"case_id": r["case_id"], "expected": r["expected_outcome"],
-         "measured": "resolved" if r["resolved"] else "unresolved"}
+        {
+            "case_id": r["case_id"],
+            "expected": r["expected_outcome"],
+            "measured": "resolved" if r["resolved"] else "unresolved",
+        }
         for r in results
         if r["expected_outcome"] != "regression_guard"
         and (r["expected_outcome"] == "repairable") != r["resolved"]
     ]
 
     return {
-        "overall": {"total": total, "resolved": resolved,
-                    "rate_pct": _rate(resolved, total)},
+        "overall": {
+            "total": total,
+            "resolved": resolved,
+            "rate_pct": _rate(resolved, total),
+        },
         "by_source": by_source,
         "by_failure_mode": by_mode,
         "by_error_class": by_error_class,
@@ -411,8 +442,10 @@ def _md(summary: dict[str, Any], results: list[dict[str, Any]]) -> str:
         "Codeguard never touched.\n"
     )
     L.append("## By corpus source\n")
-    L.append("This split matters: cases written by hand against the fix rules "
-             "partly determine their own pass rate.\n")
+    L.append(
+        "This split matters: cases written by hand against the fix rules "
+        "partly determine their own pass rate.\n"
+    )
     L.append("| source | cases | resolved | rate |")
     L.append("|---|---|---|---|")
     for src, s in summary["by_source"].items():
@@ -488,16 +521,20 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.quiet:
         o = summary["overall"]
-        print(f"Codeguard static repair rate (not video quality): {o['rate_pct']}% "
-              f"({o['resolved']}/{o['total']})")
+        print(
+            f"Codeguard static repair rate (not video quality): {o['rate_pct']}% "
+            f"({o['resolved']}/{o['total']})"
+        )
         for src, s in summary["by_source"].items():
             print(f"  {src:26s} {s['rate_pct']:5.1f}%  ({s['resolved']}/{s['total']})")
         print(f"  unresolved: {len(summary['unresolved'])}")
         ex = summary["examples"]
-        print(f"Must-not-break tier: {ex['passed']}/{ex['total']} examples intact, "
-              f"damage {ex['total_damage']} ({ex['stmts_removed']} statements "
-              f"removed, {ex['animations_dropped']} animations dropped, "
-              f"{ex['new_undefined']} new undefined names)")
+        print(
+            f"Must-not-break tier: {ex['passed']}/{ex['total']} examples intact, "
+            f"damage {ex['total_damage']} ({ex['stmts_removed']} statements "
+            f"removed, {ex['animations_dropped']} animations dropped, "
+            f"{ex['new_undefined']} new undefined names)"
+        )
     return 0
 
 

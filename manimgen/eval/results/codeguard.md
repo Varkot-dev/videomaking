@@ -113,7 +113,7 @@ This split matters: cases written by hand against the fix rules partly determine
 | `wrapped bare SurroundingRectangle/BackgroundRectangle in ShowCreation` | 1 |
 | `stripped outer \text{} wrapper from Tex()` | 1 |
 | `TransformMatchingTex(Text, ...) -> FadeOut/FadeIn` | 1 |
-| `self.play(obj.become(...)) -> become()+ShowCreation` | 1 |
+| `self.play(obj.become(...)) -> obj.animate.become(...)` | 1 |
 | `fixed reorient kwarg names: theta_deg= -> theta_degrees= (1), phi_deg= -> phi_degrees=` | 1 |
 | `removed label= from NumberLine` | 1 |
 | `color_gradient int cast` | 1 |
@@ -150,16 +150,16 @@ This split matters: cases written by hand against the fix rules partly determine
 
 ## Must-not-break tier (examples/)
 
-Every example is known-good code, so Codeguard should leave it intact. 29/31 stay intact; total damage 61 (59 statements removed, 2 animations dropped, 0 new undefined names). See `eval/damage.py` for the definitions.
+Every example is known-good code, so Codeguard should leave it intact. 31/31 stay intact; total damage 57 (57 statements removed, 0 animations dropped, 0 new undefined names). See `eval/damage.py` for the definitions.
 
 ```
 example | changed | pass | damage | removed | dropped | new undefined
 array_swap_scene.py | True | True | 4 | 4 | 0 | -
 brace_annotation_scene.py | True | True | 2 | 2 | 0 | -
 camera_flythrough_scene.py | True | True | 1 | 1 | 0 | -
-camera_zoom_scene.py | True | True | 0 | 0 | 0 | -
-code_scene.py | True | True | 0 | 0 | 0 | -
-color_fill_scene.py | True | True | 0 | 0 | 0 | -
+camera_zoom_scene.py | False | True | 0 | 0 | 0 | -
+code_scene.py | False | True | 0 | 0 | 0 | -
+color_fill_scene.py | False | True | 0 | 0 | 0 | -
 cross_section_scene.py | True | True | 2 | 2 | 0 | -
 dot_product_3d_scene.py | True | True | 2 | 2 | 0 | -
 epsilon_delta_scene.py | True | True | 4 | 4 | 0 | -
@@ -167,21 +167,21 @@ equation_morph_scene.py | True | True | 2 | 2 | 0 | -
 fade_reveal_scene.py | True | True | 4 | 4 | 0 | -
 graph_scene.py | True | True | 3 | 3 | 0 | -
 jump_discontinuity_scene.py | True | True | 4 | 4 | 0 | -
-lagged_path_scene.py | True | True | 0 | 0 | 0 | -
+lagged_path_scene.py | False | True | 0 | 0 | 0 | -
 limit_scene.py | True | True | 4 | 4 | 0 | -
 matrix_scene.py | True | True | 1 | 1 | 0 | -
 number_line_scene.py | True | True | 3 | 3 | 0 | -
 number_plane_transform_scene.py | True | True | 3 | 3 | 0 | -
 parametric_surface_scene.py | True | True | 1 | 1 | 0 | -
 piecewise_scene.py | True | True | 4 | 4 | 0 | -
-shape_scene.py | True | True | 0 | 0 | 0 | -
+shape_scene.py | False | True | 0 | 0 | 0 | -
 stagger_build_scene.py | True | True | 2 | 2 | 0 | -
 stagger_reveal_scene.py | True | True | 1 | 1 | 0 | -
-sweep_highlight_scene.py | True | False | 3 | 2 | 1 | -
-text_reveal_scene.py | True | False | 5 | 4 | 1 | -
+sweep_highlight_scene.py | True | True | 1 | 1 | 0 | -
+text_reveal_scene.py | True | True | 3 | 3 | 0 | -
 text_scene.py | True | True | 2 | 2 | 0 | -
 threed_interior_reveal.py | True | True | 1 | 1 | 0 | -
-threed_intermediate.py | True | True | 0 | 0 | 0 | -
+threed_intermediate.py | False | True | 0 | 0 | 0 | -
 threed_slice_sphere.py | True | True | 1 | 1 | 0 | -
 value_tracker_scene.py | True | True | 1 | 1 | 0 | -
 value_tracker_tracer_scene.py | True | True | 1 | 1 | 0 | -

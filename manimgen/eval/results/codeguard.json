@@ -366,7 +366,7 @@
       "wrapped bare SurroundingRectangle/BackgroundRectangle in ShowCreation": 1,
       "stripped outer \\text{} wrapper from Tex()": 1,
       "TransformMatchingTex(Text, ...) -> FadeOut/FadeIn": 1,
-      "self.play(obj.become(...)) -> become()+ShowCreation": 1,
+      "self.play(obj.become(...)) -> obj.animate.become(...)": 1,
       "fixed reorient kwarg names: theta_deg= -> theta_degrees= (1), phi_deg= -> phi_degrees=": 1,
       "removed label= from NumberLine": 1,
       "color_gradient int cast": 1,
@@ -387,7 +387,7 @@
       "injected color-role header (MUTED = GREY_A)": 1,
       "injected color-role header (PRIMARY = TEAL_A, STRUCT = GREY_B)": 1,
       "removed checkerboard_colors": 1,
-      "z_length -> depth (ManimGL ThreeDAxes)": 1,
+      "z_length -> depth (ManimGL Axes)": 1,
       "begin_ambient_camera_rotation -> add_ambient_rotation": 1,
       "set_camera_orientation -> self.frame.reorient": 1,
       "get_point_at_angle -> point_at_angle": 1,
@@ -524,11 +524,11 @@
     ],
     "examples": {
       "total": 31,
-      "passed": 29,
-      "changed": 31,
-      "total_damage": 61,
-      "stmts_removed": 59,
-      "animations_dropped": 2,
+      "passed": 31,
+      "changed": 25,
+      "total_damage": 57,
+      "stmts_removed": 57,
+      "animations_dropped": 0,
       "new_undefined": 0,
       "not_compiling": 0
     }
@@ -820,7 +820,7 @@
       "validation_clean": true,
       "validation_errors": [],
       "rules_fired": [
-        "self.play(obj.become(...)) -> become()+ShowCreation (1)"
+        "self.play(obj.become(...)) -> obj.animate.become(...) (1)"
       ],
       "unresolved_reason": null
     },
@@ -1164,7 +1164,7 @@
       "source": "derived-from-fix-rule",
       "expected_outcome": "not_repairable",
       "resolved": false,
-      "code_changed": true,
+      "code_changed": false,
       "defect_cleared": false,
       "validation_clean": true,
       "validation_errors": [],
@@ -1263,7 +1263,7 @@
       "rules_fired": [
         "x_length -> width (ManimGL Axes) (1)",
         "y_length -> height (ManimGL Axes) (1)",
-        "z_length -> depth (ManimGL ThreeDAxes) (1)"
+        "z_length -> depth (ManimGL Axes) (1)"
       ],
       "unresolved_reason": null
     },
@@ -1290,7 +1290,7 @@
       "source": "git-history",
       "expected_outcome": "not_repairable",
       "resolved": false,
-      "code_changed": true,
+      "code_changed": false,
       "defect_cleared": false,
       "validation_clean": false,
       "validation_errors": [
@@ -1506,7 +1506,7 @@
       "animations_dropped": 0,
       "stmts_removed": 0,
       "stmts_added": 0,
-      "changed": true,
+      "changed": false,
       "passes": true,
       "damage": 0,
       "detail": ""
@@ -1521,7 +1521,7 @@
       "animations_dropped": 0,
       "stmts_removed": 0,
       "stmts_added": 0,
-      "changed": true,
+      "changed": false,
       "passes": true,
       "damage": 0,
       "detail": ""
@@ -1536,7 +1536,7 @@
       "animations_dropped": 0,
       "stmts_removed": 0,
       "stmts_added": 0,
-      "changed": true,
+      "changed": false,
       "passes": true,
       "damage": 0,
       "detail": ""
@@ -1656,7 +1656,7 @@
       "animations_dropped": 0,
       "stmts_removed": 0,
       "stmts_added": 0,
-      "changed": true,
+      "changed": false,
       "passes": true,
       "damage": 0,
       "detail": ""
@@ -1761,7 +1761,7 @@
       "animations_dropped": 0,
       "stmts_removed": 0,
       "stmts_added": 0,
-      "changed": true,
+      "changed": false,
       "passes": true,
       "damage": 0,
       "detail": ""
@@ -1803,12 +1803,12 @@
       "defs_kept": true,
       "play_wait_kept": true,
       "new_undefined": [],
-      "animations_dropped": 1,
-      "stmts_removed": 2,
-      "stmts_added": 3,
+      "animations_dropped": 0,
+      "stmts_removed": 1,
+      "stmts_added": 1,
       "changed": true,
-      "passes": false,
-      "damage": 3,
+      "passes": true,
+      "damage": 1,
       "detail": ""
     },
     {
@@ -1818,12 +1818,12 @@
       "defs_kept": true,
       "play_wait_kept": true,
       "new_undefined": [],
-      "animations_dropped": 1,
-      "stmts_removed": 4,
-      "stmts_added": 4,
+      "animations_dropped": 0,
+      "stmts_removed": 3,
+      "stmts_added": 3,
       "changed": true,
-      "passes": false,
-      "damage": 5,
+      "passes": true,
+      "damage": 3,
       "detail": ""
     },
     {
@@ -1866,7 +1866,7 @@
       "animations_dropped": 0,
       "stmts_removed": 0,
       "stmts_added": 0,
-      "changed": true,
+      "changed": false,
       "passes": true,
       "damage": 0,
       "detail": ""
