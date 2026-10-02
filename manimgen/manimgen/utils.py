@@ -1,10 +1,14 @@
 """Shared utilities used across multiple manimgen modules."""
 
 import base64
+import contextlib
 import glob
 import os
 import re
 import subprocess
+import time
+import uuid
+from collections.abc import Iterator
 from typing import Any
 
 # A section id must be safe to interpolate into a filesystem path AND into a
@@ -15,6 +19,50 @@ from typing import Any
 # "_". (See sanitize_section_id.)
 _SECTION_ID_ALLOWED = re.compile(r"[^a-z0-9_]")
 _MAX_SECTION_ID_LEN = 64
+
+
+# os.replace onto a file another process holds open (a video player, an
+# antivirus scan) raises PermissionError on Windows. The lock is usually brief,
+# so retry a few times before giving up.
+_REPLACE_ATTEMPTS = 5
+_REPLACE_DELAY_SECONDS = 0.2
+
+
+def replace_with_retry(src: str, dst: str) -> None:
+    """``os.replace`` that retries briefly on PermissionError (Windows locks)."""
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == _REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(_REPLACE_DELAY_SECONDS)
+
+
+@contextlib.contextmanager
+def atomic_output(final_path: str) -> Iterator[str]:
+    """Yield a unique temp path next to ``final_path``; publish it on success.
+
+    A killed or timed-out encoder leaves only the temp file, never a partial
+    file at ``final_path`` that a later run could trust. On a clean exit the
+    temp file is moved over ``final_path`` with ``os.replace`` (atomic, and
+    replaces an existing file on Windows too); on any exception it is removed.
+    The temp name keeps the final extension so ffmpeg still infers the muxer,
+    and carries a random token so concurrent writers never share a name.
+    """
+    directory, name = os.path.split(final_path)
+    stem, ext = os.path.splitext(name)
+    tmp = os.path.join(directory, f"{stem}.{uuid.uuid4().hex[:8]}.part{ext}")
+    try:
+        yield tmp
+        if not os.path.exists(tmp):
+            raise FileNotFoundError(f"encoder produced no output file for {final_path}")
+        replace_with_retry(tmp, final_path)
+    finally:
+        with contextlib.suppress(OSError):
+            if os.path.exists(tmp):
+                os.remove(tmp)
 
 
 def ffmpeg_concat_line(path: str) -> str:

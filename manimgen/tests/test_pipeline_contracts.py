@@ -21,6 +21,13 @@ from manimgen.planner.segmenter import CueSegment, compute_segments
 from manimgen.renderer.audio_slicer import slice_audio
 
 
+
+def _touch_output(cmd):
+    """Simulate ffmpeg writing its output (the muxer publishes it atomically)."""
+    with open(cmd[-1], "wb") as f:
+        f.write(b"x")
+
+
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
@@ -263,6 +270,7 @@ class TestMuxerDurationContract:
         calls = []
 
         def fake_run(cmd, **kwargs):
+            _touch_output(cmd)
             calls.append(cmd)
             m = MagicMock()
             m.returncode = 0
@@ -295,6 +303,7 @@ class TestMuxerDurationContract:
         calls = []
 
         def fake_run(cmd, **kwargs):
+            _touch_output(cmd)
             calls.append(cmd)
             m = MagicMock()
             m.returncode = 0

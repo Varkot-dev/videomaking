@@ -18,7 +18,8 @@ import os
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from manimgen.utils import safe_probe_duration
+from manimgen import paths
+from manimgen.utils import atomic_output, safe_probe_duration
 
 logger = logging.getLogger(__name__)
 
@@ -328,22 +329,36 @@ _FFMPEG_TIMEOUT_SECONDS = 300
 
 
 def _run(cmd: list[str], output_path: str) -> None:
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=_FFMPEG_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(
-            f"[muxer] ffmpeg timed out after {_FFMPEG_TIMEOUT_SECONDS}s "
-            f"for {output_path}"
-        )
-    if result.returncode != 0:
-        raise RuntimeError(f"[muxer] ffmpeg failed for {output_path}:\n{result.stderr}")
+    """Run ffmpeg (``output_path`` must be the last argv entry) atomically.
+
+    ffmpeg writes to a temp file that replaces ``output_path`` only on exit
+    code 0 with output present, so a timeout, kill or failure never leaves a
+    partial file at the final path (#76).
+    """
+    assert cmd[-1] == output_path
+    with atomic_output(output_path) as tmp:
+        try:
+            result = subprocess.run(
+                [*cmd[:-1], tmp],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=_FFMPEG_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                f"[muxer] ffmpeg timed out after {_FFMPEG_TIMEOUT_SECONDS}s "
+                f"for {output_path}"
+            )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"[muxer] ffmpeg failed for {output_path}:\n{result.stderr}"
+            )
+        if not os.path.exists(tmp):
+            raise RuntimeError(
+                f"[muxer] ffmpeg exited 0 but wrote no output for {output_path}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -354,8 +369,6 @@ _MAX_PARALLEL_CUTS = min(4, (os.cpu_count() or 1))
 
 
 def _cut_one(video_path: str, start: float, dur: float, out_path: str, i: int) -> str:
-    from manimgen import paths as _paths
-
     cmd = [
         "ffmpeg",
         "-y",
@@ -374,31 +387,35 @@ def _cut_one(video_path: str, start: float, dur: float, out_path: str, i: int) -
         "-pix_fmt",
         "yuv420p",
         "-r",
-        str(_paths.render_fps()),
+        str(paths.render_fps()),
         "-an",
-        out_path,
     ]
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=_FFMPEG_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        logger.error(
-            "[cutter] FFmpeg timed out after %ds for cue %d",
-            _FFMPEG_TIMEOUT_SECONDS,
-            i,
-        )
-        raise RuntimeError(
-            f"cutter timed out after {_FFMPEG_TIMEOUT_SECONDS}s for cue {i}"
-        )
-    if result.returncode != 0:
-        logger.error("[cutter] FFmpeg failed for cue %d: %s", i, result.stderr[-500:])
-        raise RuntimeError(f"cutter failed for cue {i}: {result.stderr[-200:]}")
+    with atomic_output(out_path) as tmp:
+        try:
+            result = subprocess.run(
+                [*cmd, tmp],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=_FFMPEG_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            logger.error(
+                "[cutter] FFmpeg timed out after %ds for cue %d",
+                _FFMPEG_TIMEOUT_SECONDS,
+                i,
+            )
+            raise RuntimeError(
+                f"cutter timed out after {_FFMPEG_TIMEOUT_SECONDS}s for cue {i}"
+            )
+        if result.returncode != 0:
+            logger.error(
+                "[cutter] FFmpeg failed for cue %d: %s", i, result.stderr[-500:]
+            )
+            raise RuntimeError(f"cutter failed for cue {i}: {result.stderr[-200:]}")
+        if not os.path.exists(tmp):
+            raise RuntimeError(f"cutter produced no output for cue {i}")
     logger.info(
         "[cutter] Cut cue %d: %.2f–%.2f → %s",
         i,

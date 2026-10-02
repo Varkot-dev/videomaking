@@ -178,3 +178,14 @@ def test_assemble_video_injects_silent_audio_for_video_only_clip(small_render):
     out = assembler.assemble_video([with_audio, video_only], "mixed")
     assert sorted(_kinds(_probe(out))) == ["audio", "video"]
     assert _duration(out) == pytest.approx(2.0, abs=_TOL)
+
+
+def test_real_mux_replaces_existing_clip_and_leaves_no_temp(tmp_path):
+    video = _make_video(tmp_path / "v.mp4", 1)
+    audio = _make_audio(tmp_path / "a.m4a", 1)
+    out_dir = tmp_path / "muxed"
+    out_dir.mkdir()
+    (out_dir / "m.mp4").write_bytes(b"stale")
+    muxer.mux_audio_video(video, audio, str(out_dir / "m.mp4"))
+    assert [p.name for p in out_dir.iterdir()] == ["m.mp4"]
+    assert sorted(_kinds(_probe(out_dir / "m.mp4"))) == ["audio", "video"]
