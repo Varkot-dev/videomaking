@@ -151,6 +151,10 @@ def _resolves(rel: str) -> bool:
     """
     if (REPO_ROOT / rel).exists():
         return True
+    # Git-root-relative: the README GitHub renders links `manimgen/docs/X.md`
+    # from the repository root, and that is what a visitor's click resolves.
+    if (GIT_ROOT / rel).exists():
+        return True
     # Package-relative: `validator/retry.py` -> `manimgen/validator/retry.py`
     if (REPO_ROOT / "manimgen" / rel).exists():
         return True
