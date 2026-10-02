@@ -33,6 +33,10 @@ def _fix_font_size_to_scale(code: str) -> tuple[str, list[str]]:
     return new, applied
 
 
+# The one banned pattern whose match text lives inside a string literal, so it is
+# scanned with strings kept (comments are still removed).
+_TEX_TEXT_WRAPPER_PATTERN = r"""Tex\(\s*r?['"]\s*\\text\{[^}]*\}\s*['"]\s*[,)]"""
+
 _BANNED_PATTERNS: list[tuple[str, str]] = [
     (
         r"\bfrom\s+manim\s+import\s+\*",
@@ -91,29 +95,9 @@ _BANNED_PATTERNS: list[tuple[str, str]] = [
         "self.play(ShowCreation(SurroundingRectangle(...))).",
     ),
     (
-        r"""Tex\(\s*r?['"]\s*\\text\{[^}]*\}\s*['"]\s*[,)]""",
+        _TEX_TEXT_WRAPPER_PATTERN,
         r"Remove outer \text{} wrapper from Tex(): use Tex(r'content') not Tex(r'\text{content}'). "
         r"\text{} inside a longer expression like Tex(r'f(x) = \text{label}') is fine.",
-    ),
-    (
-        # Tuple-swap on VGroup-style names: boxes[i], boxes[j] = boxes[j], boxes[i]
-        # Only matches known VGroup-style plural names. Excludes _list suffix (safe parallel lists).
-        r"\b(boxes|labels|cells|group|vgroup|mobs|mobjects|elems|elements|shapes|squares|circles|arrows)\b(?!_list)"
-        r"\[.+?\]\s*,\s*"
-        r"(boxes|labels|cells|group|vgroup|mobs|mobjects|elems|elements|shapes|squares|circles|arrows)\b(?!_list)"
-        r"\[.+?\]\s*=(?!=)",
-        "VGroup does not support item assignment. "
-        "Use a parallel Python list: box_list = list(boxes), then swap box_list[i], box_list[j]. "
-        "Never assign into the VGroup directly.",
-    ),
-    (
-        # Single-assign on VGroup-style name: boxes[i] = new_mob
-        # Excludes _list suffix names.
-        r"\b(boxes|labels|cells|group|vgroup|mobs|mobjects|elems|elements|shapes|squares|circles|arrows)\b(?!_list)"
-        r"\[.+?\]\s*=(?!=)\s*\S",
-        "VGroup does not support item assignment. "
-        "Use a parallel Python list: box_list = list(boxes). "
-        "Never assign into the VGroup directly.",
     ),
     (
         r"\bself\.set_camera_orientation\s*\(",
@@ -133,6 +117,172 @@ _BANNED_PATTERNS: list[tuple[str, str]] = [
         "or .next_to(), or use get_part_by_tex(r'\\symbol') if the symbol is a single token.",
     ),
 ]
+
+# VGroup-style names the item-assignment ban applies to. The ban is decided by the
+# AST (_vgroup_item_assignment_errors), not by a regex on the spelling alone.
+_VGROUP_STYLE_NAMES = frozenset(
+    {
+        "boxes",
+        "labels",
+        "cells",
+        "group",
+        "vgroup",
+        "mobs",
+        "mobjects",
+        "elems",
+        "elements",
+        "shapes",
+        "squares",
+        "circles",
+        "arrows",
+    }
+)
+
+_VGROUP_ASSIGN_MESSAGE = (
+    "VGroup does not support item assignment. "
+    "Use a parallel Python list: box_list = list(boxes), then swap box_list[i], box_list[j]. "
+    "Never assign into the VGroup directly."
+)
+
+
+def _blank_spans(code: str, strings: bool) -> str:
+    """Return code with comments (and, if `strings`, string literals) blanked out.
+
+    Blanked characters become spaces and newlines are kept, so line numbers do not
+    move. Falls back to the raw source when it cannot be tokenized; the SyntaxError
+    itself is reported separately by validate_scene_code.
+    """
+    import io
+    import tokenize
+
+    fstring_start = getattr(tokenize, "FSTRING_START", None)
+    fstring_end = getattr(tokenize, "FSTRING_END", None)
+    offsets = [0]
+    for line in code.split("\n"):
+        offsets.append(offsets[-1] + len(line) + 1)
+
+    def _off(pos: tuple[int, int]) -> int:
+        return offsets[pos[0] - 1] + pos[1]
+
+    spans: list[tuple[int, int]] = []
+    open_fstring: tuple[int, int] | None = None
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(code).readline):
+            # Python 3.12+ splits an f-string into FSTRING_START ... FSTRING_END.
+            if fstring_start is not None and tok.type == fstring_start:
+                open_fstring = tok.start
+            elif fstring_end is not None and tok.type == fstring_end:
+                if strings and open_fstring is not None:
+                    spans.append((_off(open_fstring), _off(tok.end)))
+                open_fstring = None
+            elif open_fstring is None and (
+                tok.type == tokenize.COMMENT
+                or (strings and tok.type == tokenize.STRING)
+            ):
+                spans.append((_off(tok.start), _off(tok.end)))
+    except (tokenize.TokenError, SyntaxError):
+        return code
+
+    out = list(code)
+    for start, end in spans:
+        for k in range(start, min(end, len(out))):
+            if out[k] != "\n":
+                out[k] = " "
+    return "".join(out)
+
+
+def _is_plain_list_value(node: ast.AST | None) -> bool:
+    """True for an expression that certainly evaluates to a plain Python list."""
+    if isinstance(node, (ast.List, ast.ListComp)):
+        return True
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mult)):
+        return _is_plain_list_value(node.left) or _is_plain_list_value(node.right)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        return node.func.id in ("list", "sorted")
+    return False
+
+
+def _binding_key(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def _vgroup_item_assignment_errors(code: str) -> list[str]:
+    """Flag item assignment into a VGroup-style name unless it is provably a list.
+
+    `elements = [5, 3, 8, 1]` followed by a swap is plain Python and must pass; the
+    old regex banned the spelling of the name whatever it held. A name counts as a
+    plain list only when every binding of it in the file is a list literal,
+    comprehension or list(...). Parameters, VGroup(...) and anything else keep the
+    ban, because the file cannot prove the value supports item assignment.
+    """
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return []  # reported by the compile() check
+
+    bound: set[str] = set()
+    non_list: set[str] = set()
+
+    def _bind(target: ast.AST, value: ast.AST | None) -> None:
+        if isinstance(target, (ast.Tuple, ast.List)):
+            for elt in target.elts:
+                _bind(elt, None)
+            return
+        if isinstance(target, ast.Starred):
+            _bind(target.value, None)
+            return
+        key = _binding_key(target)
+        if key is None:
+            return
+        bound.add(key)
+        if not _is_plain_list_value(value):
+            non_list.add(key)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                _bind(target, node.value)
+        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)):
+            _bind(node.target, getattr(node, "value", None))
+        elif isinstance(
+            node, (ast.AugAssign, ast.For, ast.AsyncFor, ast.comprehension)
+        ):
+            _bind(node.target, None)
+        elif isinstance(node, ast.withitem) and node.optional_vars is not None:
+            _bind(node.optional_vars, None)
+        elif isinstance(node, ast.arg):
+            bound.add(node.arg)
+            non_list.add(node.arg)
+
+    def _item_targets(target: ast.AST):
+        if isinstance(target, (ast.Tuple, ast.List)):
+            for elt in target.elts:
+                yield from _item_targets(elt)
+        elif isinstance(target, ast.Starred):
+            yield from _item_targets(target.value)
+        elif isinstance(target, ast.Subscript):
+            yield target
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            for sub in _item_targets(target):
+                root = sub
+                while isinstance(root, ast.Subscript):
+                    root = root.value
+                key = _binding_key(root)
+                if key not in _VGROUP_STYLE_NAMES:
+                    continue
+                if key in bound and key not in non_list:
+                    continue
+                return [_VGROUP_ASSIGN_MESSAGE]
+    return []
+
 
 _BANNED_KWARGS = [
     "tip_length",
@@ -1046,9 +1196,16 @@ def validate_scene_code(code: str) -> list[str]:
     except SyntaxError as exc:
         errors.append(f"SyntaxError: {exc.msg} (line {exc.lineno})")
 
+    # Scan code, not prose: a comment or docstring that mentions a banned API
+    # ("# avoid boxes[i] = x") must not block a render.
+    code_only = _blank_spans(code, strings=True)
+    no_comments = _blank_spans(code, strings=False)
     for pattern, message in _BANNED_PATTERNS:
-        if re.search(pattern, code):
+        view = no_comments if pattern == _TEX_TEXT_WRAPPER_PATTERN else code_only
+        if re.search(pattern, view):
             errors.append(message)
+
+    errors.extend(_vgroup_item_assignment_errors(code))
 
     errors.extend(_detect_tmt_on_text(code))
 

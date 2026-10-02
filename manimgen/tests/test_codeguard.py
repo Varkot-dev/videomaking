@@ -8,6 +8,7 @@ error-aware repair path. Zero LLM calls, zero subprocess calls.
 from manimgen.validator.codeguard import (
     apply_known_fixes,
     apply_error_aware_fixes,
+    precheck_and_autofix,
     validate_scene_code,
     _fix_color_gradient_int_cast,
     _remove_font_kwarg_from_tex,
@@ -655,6 +656,135 @@ class TestVGroupItemAssignmentBan:
         fixed, applied = apply_known_fixes(code)
         assert fixed == code
         assert applied == []
+
+
+class TestBannedPatternsIgnoreCommentsAndStrings:
+    """Render-blocking bans run on code, not on comments, docstrings or strings (R13)."""
+
+    def test_comment_mentioning_banned_text_passes(self):
+        assert validate_scene_code("# avoid boxes[i] = new_box\nx = 1\n") == []
+
+    def test_trailing_comment_passes(self):
+        assert validate_scene_code("x = 1  # not MathTex(...) or Create(c)\n") == []
+
+    def test_docstring_mentioning_banned_text_passes(self):
+        code = (
+            "def f():\n"
+            '    """Never call add_fixed_in_frame_mobjects(x) or self.camera.frame."""\n'
+            "    return 1\n"
+        )
+        assert validate_scene_code(code) == []
+
+    def test_multiline_docstring_passes(self):
+        code = 'DOC = """\nline one\nCircumscribe(obj) and boxes[0] = 1\n"""\n'
+        assert validate_scene_code(code) == []
+
+    def test_string_literal_with_banned_text_passes(self):
+        assert validate_scene_code("note = 'use Create(c) here'\n") == []
+
+    def test_fstring_with_banned_text_passes(self):
+        assert validate_scene_code("n = 2\nnote = f'{n} MathTex(x)'\n") == []
+
+    def test_real_violation_after_a_comment_line_still_flagged(self):
+        errors = validate_scene_code("# fine\nCreate(circle)\n")
+        assert any("ShowCreation" in e for e in errors)
+
+    def test_real_violation_before_trailing_comment_still_flagged(self):
+        errors = validate_scene_code("Create(circle)  # why\n")
+        assert any("ShowCreation" in e for e in errors)
+
+    def test_string_then_violation_on_same_line_still_flagged(self):
+        errors = validate_scene_code("x = 'a'; Create(c)\n")
+        assert any("ShowCreation" in e for e in errors)
+
+    def test_tex_text_wrapper_inside_string_arg_still_flagged(self):
+        # This ban reads string content by design, so it must keep firing.
+        errors = validate_scene_code("t = Tex(r'\\text{hello}')\n")
+        assert any("text{}" in e for e in errors)
+
+    def test_every_example_scene_passes_validation(self):
+        # parametric_surface_scene.py names add_fixed_in_frame_mobjects() in its docstring.
+        import glob
+        import os
+
+        examples = os.path.join(os.path.dirname(__file__), "..", "examples", "*.py")
+        for path in sorted(glob.glob(examples)):
+            with open(path, encoding="utf-8") as f:
+                code = f.read()
+            fixed = precheck_and_autofix(code)
+            assert validate_scene_code(fixed) == [], os.path.basename(path)
+
+    def test_unparseable_source_falls_back_to_raw_scan(self):
+        errors = validate_scene_code("def f(:\n    Create(c)\n")
+        assert any("SyntaxError" in e for e in errors)
+        assert any("ShowCreation" in e for e in errors)
+
+
+class TestVGroupAssignmentAstCheck:
+    """VGroup item-assignment ban keys on what the name holds, not on its spelling (R13)."""
+
+    def _flagged(self, code):
+        return any("item assignment" in e for e in validate_scene_code(code))
+
+    def test_plain_int_list_swap_not_flagged(self):
+        code = (
+            "elements = [5, 3, 8, 1]\n"
+            "i, j = 0, 1\n"
+            "elements[i], elements[j] = elements[j], elements[i]\n"
+        )
+        assert not self._flagged(code)
+
+    def test_list_comprehension_assign_not_flagged(self):
+        code = "boxes = [Square() for _ in range(3)]\nboxes[0] = Circle()\n"
+        assert not self._flagged(code)
+
+    def test_list_call_and_repeat_not_flagged(self):
+        assert not self._flagged("cells = list(group)\ncells[0] = 1\n")
+        assert not self._flagged("cells = [0] * 4\ncells[0] = 1\n")
+
+    def test_annotated_list_not_flagged(self):
+        assert not self._flagged("labels: list = []\nlabels[0] = 1\n")
+
+    def test_list_of_lists_nested_assign_not_flagged(self):
+        assert not self._flagged(
+            "cells = [[0] * 3 for _ in range(3)]\ncells[1][2] = 5\n"
+        )
+
+    def test_vgroup_name_swap_flagged(self):
+        code = (
+            "boxes = VGroup(*[Square() for _ in range(4)])\n"
+            "boxes[0], boxes[1] = boxes[1], boxes[0]\n"
+        )
+        assert self._flagged(code)
+
+    def test_vgroup_single_assign_flagged(self):
+        assert self._flagged("boxes = VGroup(Square())\nboxes[0] = Square()\n")
+
+    def test_mobject_constructor_binding_flagged(self):
+        assert self._flagged("shapes = Group(Square())\nshapes[0] = Circle()\n")
+
+    def test_unbound_name_still_flagged(self):
+        # Parameter / helper result: cannot prove it is a plain list.
+        assert self._flagged("def f(boxes):\n    boxes[0] = Square()\n")
+
+    def test_name_rebound_to_vgroup_after_list_flagged(self):
+        code = "boxes = []\nboxes = VGroup(Square())\nboxes[0] = Circle()\n"
+        assert self._flagged(code)
+
+    def test_attribute_target_follows_the_same_rule(self):
+        assert self._flagged("self.boxes = VGroup(Square())\nself.boxes[0] = 1\n")
+        assert not self._flagged("self.boxes = []\nself.boxes[0] = 1\n")
+
+    def test_names_outside_the_banned_set_not_flagged(self):
+        assert not self._flagged("items = VGroup(Square())\nitems[0] = 1\n")
+
+    def test_suffix_list_names_not_flagged(self):
+        assert not self._flagged("boxes_list = VGroup()\nboxes_list[0] = 1\n")
+
+    def test_read_and_comparison_not_flagged(self):
+        assert not self._flagged(
+            "boxes = VGroup(Square())\nx = boxes[0]\nok = boxes[0] == x\n"
+        )
 
 
 # ── font_size= on Tex() — not double-scaled ───────────────────────────────────
