@@ -47,7 +47,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-DEFAULT_EXAMPLES = _REPO_ROOT / "examples"
+DEFAULT_EXAMPLES = _REPO_ROOT / "manimgen" / "examples"
 _COMPILE_PENALTY = 1000
 
 # Valid manimlib names that Codeguard rules emit but no example happens to use.

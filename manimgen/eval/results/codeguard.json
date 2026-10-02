@@ -523,8 +523,8 @@
       }
     ],
     "examples": {
-      "total": 32,
-      "passed": 30,
+      "total": 31,
+      "passed": 29,
       "changed": 31,
       "total_damage": 61,
       "stmts_removed": 59,
@@ -949,8 +949,7 @@
       "defect_cleared": false,
       "validation_clean": false,
       "validation_errors": [
-        "VGroup does not support item assignment. Use a parallel Python list: box_list = list(boxes), then swap box_list[i], box_list[j]. Never assign into the VGroup directly.",
-        "VGroup does not support item assignment. Use a parallel Python list: box_list = list(boxes). Never assign into the VGroup directly."
+        "VGroup does not support item assignment. Use a parallel Python list: box_list = list(boxes), then swap box_list[i], box_list[j]. Never assign into the VGroup directly."
       ],
       "rules_fired": [],
       "unresolved_reason": "defect remains and validation still fails"
@@ -1885,21 +1884,6 @@
       "changed": true,
       "passes": true,
       "damage": 1,
-      "detail": ""
-    },
-    {
-      "example": "threed_smoke_test.py",
-      "input_compiles": true,
-      "compiles": true,
-      "defs_kept": true,
-      "play_wait_kept": true,
-      "new_undefined": [],
-      "animations_dropped": 0,
-      "stmts_removed": 0,
-      "stmts_added": 0,
-      "changed": false,
-      "passes": true,
-      "damage": 0,
       "detail": ""
     },
     {
