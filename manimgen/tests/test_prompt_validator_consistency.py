@@ -171,3 +171,19 @@ def test_director_scale_factor_guidance_matches_validator():
     text = _text(DIRECTOR)
     assert not re.search(r"Fade(?:In|Out)\([^)\n]*scale_factor", text)
     assert codeguard._BANNED_KWARGS["scale_factor"] == frozenset({"FadeIn", "FadeOut"})
+
+
+def test_director_does_not_teach_become_then_showcreation():
+    """Codeguard rewrites self.play(x.become(..)) to .animate.become(..); the prompt must
+    teach that form, not 'call become() first, then ShowCreation' (snaps, then re-draws)."""
+    text = _text(DIRECTOR)
+    assert not re.search(r"become\([^\n]*BEFORE self\.play", text)
+    assert "call become() first" not in text
+    # No code line may be a bare become() statement followed by a ShowCreation of the same name.
+    assert not re.search(
+        r"^\s*(\w+)\.become\([^\n]*\)\s*\n\s*self\.play\(ShowCreation\(\1\)", text, re.M
+    )
+    # The taught form is the one codeguard produces.
+    assert "self.play(scan_rect.animate.become(" in text
+    fixed, applied = codeguard._fix_become_inside_play("self.play(r.become(Square()))\n")
+    assert ".animate.become(" in fixed and applied
