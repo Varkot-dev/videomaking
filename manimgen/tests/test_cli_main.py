@@ -16,6 +16,7 @@ import re
 import pytest
 
 from manimgen import cli, paths
+from manimgen.types import SectionOutcome, SectionStatus
 
 _SETUP = os.path.join(os.path.dirname(__file__), "..", "setup.py")
 
@@ -42,6 +43,8 @@ def env(tmp_path, monkeypatch):
     logs = str(tmp_path / "logs")
     monkeypatch.setattr(cli, "_PLAN_CACHE", plan_path)
     monkeypatch.setitem(paths._PATHS, "logs", logs)
+    # run_manifest.json lands in the videos folder when no video was produced.
+    monkeypatch.setitem(paths._PATHS, "videos", str(tmp_path / "videos"))
     monkeypatch.setattr(cli, "_load_config", lambda: {})
     calls = {"plan_lesson": 0, "plan_pdf": 0}
 
@@ -55,7 +58,11 @@ def env(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cli, "plan_lesson", fake_plan_lesson)
     monkeypatch.setattr(cli, "plan_lesson_from_pdf", fake_plan_pdf)
-    monkeypatch.setattr(cli, "_run_section", lambda *a, **k: ["clip.mp4"])
+    monkeypatch.setattr(
+        cli,
+        "_run_section",
+        lambda *a, **k: SectionOutcome(SectionStatus.OK, ["clip.mp4"]),
+    )
     out = str(tmp_path / "final.mp4")
     with open(out, "wb") as f:
         f.write(b"x")
@@ -125,7 +132,11 @@ class TestLogging:
         assert not os.path.exists(env["logs"])
 
     def test_no_video_produced_exits_nonzero(self, env, monkeypatch, capsys):
-        monkeypatch.setattr(cli, "_run_section", lambda *a, **k: [])
+        monkeypatch.setattr(
+            cli,
+            "_run_section",
+            lambda *a, **k: SectionOutcome(SectionStatus.DROPPED, [], "no video"),
+        )
         with pytest.raises(SystemExit) as e:
             _run(monkeypatch, "bubble sort")
         assert e.value.code == 1
@@ -163,7 +174,7 @@ class TestResume:
 
         def fake_run_section(s, i, t, th, **k):
             seen["hash"] = th
-            return ["c.mp4"]
+            return SectionOutcome(SectionStatus.OK, ["c.mp4"])
 
         monkeypatch.setattr(cli, "_run_section", fake_run_section)
         _run(monkeypatch, "bubble sort", "--resume")
@@ -239,3 +250,40 @@ class TestResume:
             saved = json.load(f)
         assert saved["_topic_hash"] == cli._topic_hash("bubble sort")
         assert os.listdir(os.path.dirname(env["plan_path"])) == ["plan.json"]
+
+
+# --- #71: exit codes from the console entry point ---------------------------
+
+
+class TestExitCodes:
+    def test_degraded_section_exits_3_after_shipping(self, env, monkeypatch, capsys):
+        monkeypatch.setattr(
+            cli,
+            "_run_section",
+            lambda *a, **k: SectionOutcome(
+                SectionStatus.FALLBACK, ["clip.mp4"], "render failed"
+            ),
+        )
+        with pytest.raises(SystemExit) as e:
+            _run(monkeypatch, "bubble sort")
+        assert e.value.code == 3
+        out = capsys.readouterr().out
+        assert "Done: " + env["out"] in out
+        assert "fallback" in out and "render failed" in out
+
+    def test_accepted_with_defects_exits_0(self, env, monkeypatch, capsys):
+        monkeypatch.setattr(
+            cli,
+            "_run_section",
+            lambda *a, **k: SectionOutcome(
+                SectionStatus.ACCEPTED_WITH_DEFECTS, ["clip.mp4"], "freeze tail"
+            ),
+        )
+        _run(monkeypatch, "bubble sort")
+        out = capsys.readouterr().out
+        assert "accepted_with_defects" in out and "freeze tail" in out
+        manifest = os.path.join(os.path.dirname(env["out"]), "run_manifest.json")
+        with open(manifest, encoding="utf-8") as f:
+            data = json.load(f)
+        assert data["exit_code"] == 0
+        assert data["sections"][0]["status"] == "accepted_with_defects"

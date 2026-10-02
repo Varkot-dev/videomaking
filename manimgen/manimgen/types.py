@@ -1,5 +1,5 @@
 import enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -61,3 +61,62 @@ class CueMuxResult:
     @property
     def ok(self) -> bool:
         return self.status in (MuxStatus.SUCCESS, MuxStatus.RETRIED_OK)
+
+
+class SectionStatus(str, enum.Enum):
+    """What happened to one section of a run (#71).
+
+    Every section of a run ends in exactly one of these, recorded in the run
+    summary and in run_manifest.json. A section served from the cache keeps the
+    status it had when it was built (stored in its .hash sidecar).
+    """
+
+    OK = "ok"  # rendered (first pass or after a repair) or cached, narrated
+    ACCEPTED_WITH_DEFECTS = "accepted_with_defects"  # shipped with known defects
+    FALLBACK = "fallback"  # the styled title card stands in for the animation
+    DROPPED = "dropped"  # nothing from this section is in the video
+    SILENT = "silent"  # in the video, but with no narration
+    ERRORED = "errored"  # an unexpected error stopped this section
+    NOT_RUN = "not_run"  # the run stopped before this section started
+
+    @property
+    def degraded(self) -> bool:
+        """True when the video is missing something the plan promised."""
+        return self in DEGRADED_STATUSES
+
+
+DEGRADED_STATUSES = frozenset(
+    {
+        SectionStatus.FALLBACK,
+        SectionStatus.DROPPED,
+        SectionStatus.SILENT,
+        SectionStatus.ERRORED,
+        SectionStatus.NOT_RUN,
+    }
+)
+
+
+@dataclass(frozen=True)
+class RenderResult:
+    """Output of the render seam (cli._render_with_retry).
+
+    ``status`` is OK, ACCEPTED_WITH_DEFECTS or FALLBACK when ``path`` is a
+    video, and DROPPED when not even the fallback rendered.
+    """
+
+    path: str | None
+    status: SectionStatus
+    reason: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.path is not None
+
+
+@dataclass
+class SectionOutcome:
+    """Result of one section: its status, why, and the clips it contributes."""
+
+    status: SectionStatus
+    clips: list[str] = field(default_factory=list)
+    reason: str = ""

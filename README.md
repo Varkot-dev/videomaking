@@ -441,6 +441,34 @@ On Windows PowerShell, set the variables with `$env:MANIMGEN_MAX_RETRY_LLM_CALLS
 
 Output: `manimgen/output/videos/<title>.mp4`
 
+### Run summary and exit codes
+
+At the end of every run `manimgen` prints a summary with one line per section
+and writes a run manifest next to the video,
+`manimgen/output/videos/run_manifest.json` (also when no video was produced).
+Each section ends in one of these states:
+
+| Status | Meaning |
+|---|---|
+| `ok` | Rendered and narrated (first pass, repaired by a retry, or reused from the cache) |
+| `accepted_with_defects` | In the video, but the retry loop accepted it with known defects (for example a freeze-frame tail) |
+| `fallback` | A title card stands in for the animation because the render and its retries failed |
+| `dropped` | Nothing from this section is in the video |
+| `silent` | In the video, but without narration |
+| `errored` | An unexpected error stopped this section |
+
+The exit code tells a script what happened without reading the log:
+
+| Code | Meaning |
+|---|---|
+| `0` | Every section is `ok` or `accepted_with_defects` (the latter are listed in the summary) |
+| `1` | Refused to run (for example a `--resume` mismatch) or no video was produced |
+| `2` | Bad command line arguments |
+| `3` | A video was produced, but a section is `fallback`, `dropped`, `silent` or `errored` |
+
+A cached section keeps the status it was built with, so a fallback card reused
+by `--resume` is still reported as `fallback`.
+
 ---
 
 ## Testing

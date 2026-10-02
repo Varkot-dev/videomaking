@@ -5,7 +5,7 @@ fast-path bypassed the timing freeze gate the codegen path ran. #31 decomposes
 it into three pure-ish seams without changing behavior:
 
   _generate_and_gate  → GateResult        (codegen + timing gate)
-  _render_with_retry  → (success, path)    (render + validate + retry + fallback)
+  _render_with_retry  → RenderResult       (render + validate + retry + fallback)
   _cut_and_mux        → [clip paths]       (cut + per-cue mux)
 
 These tests pin the contract that makes the cache-bypass fix real: a timing
@@ -19,7 +19,7 @@ Zero LLM calls, zero subprocess calls — every external call is monkeypatched.
 import logging
 
 from manimgen import cli
-from manimgen.types import GateResult
+from manimgen.types import GateResult, SectionStatus
 
 
 class TestGenerateAndGate:
@@ -86,12 +86,13 @@ class TestRenderWithRetrySkipsBlockedRender:
             timing_blocked=True,
         )
         log = logging.getLogger("test")
-        success, path = cli._render_with_retry({}, gate, [3.0], log)
+        result = cli._render_with_retry({}, gate, [3.0], log)
 
         assert calls["run_scene"] == 0  # expensive render skipped
         assert calls["retry"] == 1  # routed straight to retry
-        assert success is True
-        assert path == "/tmp/retried.mp4"
+        assert result.ok is True
+        assert result.path == "/tmp/retried.mp4"
+        assert result.status == SectionStatus.OK
 
     def test_not_blocked_runs_first_render(self, monkeypatch):
         calls = {"run_scene": 0, "retry": 0}
@@ -121,12 +122,13 @@ class TestRenderWithRetrySkipsBlockedRender:
         gate = GateResult(
             code="CODE", class_name="Demo", scene_path="/tmp/d.py", timing_blocked=False
         )
-        success, path = cli._render_with_retry({}, gate, [3.0], logging.getLogger("t"))
+        result = cli._render_with_retry({}, gate, [3.0], logging.getLogger("t"))
 
         assert calls["run_scene"] == 1
         assert calls["retry"] == 0  # clean render → no retry
-        assert success is True
-        assert path == "/tmp/v.mp4"
+        assert result.ok is True
+        assert result.path == "/tmp/v.mp4"
+        assert result.status == SectionStatus.OK
 
     def test_post_render_freeze_forces_retry(self, monkeypatch):
         """A real freeze on the first render routes into retry (cache-bypass fix
@@ -154,10 +156,10 @@ class TestRenderWithRetrySkipsBlockedRender:
         gate = GateResult(
             code="CODE", class_name="Demo", scene_path="/tmp/d.py", timing_blocked=False
         )
-        success, path = cli._render_with_retry({}, gate, [3.0], logging.getLogger("t"))
+        result = cli._render_with_retry({}, gate, [3.0], logging.getLogger("t"))
 
         assert calls["retry"] == 1
-        assert path == "/tmp/r.mp4"
+        assert result.path == "/tmp/r.mp4"
 
 
 class TestSharedFreezeSeam:
@@ -268,14 +270,16 @@ class TestPrecheckBlockedFirstDraft:
         assert calls["run_scene"] == 0, "the doomed first render must be skipped"
         assert calls["retry"] == 1
         assert calls["fallback"] == 0
-        assert out == ["/tmp/retried.mp4"]
+        assert out.clips == ["/tmp/retried.mp4"]
+        assert out.status == SectionStatus.OK
 
     def test_run_section_falls_back_when_retry_fails(self, monkeypatch, tmp_path):
         calls = self._wire(monkeypatch, tmp_path, _BLOCKED_DRAFT)
         monkeypatch.setattr(cli, "retry_scene", lambda *a, **k: (False, None))
         out = cli._run_section(dict(_SECTION), 1, False, "hash")
         assert calls["run_scene"] == 0
-        assert out == ["/tmp/fallback.mp4"]
+        assert out.clips == ["/tmp/fallback.mp4"]
+        assert out.status == SectionStatus.FALLBACK
 
     def test_clean_draft_renders_on_the_first_pass(self, monkeypatch, tmp_path):
         calls = self._wire(monkeypatch, tmp_path, _CLEAN_DRAFT)
@@ -292,7 +296,8 @@ class TestPrecheckBlockedFirstDraft:
         out = cli._run_section(dict(_SECTION), 1, False, "hash")
         assert calls["run_scene"] == 1
         assert calls["retry"] == 0
-        assert out == ["/tmp/first.mp4"]
+        assert out.clips == ["/tmp/first.mp4"]
+        assert out.status == SectionStatus.OK
 
     def test_real_retry_scene_gets_the_precheck_stderr_within_budget(
         self, monkeypatch, tmp_path
@@ -323,7 +328,8 @@ class TestPrecheckBlockedFirstDraft:
         out = cli._run_section(dict(_SECTION), 1, False, "hash")
 
         assert calls["run_scene"] == 0
-        assert out == ["/tmp/fallback.mp4"]
+        assert out.clips == ["/tmp/fallback.mp4"]
+        assert out.status == SectionStatus.FALLBACK
         assert prompts, "the LLM fix must run for a blocked draft"
         assert "item assignment" in prompts[0]
         assert len(prompts) <= retry.MAX_ERROR_LLM_FIX_CALLS
