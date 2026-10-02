@@ -3,6 +3,10 @@ import numpy as np
 
 
 class InteriorRevealScene(ThreeDScene):
+    """
+    techniques: 3d_surface
+    """
+
     def construct(self):
         self.frame.reorient(-20, 75)
 

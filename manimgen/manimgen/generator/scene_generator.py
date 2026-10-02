@@ -12,7 +12,7 @@ import math
 import os
 import re
 
-from manimgen import paths
+from manimgen import paths, techniques
 from manimgen.llm import chat
 from manimgen.utils import (
     load_reference_frames,
@@ -41,10 +41,8 @@ class ScenePrecheckError(ValueError):
 _WORDS_PER_MINUTE = 130
 _MAX_EXAMPLES = 6
 
-# Technique tags that require a 3D scene. A cue visual mentioning any of these
-# promotes the generated `class X(Scene)` to `class X(ThreeDScene)`. Built once
-# at module load — previously rebuilt on every generate_scenes() call.
-_3D_TECHNIQUES = frozenset({"3d_surface", "camera_rotation"})
+# 3D technique tags come from the shared registry (manimgen/techniques.py): a cue
+# visual mentioning any promotes the generated `class X(Scene)` to ThreeDScene.
 
 # Negation words that, when they directly precede a 3D tag, mean the tag is
 # being ruled out rather than requested ("no 3d_surface needed").
@@ -58,7 +56,7 @@ def _requests_3d(cue_visuals: str) -> bool:
     `\\b3d_surface\\b` matches the full tag and not a fragment of a longer
     word) and rejects matches immediately preceded by a negation word.
     """
-    for tag in _3D_TECHNIQUES:
+    for tag in sorted(techniques.THREE_D_TECHNIQUES):
         for m in re.finditer(rf"\b{re.escape(tag)}\b", cue_visuals):
             preceding = cue_visuals[: m.start()].rstrip().split()
             if preceding and preceding[-1] in _NEGATION_PREFIXES:
