@@ -63,16 +63,18 @@ def test_output_paths_ignore_working_directory(tmp_path):
 def test_relative_output_resolves_against_config_folder(cfgmod, monkeypatch, tmp_path):
     sub = tmp_path / "proj"
     sub.mkdir()
+    # A genuinely absolute path on every OS ("/abs/..." has no drive on Windows).
+    absolute = tmp_path / "abs" / "scenes"
     _use(
         cfgmod,
         monkeypatch,
         sub,
-        "output:\n  plan_cache: out/plan.json\n  scenes_dir: /abs/scenes\n",
+        f'output:\n  plan_cache: out/plan.json\n  scenes_dir: "{absolute.as_posix()}"\n',
     )
     monkeypatch.chdir(tmp_path)
     out = cfgmod.section("output")
     assert Path(out["plan_cache"]) == sub / "out" / "plan.json"
-    assert Path(out["scenes_dir"]) == Path("/abs/scenes")
+    assert Path(out["scenes_dir"]) == absolute
 
 
 # -- failures are clear errors, never silent defaults ---------------------------

@@ -635,6 +635,12 @@ def _describe_pid(pid: int) -> str:
 
 
 def _pid_alive(pid: int) -> bool:
+    """True while ``pid`` is a running (non-zombie) process.
+
+    A killed process is briefly a zombie until its new parent reaps it, so the
+    /proc entry can vanish between the existence check and the read. That is
+    "gone", not "alive": GitHub's Linux runner hit exactly this race.
+    """
     if os.name == "nt":
         out = subprocess.run(
             ["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True
@@ -645,13 +651,30 @@ def _pid_alive(pid: int) -> bool:
     except ProcessLookupError:
         return False
     except PermissionError:
-        return True
-    # A killed child of a dead parent can linger as a zombie until reaped.
+        pass
+    state = None
     try:
         with open(f"/proc/{pid}/stat", encoding="utf-8") as f:
-            return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+            state = f.read().rsplit(")", 1)[1].split()[0]
+    except FileNotFoundError:
+        return False
     except OSError:
-        return True
+        pass
+    if state is None:
+        # /proc not readable here: ask ps; no output means the process is gone.
+        try:
+            out = subprocess.run(
+                ["ps", "-o", "stat=", "-p", str(pid)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return True
+        if not out:
+            return False
+        state = out[0]
+    return state not in ("Z", "X")
 
 
 def _limit_event(
