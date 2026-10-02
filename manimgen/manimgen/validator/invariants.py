@@ -216,7 +216,9 @@ def _I2_corner_title(code: str) -> list[str]:
         if re.search(r"\b\w*title\w*\b", line, re.IGNORECASE):
             warnings.append(
                 "I2: title placed with .to_corner() — titles must use .to_edge(UP, buff=0.8). "
-                "For split-screen, use .to_edge(UP, buff=0.8).shift(LEFT*3.2) / .shift(RIGHT*3.2)."
+                "For split-screen keep that ONE title and label each "
+                "panel below it with .next_to(panel, UP, buff=0.2); panel labels never go "
+                "in the title zone."
             )
             break
     return warnings
