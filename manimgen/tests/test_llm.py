@@ -17,14 +17,15 @@ import pytest
 
 import manimgen.llm as llm_mod
 from manimgen.llm import (
-    _gemini,
+    _REQUEST_RETRY_ATTEMPTS,
+    _REQUEST_TIMEOUT_SECONDS,
+    PaidApiBlockedError,
     _anthropic,
     _claude_cli,
-    _strip_json_fence,
+    _gemini,
     _resolve_provider,
+    _strip_json_fence,
     chat,
-    _REQUEST_TIMEOUT_SECONDS,
-    _REQUEST_RETRY_ATTEMPTS,
 )
 
 
@@ -111,6 +112,7 @@ class TestGeminiJsonMode:
         """chat(json_mode=True) must thread through to the Gemini provider."""
         monkeypatch.setenv("GEMINI_API_KEY", "fake-key-for-test")
         monkeypatch.setenv("LLM_PROVIDER", "gemini")
+        monkeypatch.setenv("MANIMGEN_ALLOW_PAID_API", "1")
         with patch("manimgen.llm._gemini", return_value="{}") as mock_gemini:
             chat(system="sys", user="user", json_mode=True)
         assert mock_gemini.call_args.kwargs.get("json_mode") is True, (
@@ -387,3 +389,75 @@ class TestClaudeCli:
         with patch.object(llm_mod.subprocess, "run", return_value=bad):
             with pytest.raises(RuntimeError, match="/login"):
                 _claude_cli(system="s", user="u", images=[])
+
+
+def _init_line(api_key_source="none"):
+    return json.dumps(
+        {"type": "system", "subtype": "init", "apiKeySource": api_key_source}
+    )
+
+
+class TestNoPaidApiGuard:
+    """Per-token billing must be impossible unless explicitly allowed."""
+
+    @pytest.fixture(autouse=True)
+    def _paid_not_allowed(self, monkeypatch):
+        monkeypatch.delenv("MANIMGEN_ALLOW_PAID_API", raising=False)
+        monkeypatch.setattr(
+            llm_mod.shutil, "which", lambda name: f"/fake/bin/{name}"
+        )
+
+    @pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+    def test_paid_provider_blocked_before_any_call(self, monkeypatch, provider):
+        monkeypatch.setenv("LLM_PROVIDER", provider)
+        with (
+            patch("manimgen.llm._anthropic") as a,
+            patch("manimgen.llm._gemini") as g,
+        ):
+            with pytest.raises(PaidApiBlockedError, match="MANIMGEN_ALLOW_PAID_API"):
+                chat(system="s", user="u")
+        a.assert_not_called()
+        g.assert_not_called()
+
+    @pytest.mark.parametrize("value", ["1", "true", "YES"])
+    def test_paid_provider_allowed_with_opt_in(self, monkeypatch, value):
+        monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+        monkeypatch.setenv("MANIMGEN_ALLOW_PAID_API", value)
+        with patch("manimgen.llm._anthropic", return_value="ok"):
+            assert chat(system="s", user="u") == "ok"
+
+    @pytest.mark.parametrize("provider", ["claude_cli", "ollama"])
+    def test_free_providers_not_blocked(self, monkeypatch, provider):
+        monkeypatch.setenv("LLM_PROVIDER", provider)
+        with (
+            patch("manimgen.llm._claude_cli", return_value="ok"),
+            patch("manimgen.llm._ollama", return_value="ok"),
+        ):
+            assert chat(system="s", user="u") == "ok"
+
+    def test_cli_env_strips_every_paid_auth_var(self, monkeypatch):
+        for name in llm_mod._CLI_PAID_AUTH_VARS:
+            monkeypatch.setenv(name, "x")
+        env = llm_mod._claude_cli_env()
+        assert not (llm_mod._CLI_PAID_AUTH_VARS & env.keys())
+
+    def test_cli_subscription_login_accepted(self):
+        stdout = _init_line("none") + "\n" + _result_line("fine")
+        with patch.object(llm_mod.subprocess, "run", return_value=_completed(stdout)):
+            assert _claude_cli(system="s", user="u", images=[]) == "fine"
+
+    @pytest.mark.parametrize("source", ["ANTHROPIC_API_KEY", "apiKeyHelper"])
+    def test_cli_api_key_auth_refused_without_retry(self, source):
+        stdout = _init_line(source) + "\n" + _result_line("billed")
+        with patch.object(
+            llm_mod.subprocess, "run", return_value=_completed(stdout)
+        ) as run:
+            with pytest.raises(PaidApiBlockedError, match=source):
+                _claude_cli(system="s", user="u", images=[])
+        assert run.call_count == 1, "must stop at once, not retry a paid call"
+
+    def test_cli_api_key_auth_allowed_with_opt_in(self, monkeypatch):
+        monkeypatch.setenv("MANIMGEN_ALLOW_PAID_API", "1")
+        stdout = _init_line("apiKeyHelper") + "\n" + _result_line("ok")
+        with patch.object(llm_mod.subprocess, "run", return_value=_completed(stdout)):
+            assert _claude_cli(system="s", user="u", images=[]) == "ok"
