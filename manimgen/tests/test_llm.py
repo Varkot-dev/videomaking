@@ -727,3 +727,173 @@ class TestSuiteNeverLaunchesRealClaude:
             with pytest.raises(RuntimeError, match="not found on PATH"):
                 chat(system="s", user="u")
         run.assert_not_called()
+
+
+class TestClaudeCliEnvAllowlist:
+    """#94: the claude child gets an allowlisted environment, not a copy."""
+
+    # Everything Claude Code needs to start and keep the subscription login on
+    # Windows, macOS and Linux.
+    NEEDED = {
+        "PATH": "/usr/bin",
+        "PATHEXT": ".COM;.EXE;.CMD",
+        "HOME": "/data/user",
+        "USERPROFILE": r"C:\Users\u",
+        "APPDATA": r"C:\Users\u\AppData\Roaming",
+        "LOCALAPPDATA": r"C:\Users\u\AppData\Local",
+        "SYSTEMROOT": r"C:\Windows",
+        "COMSPEC": r"C:\Windows\system32\cmd.exe",
+        "TEMP": r"C:\Temp",
+        "TMP": r"C:\Temp",
+        "TMPDIR": "/tmp",
+        "LANG": "en_US.UTF-8",
+        "LC_ALL": "en_US.UTF-8",
+        "TERM": "xterm-256color",
+        "HTTPS_PROXY": "http://proxy:3128",
+        "HTTP_PROXY": "http://proxy:3128",
+        "NO_PROXY": "localhost",
+        "SSL_CERT_FILE": "/etc/ssl/ca.pem",
+        "NODE_EXTRA_CA_CERTS": "/etc/ssl/corp.pem",
+        "CLAUDE_CONFIG_DIR": "/data/claude-alt",
+        "CLAUDE_CODE_GIT_BASH_PATH": r"C:\Git\bin\bash.exe",
+        "CLAUDE_CODE_OAUTH_TOKEN": "subscription-token",
+        "XDG_CONFIG_HOME": "/data/xdg-config",
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
+    }
+    SECRETS = {
+        "GEMINI_API_KEY": "g",
+        "GOOGLE_API_KEY": "g2",
+        "GITHUB_TOKEN": "ghp_x",
+        "AWS_SECRET_ACCESS_KEY": "aws",
+        "OPENAI_API_KEY": "o",
+        "ANTHROPIC_BASE_URL": "https://billing.example",
+        "ANTHROPIC_CUSTOM_HEADERS": "x: y",
+        "ELEVENLABS_API_KEY": "e",
+        "CLAUDE_CODE_USE_MANTLE": "1",
+        "CLAUDE_CODE_SKIP_BEDROCK_AUTH": "1",
+    }
+
+    def _set_env(self, monkeypatch, values):
+        monkeypatch.setattr(os, "environ", dict(values))
+
+    def test_every_needed_variable_survives(self, monkeypatch):
+        self._set_env(monkeypatch, {**self.NEEDED, **self.SECRETS})
+        env = llm_mod._claude_cli_env()
+        for name, value in self.NEEDED.items():
+            assert env.get(name) == value, name
+
+    def test_unrelated_secrets_do_not_reach_the_child(self, monkeypatch):
+        self._set_env(monkeypatch, {**self.NEEDED, **self.SECRETS})
+        env = llm_mod._claude_cli_env()
+        for name in self.SECRETS:
+            assert name not in env, name
+
+    def test_paid_auth_and_parent_session_vars_still_stripped(self, monkeypatch):
+        values = {
+            name: "x"
+            for name in llm_mod._CLI_PAID_AUTH_VARS | llm_mod._CLI_PARENT_SESSION_VARS
+        }
+        self._set_env(monkeypatch, {**self.NEEDED, **values})
+        env = llm_mod._claude_cli_env()
+        assert not (
+            (llm_mod._CLI_PAID_AUTH_VARS | llm_mod._CLI_PARENT_SESSION_VARS)
+            & env.keys()
+        )
+        assert (
+            env["CLAUDE_CODE_GIT_BASH_PATH"] == self.NEEDED["CLAUDE_CODE_GIT_BASH_PATH"]
+        )
+
+    def test_names_match_case_insensitively(self, monkeypatch):
+        """POSIX proxy variables are usually lowercase; Windows names are mixed case."""
+        self._set_env(
+            monkeypatch,
+            {"https_proxy": "http://p:1", "SystemRoot": r"C:\Windows", "Path": "/bin"},
+        )
+        env = llm_mod._claude_cli_env()
+        assert env["https_proxy"] == "http://p:1"
+        assert env["SystemRoot"] == r"C:\Windows"
+        assert env["Path"] == "/bin"
+
+    def test_memory_files_stay_disabled(self, monkeypatch):
+        self._set_env(
+            monkeypatch, {"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "0", "PATH": "/bin"}
+        )
+        assert llm_mod._claude_cli_env()["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] == "1"
+
+    def test_empty_environment_still_yields_valid_env(self, monkeypatch):
+        self._set_env(monkeypatch, {})
+        assert llm_mod._claude_cli_env() == {"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1"}
+
+    def test_run_receives_the_allowlisted_env(self, monkeypatch):
+        """End to end through _claude_cli with the subprocess mocked."""
+        self._set_env(monkeypatch, {"PATH": "/bin", "GITHUB_TOKEN": "ghp_x"})
+        monkeypatch.setattr(llm_mod.shutil, "which", lambda name: f"/fake/bin/{name}")
+        stdout = _init_line("none") + "\n" + _result_line("fine")
+        with patch.object(llm_mod, "_run_cli", return_value=_completed(stdout)) as run:
+            _claude_cli(system="s", user="u", images=[])
+        passed = run.call_args.kwargs["env"]
+        assert passed["PATH"] == "/bin"
+        assert "GITHUB_TOKEN" not in passed
+
+
+class TestOllamaHygiene:
+    """#94: Ollama gets an explicit context size and fails fast on 4xx."""
+
+    @staticmethod
+    def _resp(status, body=None, text=""):
+        resp = MagicMock()
+        resp.status_code = status
+        resp.text = text
+        resp.json.return_value = body or {}
+        return resp
+
+    @pytest.fixture(autouse=True)
+    def _local_url(self, monkeypatch):
+        monkeypatch.setitem(
+            llm_mod._LLM_CONFIG, "ollama_base_url", "http://127.0.0.1:11434"
+        )
+
+    def test_payload_carries_num_ctx(self):
+        ok = self._resp(200, {"message": {"content": " hi "}})
+        with patch("requests.post", return_value=ok) as post:
+            assert llm_mod._ollama("sys", "user", []) == "hi"
+        payload = post.call_args.kwargs["json"]
+        assert payload["options"]["num_ctx"] == llm_mod._LLM_CONFIG["ollama_num_ctx"]
+        assert payload["options"]["num_ctx"] >= 32768
+
+    def test_num_ctx_comes_from_config(self, monkeypatch):
+        monkeypatch.setitem(llm_mod._LLM_CONFIG, "ollama_num_ctx", 8192)
+        ok = self._resp(200, {"message": {"content": "x"}})
+        with patch("requests.post", return_value=ok) as post:
+            llm_mod._ollama("s", "u", [])
+        assert post.call_args.kwargs["json"]["options"] == {"num_ctx": 8192}
+
+    @pytest.mark.parametrize("status", [400, 401, 404, 429])
+    def test_4xx_fails_after_exactly_one_post(self, status):
+        with patch(
+            "requests.post", return_value=self._resp(status, text="model not found")
+        ) as post:
+            with pytest.raises(RuntimeError, match=f"HTTP {status}.*model not found"):
+                llm_mod._ollama("s", "u", [])
+        assert post.call_count == 1
+
+    def test_5xx_is_still_retried(self):
+        with patch("requests.post", return_value=self._resp(503, text="busy")) as post:
+            with pytest.raises(RuntimeError, match="503"):
+                llm_mod._ollama("s", "u", [])
+        assert post.call_count == llm_mod._REQUEST_RETRY_ATTEMPTS
+
+    def test_transient_5xx_then_success(self):
+        ok = self._resp(200, {"message": {"content": "done"}})
+        with patch("requests.post", side_effect=[self._resp(500), ok]) as post:
+            assert llm_mod._ollama("s", "u", []) == "done"
+        assert post.call_count == 2
+
+    def test_num_ctx_config_default_and_override(self, tmp_path, monkeypatch):
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("llm:\n  ollama_num_ctx: 16384\n", encoding="utf-8")
+        monkeypatch.setattr(llm_mod, "_CONFIG_PATH", cfg)
+        assert llm_mod._load_llm_config()["ollama_num_ctx"] == 16384
+        cfg.write_text("llm: {}\n", encoding="utf-8")
+        assert llm_mod._load_llm_config()["ollama_num_ctx"] == 32768

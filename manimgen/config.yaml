@@ -18,6 +18,7 @@ llm:
   max_tokens: 16000       # Only used by Anthropic provider
   ollama_model: "llama3.1"
   ollama_base_url: "http://localhost:11434"
+  ollama_num_ctx: 32768   # context window sent to Ollama (its default truncates the Director prompt)
 
 output:
   scenes_dir: manimgen/output/scenes

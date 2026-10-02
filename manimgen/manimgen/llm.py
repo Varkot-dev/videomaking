@@ -86,6 +86,9 @@ _DEFAULTS = {
     "claude_cli_path": "claude",
     "ollama_model": "llama3.1",
     "ollama_base_url": "http://localhost:11434",
+    # Ollama's default context window is smaller than the Director prompt, so
+    # without an explicit num_ctx the prompt is silently truncated.
+    "ollama_num_ctx": 32768,
 }
 
 
@@ -116,6 +119,9 @@ def _load_llm_config() -> dict:
             "ollama_base_url": str(
                 llm_cfg.get("ollama_base_url", _DEFAULTS["ollama_base_url"])
             ).rstrip("/"),
+            "ollama_num_ctx": int(
+                llm_cfg.get("ollama_num_ctx", _DEFAULTS["ollama_num_ctx"])
+            ),
         }
     except (OSError, yaml.YAMLError) as exc:
         logger.warning("[llm] Could not read config.yaml (%s) — using defaults", exc)
@@ -355,16 +361,105 @@ _CLI_PAID_AUTH_VARS = frozenset(
 )
 
 
+# Variables the `claude` child is allowed to inherit; everything else (API keys
+# for other services, tokens, ANTHROPIC_BASE_URL, ...) is withheld. Matching is
+# case-insensitive because Windows variable names are, and POSIX proxy variables
+# come in both cases. The set must keep what Claude Code needs to start and to
+# find the user's subscription login on Windows, macOS and Linux: executable
+# lookup and Windows shell basics, home/config/temp locations, locale and
+# terminal, the desktop session (D-Bus, for the Linux keyring), and proxy and
+# certificate settings for networks that need them.
+_CLI_ENV_ALLOWLIST = frozenset(
+    {
+        # Executable lookup and Windows shell basics
+        "PATH",
+        "PATHEXT",
+        "COMSPEC",
+        "SYSTEMROOT",
+        "SYSTEMDRIVE",
+        "WINDIR",
+        "OS",
+        "PROCESSOR_ARCHITECTURE",
+        "NUMBER_OF_PROCESSORS",
+        # Home, profile, config and temp locations
+        "HOME",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "PROGRAMDATA",
+        "PROGRAMFILES",
+        "PROGRAMFILES(X86)",
+        "PROGRAMW6432",
+        "COMMONPROGRAMFILES",
+        "COMMONPROGRAMFILES(X86)",
+        "COMMONPROGRAMW6432",
+        "ALLUSERSPROFILE",
+        "PUBLIC",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        # Identity
+        "USER",
+        "USERNAME",
+        "USERDOMAIN",
+        "LOGNAME",
+        "COMPUTERNAME",
+        "SHELL",
+        # Terminal, locale and display
+        "TERM",
+        "COLORTERM",
+        "LANG",
+        "LANGUAGE",
+        "TZ",
+        "__CF_USER_TEXT_ENCODING",
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "DBUS_SESSION_BUS_ADDRESS",
+        # Proxy and certificates
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+        "NODE_OPTIONS",
+    }
+)
+# LC_* locale, XDG_* base directories, and Claude Code's own CLAUDE_* settings
+# (CLAUDE_CONFIG_DIR, CLAUDE_CODE_GIT_BASH_PATH, CLAUDE_CODE_OAUTH_TOKEN for
+# `claude setup-token` subscription logins, ...).
+_CLI_ENV_ALLOW_PREFIXES = ("LC_", "XDG_", "CLAUDE_")
+# Prefixes that switch Claude Code to another (paid) backend. These are removed
+# even though CLAUDE_ is allowed, so a provider flag added in a newer release
+# is still caught.
+_CLI_ENV_DENY_PREFIXES = ("CLAUDE_CODE_USE_", "CLAUDE_CODE_SKIP_")
+
+
 def _claude_cli_env() -> dict[str, str]:
     """Environment for the `claude` subprocess.
 
-    Paid-auth variables are removed so Claude Code bills the signed-in Claude
-    plan rather than silently switching to per-token billing when a key happens
-    to be set (e.g. from .env for the `anthropic` provider). CLAUDE.md loading
-    is disabled so project/user memory files do not leak into the prompt.
+    Built from an allowlist (`_CLI_ENV_ALLOWLIST` plus a few prefixes), so
+    unrelated secrets such as GEMINI_API_KEY or GITHUB_TOKEN, and billing
+    redirects such as ANTHROPIC_BASE_URL, never reach the child. Paid-auth
+    variables are removed on top of that so Claude Code bills the signed-in
+    Claude plan rather than silently switching to per-token billing when a key
+    happens to be set (e.g. from .env for the `anthropic` provider). CLAUDE.md
+    loading is disabled so project/user memory files do not leak into the
+    prompt.
     """
     drop = _CLI_PAID_AUTH_VARS | _CLI_PARENT_SESSION_VARS
-    env = {k: v for k, v in os.environ.items() if k not in drop}
+    env = {}
+    for name, value in os.environ.items():
+        upper = name.upper()
+        if name in drop or upper.startswith(_CLI_ENV_DENY_PREFIXES):
+            continue
+        if upper in _CLI_ENV_ALLOWLIST or upper.startswith(_CLI_ENV_ALLOW_PREFIXES):
+            env[name] = value
     env["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1"
     return env
 
@@ -695,12 +790,20 @@ def _ollama(system: str, user: str, images: list[str]) -> str:
         "model": cfg["ollama_model"],
         "messages": [{"role": "system", "content": system}, user_msg],
         "stream": False,
+        "options": {"num_ctx": cfg["ollama_num_ctx"]},
     }
 
     last_exc: Exception | None = None
     for _ in range(_REQUEST_RETRY_ATTEMPTS):
         try:
             resp = requests.post(url, json=payload, timeout=_REQUEST_TIMEOUT_SECONDS)
+            if 400 <= resp.status_code < 500:
+                # A client error (404 model not found, 400 bad request) will not
+                # change on retry: fail at once with the server's message.
+                last_exc = RuntimeError(
+                    f"Ollama HTTP {resp.status_code} from {url}: {resp.text}"
+                )
+                break
             if resp.status_code != 200:
                 raise RuntimeError(
                     f"Ollama HTTP {resp.status_code} from {url}: {resp.text}"
