@@ -54,9 +54,7 @@ def test_no_latex_leaves_path_untouched(monkeypatch):
 
 def test_latex_found_on_path(monkeypatch, tmp_path):
     latex = tmp_path / "latex"
-    monkeypatch.setattr(
-        render_env.shutil, "which", lambda name, path=None: str(latex)
-    )
+    monkeypatch.setattr(render_env.shutil, "which", lambda name, path=None: str(latex))
     assert render_env._find_tex_bin("/anything") == str(tmp_path)
 
 
@@ -76,3 +74,30 @@ def test_windows_startup_vars_forwarded(monkeypatch):
 
     for name in ("SYSTEMROOT", "PATHEXT", "TEMP", "USERPROFILE", "LOCALAPPDATA"):
         assert env.get(name) == f"value-{name}"
+
+
+def test_x11_and_software_gl_vars_forwarded(monkeypatch):
+    names = {
+        "XAUTHORITY": "/tmp/xvfb-auth",
+        "MESA_GL_VERSION_OVERRIDE": "4.5",
+        "GALLIUM_DRIVER": "llvmpipe",
+        "LIBGL_ALWAYS_SOFTWARE": "1",
+    }
+    for name, value in names.items():
+        monkeypatch.setenv(name, value)
+
+    env = render_env.get_render_env()
+
+    for name, value in names.items():
+        assert env.get(name) == value
+
+
+def test_forwarding_gl_vars_does_not_leak_secrets(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "secret")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "secret")
+    monkeypatch.setenv("MESA_GL_VERSION_OVERRIDE", "4.5")
+
+    env = render_env.get_render_env()
+
+    assert "GEMINI_API_KEY" not in env
+    assert "ANTHROPIC_API_KEY" not in env
