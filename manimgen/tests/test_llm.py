@@ -598,7 +598,40 @@ class TestRunCliTimeout:
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline and _pid_alive(pid):
             time.sleep(0.2)
-        assert not _pid_alive(pid), "grandchild survived the timeout"
+        assert not _pid_alive(pid), "grandchild survived the timeout: " + _describe_pid(
+            pid
+        )
+
+
+def _describe_pid(pid: int) -> str:
+    """Process facts for a failure message (Linux): state, parent, process group."""
+    parts = []
+    try:
+        with open(f"/proc/{pid}/status", encoding="utf-8") as f:
+            parts.append(
+                " ".join(
+                    line.strip()
+                    for line in f
+                    if line.split(":")[0] in ("Name", "State", "PPid", "NSpgid")
+                )
+            )
+    except OSError as e:
+        parts.append(f"/proc/{pid}/status unreadable: {e}")
+    try:
+        parts.append(f"pgid={os.getpgid(pid)}")
+    except OSError as e:
+        parts.append(f"getpgid failed: {e}")
+    try:
+        ps = subprocess.run(
+            ["ps", "-o", "pid,ppid,pgid,sid,stat,args", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        parts.append(ps.stdout.strip() or ps.stderr.strip())
+    except (OSError, subprocess.SubprocessError) as e:
+        parts.append(f"ps failed: {e}")
+    return " | ".join(parts)
 
 
 def _pid_alive(pid: int) -> bool:
