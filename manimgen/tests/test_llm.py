@@ -601,3 +601,113 @@ def _pid_alive(pid: int) -> bool:
             return f.read().rsplit(")", 1)[1].split()[0] != "Z"
     except OSError:
         return True
+
+
+def _limit_event(
+    *,
+    overage_status="rejected",
+    using_overage=False,
+    five_hour=0.1,
+    seven_day=0.1,
+    resets_at=None,
+):
+    resets_at = resets_at if resets_at is not None else time.time() + 3600
+    return json.dumps(
+        {
+            "type": "rate_limit_event",
+            "rate_limit_info": {
+                "status": "allowed",
+                "overageStatus": overage_status,
+                "overageDisabledReason": "org_level_disabled",
+                "isUsingOverage": using_overage,
+                "unifiedWindows": {
+                    "five_hour": {"utilization": five_hour, "resetsAt": resets_at},
+                    "seven_day": {"utilization": seven_day, "resetsAt": resets_at},
+                },
+            },
+        }
+    )
+
+
+class TestOverageGuard:
+    """A Claude plan with "extra usage" on bills money past its allowance."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_state(self, monkeypatch):
+        monkeypatch.delenv("MANIMGEN_ALLOW_PAID_API", raising=False)
+        monkeypatch.delenv("MANIMGEN_MAX_PLAN_UTILIZATION", raising=False)
+        monkeypatch.setattr(llm_mod, "_plan_windows", {})
+        monkeypatch.setattr(llm_mod, "_overage_possible", False)
+        monkeypatch.setattr(llm_mod, "_plan_logged", False)
+        monkeypatch.setattr(llm_mod.shutil, "which", lambda name: f"/fake/bin/{name}")
+        monkeypatch.setattr(llm_mod.time, "sleep", lambda s: None)
+
+    def _run(self, *events):
+        stdout = "\n".join([_init_line("none"), *events, _result_line("fine")])
+        with patch.object(llm_mod, "_run_cli", return_value=_completed(stdout)) as run:
+            try:
+                return _claude_cli(system="s", user="u", images=[]), run
+            except PaidApiBlockedError as exc:
+                return exc, run
+
+    def test_overage_disabled_account_never_blocks_even_when_full(self):
+        out, _ = self._run(_limit_event(overage_status="rejected", five_hour=0.99))
+        assert out == "fine"
+
+    def test_call_billed_as_overage_stops_the_run(self):
+        out, _ = self._run(_limit_event(using_overage=True))
+        assert isinstance(out, PaidApiBlockedError)
+        assert "billed as overage" in str(out)
+
+    @pytest.mark.parametrize("window", ["five_hour", "seven_day"])
+    def test_stops_near_limit_when_overage_could_bill(self, window):
+        out, _ = self._run(_limit_event(overage_status="allowed", **{window: 0.95}))
+        assert isinstance(out, PaidApiBlockedError)
+        assert window in str(out) and "95%" in str(out)
+
+    def test_below_threshold_is_fine_even_if_overage_enabled(self):
+        out, _ = self._run(_limit_event(overage_status="allowed", five_hour=0.5))
+        assert out == "fine"
+
+    def test_missing_overage_status_fails_safe(self):
+        event = json.loads(_limit_event(five_hour=0.95))
+        del event["rate_limit_info"]["overageStatus"]
+        out, _ = self._run(json.dumps(event))
+        assert isinstance(out, PaidApiBlockedError)
+
+    def test_next_call_is_refused_without_starting_a_process(self):
+        first, _ = self._run(_limit_event(overage_status="allowed", five_hour=0.95))
+        assert isinstance(first, PaidApiBlockedError)
+        with patch.object(llm_mod, "_run_cli") as run:
+            with pytest.raises(PaidApiBlockedError):
+                _claude_cli(system="s", user="u", images=[])
+        run.assert_not_called()
+
+    def test_reset_window_no_longer_blocks(self):
+        past = time.time() - 10
+        llm_mod._overage_possible = True
+        llm_mod._plan_windows["five_hour"] = (0.99, past)
+        stdout = _init_line("none") + "\n" + _result_line("fine")
+        with patch.object(llm_mod, "_run_cli", return_value=_completed(stdout)):
+            assert _claude_cli(system="s", user="u", images=[]) == "fine"
+
+    def test_threshold_is_configurable(self, monkeypatch):
+        monkeypatch.setenv("MANIMGEN_MAX_PLAN_UTILIZATION", "0.5")
+        out, _ = self._run(_limit_event(overage_status="allowed", five_hour=0.6))
+        assert isinstance(out, PaidApiBlockedError)
+
+    def test_invalid_threshold_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv("MANIMGEN_MAX_PLAN_UTILIZATION", "lots")
+        assert llm_mod._plan_utilization_limit() == llm_mod._DEFAULT_PLAN_UTILIZATION
+
+    def test_explicit_opt_in_disables_the_guard(self, monkeypatch):
+        monkeypatch.setenv("MANIMGEN_ALLOW_PAID_API", "1")
+        out, _ = self._run(_limit_event(using_overage=True))
+        assert out == "fine"
+
+    def test_garbage_events_do_not_crash(self):
+        out, _ = self._run(
+            json.dumps({"type": "rate_limit_event"}),
+            json.dumps({"type": "rate_limit_event", "rate_limit_info": "nope"}),
+        )
+        assert out == "fine"

@@ -30,7 +30,11 @@ against your Claude plan's usage limits, with no API key. Pick the model with
 `llm.claude_cli_model` in `config.yaml` (`sonnet` by default, or `opus`), or
 switch provider with `LLM_PROVIDER=ollama` (local, free). The per-token providers
 `anthropic` and `gemini` are blocked unless `MANIMGEN_ALLOW_PAID_API=1` is also
-set, so nothing bills against an API key by accident.
+set, so nothing bills against an API key by accident. The pipeline also stops
+before a plan can run into "extra usage" (overage) billing, and
+`python scripts/check_billing.py` (run from `manimgen/`) makes one tiny call and
+reports whether any charge is possible. Tune the stop point with
+`MANIMGEN_MAX_PLAN_UTILIZATION` (default `0.90`).
 
 See [../README.md](../README.md) for the pipeline architecture, the Codeguard
 repair harness, LLM provider details, macOS/Linux and Windows (no admin) setup,

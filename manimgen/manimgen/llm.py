@@ -15,6 +15,10 @@ API usage. It needs Claude Code installed and logged in (`claude` on PATH).
 No-spend guard: the per-token providers (`anthropic`, `gemini`) are refused
 unless MANIMGEN_ALLOW_PAID_API=1 is set, and `claude_cli` refuses any reply
 that Claude Code produced with an API key instead of the subscription login.
+It also stops before a plan can run into "extra usage" (overage) billing: a
+call that reports isUsingOverage stops the run, and when the account could
+bill overage the run stops at MANIMGEN_MAX_PLAN_UTILIZATION (default 90%) of
+the 5-hour or 7-day allowance instead of crossing the limit.
 The `ollama` provider talks to a local Ollama server (default
 http://localhost:11434) and needs no API key — use it to exercise pipeline
 plumbing for free. Switching back to gemini/anthropic for a real
@@ -88,7 +92,7 @@ _DEFAULTS = {
 def _load_llm_config() -> dict:
     """Load LLM config from config.yaml, falling back to defaults."""
     try:
-        with open(_CONFIG_PATH) as f:
+        with open(_CONFIG_PATH, encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}
         llm_cfg = cfg.get("llm", {})
         return {
@@ -477,6 +481,7 @@ def _claude_cli(system: str, user: str, images: list[str]) -> str:
 
         last_error = ""
         for attempt in range(1, _REQUEST_RETRY_ATTEMPTS + 1):
+            _ensure_plan_headroom()
             if attempt > 1:
                 time.sleep(_CLI_RETRY_BACKOFF_SECONDS * (attempt - 1))
             try:
@@ -494,6 +499,7 @@ def _claude_cli(system: str, user: str, images: list[str]) -> str:
 
             stdout = proc.stdout.decode("utf-8", errors="replace")
             _ensure_subscription_auth(stdout)
+            _check_plan_limits(stdout)
             result = _parse_claude_cli_result(stdout)
             if result is not None and not result.get("is_error"):
                 if result.get("stop_reason") == "max_tokens":
@@ -538,6 +544,116 @@ def _parse_claude_cli_result(stdout: str) -> dict | None:
         if event.get("type") == "result":
             result = event
     return result
+
+
+# Overage ("extra usage") bills money once a plan allowance is used up. Claude
+# Code reports the state in a rate_limit_event on every call:
+#   rate_limit_info.isUsingOverage   true once this call was billed as overage
+#   rate_limit_info.overageStatus    "rejected" when overage is off for the
+#                                    account; anything else means it could bill
+#   rate_limit_info.unifiedWindows   {"five_hour": {"utilization": 0.08,
+#                                    "resetsAt": <epoch>}, "seven_day": {...}}
+# When overage is rejected, hitting a limit only blocks calls (free). When it
+# is not, crossing the limit costs money, so stop with headroom to spare.
+_PLAN_UTILIZATION_ENV = "MANIMGEN_MAX_PLAN_UTILIZATION"
+_DEFAULT_PLAN_UTILIZATION = 0.90
+
+# Last plan state seen in this process: window name -> (utilization, resetsAt),
+# and whether overage could bill. Lets the next call be refused before spawning.
+_plan_windows: dict[str, tuple[float, float]] = {}
+_overage_possible = False
+_plan_logged = False
+_last_plan_info: dict = {}  # last rate_limit_info seen, for scripts/check_billing.py
+
+
+def _plan_utilization_limit() -> float:
+    raw = os.environ.get(_PLAN_UTILIZATION_ENV, "").strip()
+    try:
+        value = float(raw) if raw else _DEFAULT_PLAN_UTILIZATION
+    except ValueError:
+        logger.warning(
+            "[llm] ignoring invalid %s=%r, using %s",
+            _PLAN_UTILIZATION_ENV,
+            raw,
+            _DEFAULT_PLAN_UTILIZATION,
+        )
+        return _DEFAULT_PLAN_UTILIZATION
+    return min(max(value, 0.01), 1.0)
+
+
+def _plan_block_message(window: str, utilization: float, resets_at: float) -> str:
+    when = (
+        time.strftime("%Y-%m-%d %H:%M", time.localtime(resets_at))
+        if resets_at
+        else "later"
+    )
+    return (
+        f"Your Claude plan is at {utilization:.0%} of its {window} allowance and "
+        "extra usage (overage) billing is not disabled on this account, so "
+        "continuing could charge you money. Stopped to be safe. Options: wait "
+        f"until the allowance resets ({when} local time), turn extra usage off in "
+        "your Claude settings (then hitting the limit only pauses, it never "
+        f"bills), raise {_PLAN_UTILIZATION_ENV}, or set {_ALLOW_PAID_ENV}=1."
+    )
+
+
+def _ensure_plan_headroom() -> None:
+    """Refuse to start a call when the last known plan state says it could bill."""
+    if _paid_api_allowed() or not _overage_possible:
+        return
+    limit = _plan_utilization_limit()
+    now = time.time()
+    for window, (utilization, resets_at) in _plan_windows.items():
+        # A window that has reset since we last looked is no longer full.
+        if resets_at and resets_at <= now:
+            continue
+        if utilization >= limit:
+            raise PaidApiBlockedError(
+                _plan_block_message(window, utilization, resets_at)
+            )
+
+
+def _check_plan_limits(stdout: str) -> None:
+    """Stop the run if a call used, or is about to run into, overage billing."""
+    global _overage_possible, _plan_logged, _last_plan_info
+    if _paid_api_allowed():
+        return
+    for event in _iter_cli_events(stdout):
+        if event.get("type") != "rate_limit_event":
+            continue
+        info = event.get("rate_limit_info")
+        if not isinstance(info, dict):
+            continue
+        if info.get("isUsingOverage") is True:
+            raise PaidApiBlockedError(
+                "Claude Code reports this call was billed as overage (extra "
+                "usage), which costs money. Stopped. Turn extra usage off in "
+                f"your Claude settings, or set {_ALLOW_PAID_ENV}=1 to allow it."
+            )
+        _last_plan_info = info
+        # Anything but an explicit "rejected" (including a missing field) is
+        # treated as "overage could bill": fail safe, not open.
+        _overage_possible = info.get("overageStatus") != "rejected"
+        windows = info.get("unifiedWindows")
+        if isinstance(windows, dict):
+            for name, w in windows.items():
+                if isinstance(w, dict) and isinstance(
+                    w.get("utilization"), (int, float)
+                ):
+                    _plan_windows[name] = (
+                        float(w["utilization"]),
+                        float(w.get("resetsAt") or 0),
+                    )
+        if not _plan_logged:
+            _plan_logged = True
+            logger.info(
+                "[llm] plan: %s; overage %s (%s)",
+                ", ".join(f"{n} {u:.0%}" for n, (u, _) in _plan_windows.items())
+                or "usage unknown",
+                info.get("overageStatus", "unknown"),
+                info.get("overageDisabledReason", "n/a"),
+            )
+    _ensure_plan_headroom()
 
 
 def _ensure_subscription_auth(stdout: str) -> None:
