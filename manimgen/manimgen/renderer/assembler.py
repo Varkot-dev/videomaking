@@ -8,7 +8,8 @@
 #   - Cue clips within a section are joined with a hard cut (no transition).
 #     A xfade between cue clips would look wrong — they are continuous narration.
 #   - Section boundaries get a short crossfade (0.3s) to smooth the visual jump.
-#   - All clips are normalised to 1920x1080 30fps yuv420p before joining.
+#   - All clips are normalised to the configured resolution and fps (yuv420p)
+#     before joining.
 #   - If only one clip total, it is copied to the output path directly.
 #   - Intermediates live in a private temp folder that is removed on any exit,
 #     and the final file is published with an atomic replace.
@@ -133,7 +134,7 @@ def _publish(src: str, output_path: str) -> str:
 
 
 def _normalise_all(clip_paths: list[str], work_dir: str) -> list[str]:
-    """Re-encode all clips to 1920x1080 30fps yuv420p aac."""
+    """Re-encode all clips to the configured resolution/fps, yuv420p, aac."""
     norm_paths = []
     for i, path in enumerate(clip_paths):
         norm = os.path.join(work_dir, f"_norm_{i:03d}.mp4")

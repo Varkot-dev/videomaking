@@ -30,8 +30,21 @@ _WARN_THRESHOLD_SECONDS = 1.0
 # The pipeline's dark background (matches the -c "#1C1C1C" render flag). Used to
 # synthesize a placeholder clip when a cue's render produced no video stream.
 _BG_COLOR = "#1C1C1C"
-_SYNTH_RESOLUTION = "1920x1080"
-_SYNTH_FPS = 60
+# Placeholder resolution and fps come from config (paths.render_resolution /
+# paths.render_fps) so it matches the rest of the render.
+
+# Re-encode quality for the freeze and placeholder paths; the stream-copy path
+# is lossless. Matches the cutter's settings so a re-encode adds no visible loss.
+_REENCODE_ARGS = [
+    "-c:v",
+    "libx264",
+    "-preset",
+    "fast",
+    "-crf",
+    "18",
+    "-pix_fmt",
+    "yuv420p",
+]
 
 # Module-level mismatch log — each entry is a dict with video_path, diff, cue info.
 # The CLI reads this at the end of a run and prints a summary.
@@ -125,9 +138,25 @@ def mux_audio_video(video_path: str, audio_path: str, output_path: str) -> str:
         _mux_synth_background(audio_path, output_path, audio_dur)
         return output_path
 
-    if audio_dur > video_dur:
+    # Audio is usually a little longer than video. A gap under one frame is not
+    # worth a lossy re-encode (a freeze of less than a frame is invisible), so
+    # only freeze when the gap is at least one frame.
+    one_frame = 1.0 / max(1, paths.render_fps())
+    if audio_dur - video_dur >= one_frame:
+        logger.info(
+            "[muxer] %s: freeze-frame branch (audio %.3fs > video %.3fs)",
+            os.path.basename(output_path),
+            audio_dur,
+            video_dur,
+        )
         _mux_freeze_video(video_path, audio_path, output_path, audio_dur)
     else:
+        logger.info(
+            "[muxer] %s: stream-copy branch (video %.3fs, audio %.3fs)",
+            os.path.basename(output_path),
+            video_dur,
+            audio_dur,
+        )
         _mux_pad_audio(video_path, audio_path, output_path, video_dur)
 
     return output_path
@@ -192,8 +221,7 @@ def _mux_freeze_video(
         "[v]",
         "-map",
         "1:a",
-        "-c:v",
-        "libx264",
+        *_REENCODE_ARGS,
         "-c:a",
         "aac",
         "-t",
@@ -214,21 +242,22 @@ def _mux_synth_background(
     render). Produces a clean dark clip lasting the full narration so the section
     is preserved with its audio, rather than crashing the freeze path.
     """
+    resolution = paths.render_resolution()
+    fps = paths.render_fps()
     cmd = [
         "ffmpeg",
         "-y",
         "-f",
         "lavfi",
         "-i",
-        f"color=c={_BG_COLOR}:s={_SYNTH_RESOLUTION}:r={_SYNTH_FPS}:d={audio_dur:.6f}",
+        f"color=c={_BG_COLOR}:s={resolution}:r={fps}:d={audio_dur:.6f}",
         "-i",
         audio_path,
         "-map",
         "0:v",
         "-map",
         "1:a",
-        "-c:v",
-        "libx264",
+        *_REENCODE_ARGS,
         "-c:a",
         "aac",
         "-t",
