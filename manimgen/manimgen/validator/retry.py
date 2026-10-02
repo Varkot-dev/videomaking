@@ -13,7 +13,7 @@ from manimgen.validator.codeguard import (
 )
 from manimgen.validator.env import get_render_env
 from manimgen.validator.layout_checker import check_layout
-from manimgen.validator.render_command import build_manimgl_command
+from manimgen.validator.render_command import build_manimgl_command, with_utf8_io
 from manimgen.validator.runner import (
     _find_rendered_video,
     _is_3d_scene,
@@ -256,7 +256,7 @@ def apply_timing_gate(
 
     fixed, fixes_applied = auto_fix_timing(code, cue_durations)
     if fixes_applied:
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(fixed)
         for fix in fixes_applied:
             print(f"[retry] timing auto-fix: {fix}")
@@ -459,11 +459,11 @@ def retry_scene(
             )
             section_visual_llm_calls_used += 1
             seen_visual_signatures.add(visual_signature)
-            with open(scene_path, "w") as f:
+            with open(scene_path, "w", encoding="utf-8") as f:
                 f.write(code)
             precheck_and_autofix_file(scene_path)
             # Always reload — precheck may have applied auto-fixes in-place
-            with open(scene_path) as f:
+            with open(scene_path, encoding="utf-8") as f:
                 code = f.read()
             # Timing pass — catch timing bugs in the LLM's visual fix
             if cue_durations:
@@ -480,7 +480,7 @@ def retry_scene(
         local_fixed, local_applied = apply_error_aware_fixes(code, result["stderr"])
         if local_applied and local_fixed != code:
             code = local_fixed
-            with open(scene_path, "w") as f:
+            with open(scene_path, "w", encoding="utf-8") as f:
                 f.write(code)
             print(
                 f"[retry] Attempt {attempt}/{MAX_RETRIES} applied local fixes: {', '.join(local_applied)}"
@@ -548,13 +548,13 @@ Original code:
         fixed = strip_fencing(fixed)
 
         code = fixed
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(code)
 
         # Local auto-fixes are free and often resolve common ManimGL mismatches.
         # Always reload — precheck may have applied auto-fixes in-place.
         precheck_and_autofix_file(scene_path)
-        with open(scene_path) as f:
+        with open(scene_path, encoding="utf-8") as f:
             code = f.read()
 
         # Timing pass — auto-fix self.wait() values and inject remaining
@@ -603,8 +603,10 @@ def _run_and_capture(scene_path: str, class_name: str) -> dict:
             build_manimgl_command(scene_path, class_name),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
-            env=get_render_env(),
+            env=with_utf8_io(get_render_env()),
         )
         if result.returncode == 0:
             return {
@@ -631,9 +633,9 @@ def _load_retry_system_prompt() -> str:
         director_system_path = os.path.join(
             root, "generator", "prompts", "director_system.md"
         )
-        with open(retry_system_path) as f:
+        with open(retry_system_path, encoding="utf-8") as f:
             system = f.read()
-        with open(director_system_path) as f:
+        with open(director_system_path, encoding="utf-8") as f:
             director = f.read()
         _retry_system_prompt_cache = system.strip() + "\n\n" + director
     return _retry_system_prompt_cache
@@ -670,7 +672,7 @@ def _write_attempt_artifacts(
     code_path = os.path.join(logs_dir, f"{class_name}_attempt{attempt}.py")
     log_path = os.path.join(logs_dir, f"{class_name}_attempt{attempt}.log")
 
-    with open(code_path, "w") as f:
+    with open(code_path, "w", encoding="utf-8") as f:
         f.write(code)
-    with open(log_path, "w") as f:
+    with open(log_path, "w", encoding="utf-8") as f:
         f.write(stderr)

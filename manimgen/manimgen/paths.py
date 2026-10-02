@@ -30,7 +30,7 @@ _RENDER_DEFAULTS = {
 
 def _load() -> tuple[dict, dict]:
     try:
-        with open(_CONFIG_PATH) as f:
+        with open(_CONFIG_PATH, encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}
         out = cfg.get("output", {})
         rend = cfg.get("rendering", {})

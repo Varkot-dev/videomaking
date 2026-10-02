@@ -6,7 +6,7 @@ import subprocess
 from manimgen import paths
 from manimgen.utils import safe_section_id
 from manimgen.validator.env import get_render_env
-from manimgen.validator.render_command import build_manimgl_command
+from manimgen.validator.render_command import build_manimgl_command, with_utf8_io
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +67,7 @@ def fallback_scene(section: dict) -> str | None:
     )
     code = code.replace("class FallbackScene(Scene):", f"class {class_name}(Scene):")
 
-    with open(scene_path, "w") as f:
+    with open(scene_path, "w", encoding="utf-8") as f:
         f.write(code)
 
     try:
@@ -75,8 +75,10 @@ def fallback_scene(section: dict) -> str | None:
             build_manimgl_command(scene_path, class_name),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=180,
-            env=get_render_env(),
+            env=with_utf8_io(get_render_env()),
         )
         if result.returncode == 0:
             from manimgen.validator.runner import _find_rendered_video

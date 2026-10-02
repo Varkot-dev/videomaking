@@ -22,7 +22,7 @@ from uuid import uuid4
 from flask import Flask, jsonify, render_template, request, send_file
 
 from manimgen import paths
-from manimgen.utils import safe_probe_duration
+from manimgen.utils import ffmpeg_concat_line, safe_probe_duration
 
 # Mutating-export safety bounds.
 _MAX_TITLE_LEN = 120
@@ -158,6 +158,8 @@ def _probe_duration(path: Path) -> float | None:
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
         )
     except (OSError, subprocess.SubprocessError) as exc:
@@ -289,7 +291,14 @@ def api_export():
                 "fast",
                 str(trimmed),
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=300,
+            )
             if result.returncode != 0:
                 return jsonify(
                     {
@@ -300,9 +309,9 @@ def api_export():
             trimmed_paths.append(trimmed)
 
         # Write concat list
-        with open(list_path, "w") as f:
+        with open(list_path, "w", encoding="utf-8") as f:
             for tp in trimmed_paths:
-                f.write(f"file '{tp.resolve()}'\n")
+                f.write(ffmpeg_concat_line(str(tp.resolve())))
 
         # Concat
         concat_cmd = [
@@ -318,7 +327,14 @@ def api_export():
             "copy",
             str(output_path),
         ]
-        result = subprocess.run(concat_cmd, capture_output=True, text=True, timeout=300)
+        result = subprocess.run(
+            concat_cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=300,
+        )
         if result.returncode != 0:
             return jsonify({"error": "Concat failed", "details": result.stderr}), 500
 

@@ -188,7 +188,12 @@ def _ffmpeg_slice(
 
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=_FFMPEG_TIMEOUT_SECONDS
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_FFMPEG_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
         raise RuntimeError(
@@ -216,7 +221,12 @@ def _ffmpeg_copy(input_path: str, output_path: str) -> None:
     ]
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=_FFMPEG_TIMEOUT_SECONDS
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_FFMPEG_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
         raise RuntimeError(

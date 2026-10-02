@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 def _load_tts_config() -> dict:
     config_path = os.path.join(os.path.dirname(__file__), "..", "..", "config.yaml")
     try:
-        with open(config_path) as f:
+        with open(config_path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}
         return cfg.get("tts", {})
     except Exception as e:
@@ -142,13 +142,13 @@ def save_timestamps(timestamps: list[WordTimestamp], json_path: str) -> None:
     """Persist word timestamps to a JSON file next to the audio."""
     os.makedirs(os.path.dirname(json_path), exist_ok=True)
     data = [{"word": t.word, "start": t.start, "end": t.end} for t in timestamps]
-    with open(json_path, "w") as f:
+    with open(json_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
 
 def load_timestamps(json_path: str) -> list[WordTimestamp]:
     """Load previously saved word timestamps from JSON."""
-    with open(json_path) as f:
+    with open(json_path, encoding="utf-8") as f:
         data = json.load(f)
     return [WordTimestamp(word=d["word"], start=d["start"], end=d["end"]) for d in data]
 
@@ -204,6 +204,8 @@ def get_audio_duration(audio_path: str) -> float:
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
             timeout=30,
         )
@@ -262,7 +264,12 @@ def check_audio_not_silent(audio_path: str) -> dict:
     ]
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=_EBUR128_TIMEOUT_SECONDS
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_EBUR128_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
         logger.warning(

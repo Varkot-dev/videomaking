@@ -17,6 +17,20 @@ _SECTION_ID_ALLOWED = re.compile(r"[^a-z0-9_]")
 _MAX_SECTION_ID_LEN = 64
 
 
+def ffmpeg_concat_line(path: str) -> str:
+    """Return one ffmpeg concat-demuxer ``file '...'`` line for ``path``.
+
+    The path is made absolute and written with forward slashes, which ffmpeg
+    accepts on every platform, so Windows paths such as ``C:\\Users\\...``
+    never reach the demuxer's backslash-escape parser. A single quote inside the
+    path is escaped as ``'\\''`` (close quote, escaped quote, reopen), which is
+    the quoting the concat demuxer documents. Write the list file as UTF-8 so
+    non-ASCII directory names survive on Windows (whose default is cp1252).
+    """
+    p = os.path.abspath(path).replace("\\", "/").replace("'", "'\\''")
+    return f"file '{p}'\n"
+
+
 def safe_probe_duration(data: Any) -> float | None:
     """Safely extract a media duration from parsed ffprobe JSON.
 
@@ -69,6 +83,8 @@ def probe_video_duration(video_path: str, timeout: int = 15) -> float | None:
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
         if result.returncode == 0:

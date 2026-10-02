@@ -35,3 +35,19 @@ def build_manimgl_command(scene_path: str, class_name: str) -> list[str]:
         "-c",
         _BACKGROUND_COLOR,
     ]
+
+
+def with_utf8_io(env: dict[str, str]) -> dict[str, str]:
+    """Return ``env`` with UTF-8 mode forced on for the manimgl child.
+
+    On Windows a Python child whose stdout is a pipe encodes it with the ANSI
+    code page (cp1252), so any non-ASCII character manimgl or the scene prints
+    raises ``UnicodeEncodeError`` mid-render, and its own ``open()`` calls read
+    UTF-8 files as cp1252. ``PYTHONUTF8=1`` fixes both; the parent decodes the
+    captured output as UTF-8 to match. ``setdefault`` keeps an explicit user
+    override. A no-op in practice on Linux and macOS, where UTF-8 is the default.
+    """
+    env = dict(env)
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    return env

@@ -19,7 +19,9 @@ _SELF_CORRECT_LIMIT = 1  # number of critic passes per plan
 
 def _load_critic_system_prompt() -> str:
     here = os.path.dirname(__file__)
-    with open(os.path.join(here, "prompts", "storyboard_critic_system.md")) as f:
+    with open(
+        os.path.join(here, "prompts", "storyboard_critic_system.md"), encoding="utf-8"
+    ) as f:
         return f.read()
 
 
@@ -42,19 +44,25 @@ def _self_correct(plan: dict, limit: int = _SELF_CORRECT_LIMIT) -> dict:
 
 def _load_system_prompt() -> str:
     here = os.path.dirname(__file__)
-    with open(os.path.join(here, "prompts", "planner_system.md")) as f:
+    with open(
+        os.path.join(here, "prompts", "planner_system.md"), encoding="utf-8"
+    ) as f:
         return f.read()
 
 
 def _load_pdf_system_prompt() -> str:
     here = os.path.dirname(__file__)
-    with open(os.path.join(here, "prompts", "planner_pdf_system.md")) as f:
+    with open(
+        os.path.join(here, "prompts", "planner_pdf_system.md"), encoding="utf-8"
+    ) as f:
         return f.read()
 
 
 def _load_researcher_system_prompt() -> str:
     here = os.path.dirname(__file__)
-    with open(os.path.join(here, "prompts", "researcher_system.md")) as f:
+    with open(
+        os.path.join(here, "prompts", "researcher_system.md"), encoding="utf-8"
+    ) as f:
         return f.read()
 
 

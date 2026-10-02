@@ -265,6 +265,8 @@ def _has_video_stream(path: str) -> bool:
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
         )
     except (OSError, subprocess.SubprocessError):
@@ -295,6 +297,8 @@ def _get_duration(path: str) -> float:
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
             timeout=30,
         )
@@ -326,7 +330,12 @@ _FFMPEG_TIMEOUT_SECONDS = 300
 def _run(cmd: list[str], output_path: str) -> None:
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=_FFMPEG_TIMEOUT_SECONDS
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_FFMPEG_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
         raise RuntimeError(
@@ -371,7 +380,12 @@ def _cut_one(video_path: str, start: float, dur: float, out_path: str, i: int) -
     ]
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=_FFMPEG_TIMEOUT_SECONDS
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_FFMPEG_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
         logger.error(
