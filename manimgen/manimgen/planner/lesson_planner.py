@@ -143,12 +143,40 @@ def _load_system_prompt() -> str:
         return f.read()
 
 
+def _planner_section(text: str, heading: str) -> str:
+    """The ``## heading`` section of the planner prompt, up to the next rule or ``## ``."""
+    start = text.index(heading)
+    ends = [
+        i
+        for i in (text.find("\n## ", start + 1), text.find("\n---", start + 1))
+        if i != -1
+    ]
+    return text[start : min(ends) if ends else len(text)].strip()
+
+
 def _load_pdf_system_prompt() -> str:
+    """PDF planner prompt plus the topic planner's technique menu and visual rules.
+
+    Both planners emit the same schema, so the menu and visual rules live in
+    one place (planner_system.md) and are appended here rather than copied.
+    """
     here = os.path.dirname(__file__)
     with open(
         os.path.join(here, "prompts", "planner_pdf_system.md"), encoding="utf-8"
     ) as f:
-        return f.read()
+        pdf_prompt = f.read()
+    with open(
+        os.path.join(here, "prompts", "planner_system.md"), encoding="utf-8"
+    ) as f:
+        topic_prompt = f.read()
+    shared = "\n\n".join(
+        _planner_section(topic_prompt, h)
+        for h in (
+            "## Technique menu",
+            "## Rules for the `visual` field",
+        )
+    )
+    return f"{pdf_prompt.rstrip()}\n\n---\n\n{shared}\n"
 
 
 def _load_researcher_system_prompt() -> str:
@@ -162,8 +190,15 @@ def _load_researcher_system_prompt() -> str:
 def _cap_sections(plan: dict, limit: int) -> dict:
     sections = plan.get("sections", [])
     if len(sections) > limit:
+        dropped = [
+            str(sec.get("title", "?")) if isinstance(sec, dict) else "?"
+            for sec in sections[limit:]
+        ]
         logger.warning(
-            "[planner] LLM returned %d sections, capping to %d", len(sections), limit
+            "[planner] LLM returned %d sections, capping to %d - dropped: %s",
+            len(sections),
+            limit,
+            ", ".join(repr(t) for t in dropped),
         )
         plan["sections"] = sections[:limit]
     return plan
@@ -743,6 +778,7 @@ def plan_lesson_from_pdf(pdf_path: str) -> dict:
     MAX_CHARS = 24_000
     content_parts = []
     total = 0
+    chunks_sent = 0
     for i, chunk in enumerate(parsed["chunks"]):
         entry = f"[Chunk {i + 1}]\n{chunk}"
         if total + len(entry) > MAX_CHARS:
@@ -752,6 +788,18 @@ def plan_lesson_from_pdf(pdf_path: str) -> dict:
             break
         content_parts.append(entry)
         total += len(entry)
+        chunks_sent += 1
+    chunks_total = len(parsed["chunks"])
+    if chunks_sent < chunks_total:
+        logger.warning(
+            "[planner] PDF text truncated: only chunks 1-%d of %d were sent to the "
+            "planner (%d char limit); chunks %d-%d were NOT seen",
+            chunks_sent,
+            chunks_total,
+            MAX_CHARS,
+            chunks_sent + 1,
+            chunks_total,
+        )
 
     source_content = "\n\n".join(content_parts)
 
@@ -768,20 +816,39 @@ def plan_lesson_from_pdf(pdf_path: str) -> dict:
         )
 
     MAX_IMAGES = 10
-    if len(images) > MAX_IMAGES:
+    images_total = len(images)
+    if images_total > MAX_IMAGES:
+        logger.warning(
+            "[planner] PDF has %d rendered pages: only pages 1-%d were sent as "
+            "images; pages %d-%d were NOT seen",
+            images_total,
+            MAX_IMAGES,
+            MAX_IMAGES + 1,
+            images_total,
+        )
         images = images[:MAX_IMAGES]
 
     system = _load_pdf_system_prompt()
     logger.info(
         "[planner] Calling LLM for PDF lesson plan (images: %d)...", len(images)
     )
-    plan = _cap_sections(
-        _chat_plan(system, user_message, images if images else None),
-        _MAX_SECTIONS_PDF,
-    )
+    plan = _chat_plan(system, user_message, images if images else None)
+    titles = [
+        str(sec.get("title", "?")) if isinstance(sec, dict) else "?"
+        for sec in plan["sections"]
+    ]
+    plan = _cap_sections(plan, _MAX_SECTIONS_PDF)
     plan = _self_correct(plan)
     # Same invariant as the topic path: _self_correct wholesale-replaces
     # `plan` with the critic LLM's output and can re-inflate section count
     # past the cap. Re-assert it.
     plan = _cap_sections(plan, _MAX_SECTIONS_PDF)
-    return _extract_cues(plan)
+    plan = _extract_cues(plan)
+    plan["source_coverage"] = {
+        "chunks_total": chunks_total,
+        "chunks_sent": chunks_sent,
+        "images_total": images_total,
+        "images_sent": len(images),
+        "sections_dropped": titles[_MAX_SECTIONS_PDF:],
+    }
+    return plan
