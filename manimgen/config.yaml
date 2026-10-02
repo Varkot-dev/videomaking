@@ -91,3 +91,5 @@ tts:
   voice: en-US-AndrewMultilingualNeural
   enabled: true
   speed: "+5%"
+  # Optional proxy URL for edge-tts (HTTPS_PROXY is used when this is unset).
+  # proxy: "http://proxy.example.com:8080"

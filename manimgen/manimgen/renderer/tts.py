@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import subprocess
+import time
 import warnings
 from dataclasses import dataclass
 
@@ -63,6 +64,12 @@ _TTS_CFG = _load_tts_config()
 _DEFAULT_VOICE = "en-US-AndrewMultilingualNeural"
 _DEFAULT_SPEED = "+5%"
 
+# edge-tts talks to an unofficial Microsoft endpoint over the network, so a
+# single call fails on flaky Wi-Fi or a slow proxy (#73). Three attempts, with
+# these waits before the second and the third.
+_TTS_ATTEMPTS = 3
+_TTS_BACKOFF_SECONDS = (2, 5)
+
 
 # ---------------------------------------------------------------------------
 # Data types
@@ -88,7 +95,14 @@ async def _generate_async(
     rate: str,
 ) -> list[WordTimestamp]:
     """Stream TTS, write audio to output_path, return word timestamps."""
-    communicate = edge_tts.Communicate(text, voice, rate=rate, boundary="WordBoundary")
+    communicate = edge_tts.Communicate(
+        text,
+        voice,
+        rate=rate,
+        boundary="WordBoundary",
+        # Optional tts.proxy in config.yaml; HTTPS_PROXY is honoured anyway.
+        proxy=_TTS_CFG.get("proxy") or None,
+    )
 
     audio_chunks: list[bytes] = []
     word_timestamps: list[WordTimestamp] = []
@@ -127,6 +141,9 @@ def generate_narration(
     where start/end are seconds from the beginning of the audio file.
     These are used to cue animations: when word[i] starts speaking,
     the animation associated with that cue point begins.
+
+    edge-tts is tried up to three times; empty audio or no word timestamps
+    counts as a failure. Raises RuntimeError when every attempt failed.
     """
     if voice is None:
         voice = _TTS_CFG.get("voice", _DEFAULT_VOICE)
@@ -134,8 +151,25 @@ def generate_narration(
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    timestamps = asyncio.run(_generate_async(text, output_path, voice, rate))
-    return output_path, timestamps
+    last_error: Exception | None = None
+    for attempt in range(1, _TTS_ATTEMPTS + 1):
+        if attempt > 1:
+            time.sleep(_TTS_BACKOFF_SECONDS[attempt - 2])
+        try:
+            timestamps = asyncio.run(_generate_async(text, output_path, voice, rate))
+            # Words in, nothing out is a failed call (cues need the timings).
+            if text.strip():
+                if not os.path.exists(output_path) or not os.path.getsize(output_path):
+                    raise RuntimeError("edge-tts returned no audio")
+                if not timestamps:
+                    raise RuntimeError("edge-tts returned no word timestamps")
+            return output_path, timestamps
+        except Exception as e:
+            last_error = e
+            logger.warning("[tts] attempt %d/%d failed: %s", attempt, _TTS_ATTEMPTS, e)
+    raise RuntimeError(
+        f"edge-tts failed after {_TTS_ATTEMPTS} attempts: {last_error}"
+    ) from last_error
 
 
 def save_timestamps(timestamps: list[WordTimestamp], json_path: str) -> None:

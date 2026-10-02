@@ -1017,6 +1017,51 @@ def _stop_for_usage_limit(
     raise SystemExit(EXIT_USAGE_LIMIT)
 
 
+def _stop_for_narration(
+    lesson_plan: dict, content_hash: str, failed: dict[str, str], started: float
+):
+    """Stop before any scene is generated when narration failed (#73).
+
+    Only the planning LLM calls were spent at this point. Shipping on would
+    spend every codegen and render call on a video with silent sections.
+    """
+    records = []
+    for idx, section in enumerate(lesson_plan["sections"], start=1):
+        error = failed.get(safe_section_id(section, idx))
+        outcome = (
+            SectionOutcome(SectionStatus.ERRORED, [], f"narration failed: {error}")
+            if error
+            else SectionOutcome(SectionStatus.NOT_RUN)
+        )
+        records.append(_section_record(idx, section, outcome, 0.0))
+    logger.error(
+        "[manimgen] Narration failed for %d section(s) after retries; stopping "
+        "before scene generation.",
+        len(failed),
+    )
+    _finish_run(
+        lesson_plan["title"],
+        content_hash,
+        records,
+        None,
+        EXIT_FAILED,
+        "narration_failed",
+        started,
+        stop_reason=(
+            f"text to speech failed for {len(failed)} section(s) after retries. "
+            "No scene was generated, so only the planning calls were used."
+        ),
+        next_steps=[
+            "Check the network: edge-tts must reach Microsoft's speech "
+            "service (behind a proxy, set HTTPS_PROXY or tts.proxy in "
+            "config.yaml). Then run: manimgen --resume",
+            "To make the video anyway, with those sections silent, run: "
+            "manimgen --resume --allow-silent",
+        ],
+    )
+    raise SystemExit(EXIT_FAILED)
+
+
 def _die(message: str):
     """Print an error to stderr and exit non-zero."""
     print(f"[manimgen] error: {message}", file=sys.stderr)
@@ -1075,6 +1120,15 @@ def main():
             f"Resume from the cached plan ({_PLAN_CACHE}). Alone it reuses the "
             "plan as is; with a topic or --pdf the plan must match it or the "
             "run is refused."
+        ),
+    )
+    parser.add_argument(
+        "--allow-silent",
+        action="store_true",
+        help=(
+            "If narration (text to speech) still fails after its retries, "
+            "make those sections without a voice instead of stopping. They are "
+            "flagged in the summary and the run exits 3."
         ),
     )
     args = parser.parse_args()
@@ -1183,6 +1237,14 @@ def main():
                     "audio_slices": audio_slices,
                     "cue_durations": [seg.duration for seg in segments],
                 }
+
+    tts_failed = {
+        sid: audio["tts_error"]
+        for sid, audio in all_section_audio.items()
+        if "tts_error" in audio
+    }
+    if tts_failed and not args.allow_silent:
+        _stop_for_narration(lesson_plan, content_hash, tts_failed, started)
 
     overview = _build_overview(lesson_plan, all_section_audio)
     logger.info("[manimgen] Overview: %s", overview["pacing_notes"])

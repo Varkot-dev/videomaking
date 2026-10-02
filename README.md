@@ -423,6 +423,9 @@ manimgen --pdf lecture.pdf
 # Resume a previous run from cached plan
 manimgen --resume
 
+# If narration (edge-tts) keeps failing, make those sections silent instead of stopping
+manimgen --resume --allow-silent
+
 # Cap LLM retry calls (saves usage during testing)
 export MANIMGEN_MAX_RETRY_LLM_CALLS=0   # deterministic fixes only, no LLM retries
 
@@ -475,6 +478,14 @@ next section, prints the reset time when it is known, and exits 4. Finished
 sections stay cached, so once the limit resets `manimgen --resume` builds only
 what is missing (when planning itself hit the limit there is no plan yet, so
 rerun the same command instead).
+
+Narration runs for every section before any scene is generated. edge-tts is
+tried three times per section; if it still fails (no network, a proxy that
+blocks it, the service down), the run stops right there with exit code 1, so
+only the planning calls were used. Fix the connection (behind a proxy, set
+`HTTPS_PROXY` or `tts.proxy` in `config.yaml`) and run `manimgen --resume`, or
+run `manimgen --resume --allow-silent` to make the video with those sections
+silent; they are then reported as `silent` and the exit code is 3.
 
 A cached section keeps the status it was built with, so a fallback card reused
 by `--resume` is still reported as `fallback`.
