@@ -862,100 +862,65 @@ def _fix_transform_matching_tex_on_text(code: str) -> tuple[str, str | None]:
 
 
 def _fix_become_inside_play(code: str) -> tuple[str, str | None]:
-    """Rewrite self.play(obj.become(...), ...) to the correct two-step form.
+    """Rewrite self.play(obj.become(...), ...) to self.play(obj.animate.become(...), ...).
 
     In ManimGL, become() returns self (the mutated Mobject), not an Animation.
     Passing it to self.play() is equivalent to self.play(obj) which crashes with
-    "Object X cannot be converted to an animation".
+    "Object X cannot be converted to an animation". `.animate.become(...)` is a
+    real animation, so the rewrite is made in place: only the `.animate` is
+    inserted, every other argument of the play call (other animations, run_time,
+    rate_func) stays exactly as written.
 
-    Correct pattern:
-        obj.become(SurroundingRectangle(...))
-        self.play(ShowCreation(obj), run_time=X)
-
-    Handles both single-line and multiline self.play() forms:
-        # single-line:
-        self.play(scan_rect.become(SurroundingRectangle(...)), run_time=0.2)
-        # multiline:
-        self.play(
-            scan_rect.become(SurroundingRectangle(...)),
-            run_time=0.2
-        )
+    Only arguments of self.play that are the become call itself (or an element
+    of a starred list/generator of them) are rewritten; a become() nested
+    deeper, e.g. inside Transform(a, b.become(c)), is a mobject there and stays.
     """
-    # Find self.play( ... var.become( ... ) ... ) using depth-aware scan on the full code.
-    # We do NOT use .animate.become() — that is a different (valid) pattern.
-    play_re = re.compile(r"([ \t]*)self\.play\(")
-    result_parts: list[str] = []
-    pos = 0
-    count = 0
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code, None
+    lines = _split_source_lines(code)
 
-    while pos < len(code):
-        m = play_re.search(code, pos)
-        if not m:
-            result_parts.append(code[pos:])
-            break
+    def is_bare_become(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "become"
+            and not (
+                isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "animate"
+            )
+        )
 
-        indent = m.group(1)
-        play_open = m.end() - 1  # index of '(' in self.play(
-
-        # Walk the full self.play(...) call depth-aware
-        depth = 1
-        i = play_open + 1
-        while i < len(code) and depth > 0:
-            if code[i] == "(":
-                depth += 1
-            elif code[i] == ")":
-                depth -= 1
-            i += 1
-        play_close = i - 1  # index of the closing ) of self.play(...)
-
-        play_interior = code[
-            play_open + 1 : play_close
-        ]  # everything inside self.play(...)
-
-        # Check if interior contains var.become( but NOT var.animate.become(
-        become_re = re.compile(r"(?<!\.)(?<!animate\.)(\w+)\.become\(")
-        bm = become_re.search(play_interior)
-
-        if not bm:
-            # No bare .become() — leave unchanged
-            result_parts.append(code[pos : play_close + 1])
-            pos = play_close + 1
+    inserts: list[int] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "play"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "self"
+        ):
             continue
-
-        var_name = bm.group(1)
-
-        # Extract the content of var.become(...) using depth-aware scan inside play_interior
-        become_open_in_interior = bm.end() - 1  # '(' of become(
-        bdepth = 1
-        bi = become_open_in_interior + 1
-        while bi < len(play_interior) and bdepth > 0:
-            if play_interior[bi] == "(":
-                bdepth += 1
-            elif play_interior[bi] == ")":
-                bdepth -= 1
-            bi += 1
-        become_close_in_interior = bi - 1
-        become_inner = play_interior[
-            become_open_in_interior + 1 : become_close_in_interior
-        ]
-
-        # Extract run_time kwarg from the play_interior (after the become call)
-        after_become = play_interior[become_close_in_interior + 1 :]
-        rt_match = re.search(r"run_time\s*=\s*[\d.]+", after_become)
-        rt_str = f", {rt_match.group(0)}" if rt_match else ""
-
-        # Emit: become() on its own line, then self.play(ShowCreation(...))
-        result_parts.append(code[pos : m.start()])  # code before this self.play
-        result_parts.append(f"{indent}{var_name}.become({become_inner})\n")
-        result_parts.append(f"{indent}self.play(ShowCreation({var_name}){rt_str})")
-        pos = play_close + 1
-        count += 1
-
-    if count:
-        return "".join(
-            result_parts
-        ), f"self.play(obj.become(...)) -> become()+ShowCreation ({count})"
-    return code, None
+        for arg in node.args:
+            if isinstance(arg, ast.Starred):
+                arg = arg.value
+                if isinstance(arg, (ast.ListComp, ast.GeneratorExp)):
+                    arg = arg.elt
+            if is_bare_become(arg) and arg.func.value.end_lineno is not None:
+                inserts.append(
+                    _line_col_to_offset(
+                        lines, arg.func.value.end_lineno, arg.func.value.end_col_offset
+                    )
+                )
+    if not inserts:
+        return code, None
+    for at in sorted(set(inserts), reverse=True):
+        code = code[:at] + ".animate" + code[at:]
+    return (
+        code,
+        f"self.play(obj.become(...)) -> obj.animate.become(...) ({len(inserts)})",
+    )
 
 
 def _inject_color_role_header(code: str) -> tuple[str, str | None]:
@@ -998,15 +963,13 @@ def _inject_color_role_header(code: str) -> tuple[str, str | None]:
         + "\n"
     )
 
-    # Insert after the last top-level import line so roles are module-scoped before
-    # the Scene class; if there are no imports, prepend at the very top.
-    lines = code.splitlines(keepends=True)
-    last_import = -1
-    for i, line in enumerate(lines):
-        if re.match(r"\s*(from\s+\S+\s+import|import\s+\S+)", line):
-            last_import = i
-    if last_import >= 0:
-        insert_at = last_import + 1
+    # Insert after the last TOP-LEVEL import statement (by AST position, so an
+    # import inside a method or a continuation line is never mistaken for one) so
+    # roles are module-scoped before the Scene class; with no imports, prepend.
+    imports = [n for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))]
+    if imports:
+        lines = _split_source_lines(code)
+        insert_at = imports[-1].end_lineno
         new_code = (
             "".join(lines[:insert_at]) + "\n" + header + "".join(lines[insert_at:])
         )
@@ -1014,6 +977,58 @@ def _inject_color_role_header(code: str) -> tuple[str, str | None]:
         new_code = header + "\n" + code
 
     return new_code, f"injected color-role header ({', '.join(injected)})"
+
+
+def _replace_self_calls(
+    code: str, method: str, build: Callable[[str], str | None]
+) -> tuple[str, int]:
+    """Replace every ``self.<method>(...)`` call expression by its AST span.
+
+    ``build(args_source)`` returns the replacement text, or None when the call
+    cannot be translated; those calls become ``pass`` (when the call is a whole
+    statement) or ``None`` (inside a larger expression). Only the call expression
+    is replaced, so nested parentheses, multi-line calls and anything that follows
+    on the same line (``; next_statement``) are untouched. Fail-open on a syntax
+    error. Returns ``(code, replaced_count)``.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code, 0
+    lines = _split_source_lines(code)
+    statement_calls = {
+        id(n.value)
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)
+    }
+    edits: list[tuple[int, int, str]] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == method
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "self"
+            and node.end_lineno is not None
+        ):
+            continue
+        start = _line_col_to_offset(lines, node.lineno, node.col_offset)
+        end = _line_col_to_offset(lines, node.end_lineno, node.end_col_offset)
+        src = code[start:end]
+        args = src[src.index("(") + 1 : src.rindex(")")]
+        new = build(args)
+        if new is None:
+            new = "pass" if id(node) in statement_calls else "None"
+        edits.append((start, end, new))
+    # Outermost-last so nested matches (rare) cannot corrupt earlier offsets.
+    kept: list[tuple[int, int, str]] = []
+    for e in sorted(edits, key=lambda e: (e[0], -e[1])):
+        if kept and e[0] < kept[-1][1]:
+            continue
+        kept.append(e)
+    for start, end, new in reversed(kept):
+        code = code[:start] + new + code[end:]
+    return code, len(kept)
 
 
 def _fix_set_camera_orientation(code: str) -> tuple[str, str | None]:
@@ -1026,22 +1041,19 @@ def _fix_set_camera_orientation(code: str) -> tuple[str, str | None]:
     phi and theta may appear in either order and with optional `* DEGREES` suffix.
     Values without `* DEGREES` are passed through as-is (assumed already in degrees).
 
-    If the call cannot be parsed cleanly, the entire line is removed to prevent
-    AttributeError crashes — the retry LLM will receive the banned-pattern message.
+    If the call cannot be parsed cleanly, only that call expression is replaced by
+    `pass` to prevent AttributeError crashes; the retry LLM receives the
+    banned-pattern message.
     """
-    outer = re.compile(r"self\.set_camera_orientation\(([^)]*)\)")
 
-    def _replacer(m: re.Match) -> str:
-        args = m.group(1)
+    def build(args: str) -> str | None:
         phi_m = re.search(r"\bphi\s*=\s*(-?[\d.]+)\s*(?:\*\s*DEGREES)?", args)
         theta_m = re.search(r"\btheta\s*=\s*(-?[\d.]+)\s*(?:\*\s*DEGREES)?", args)
         if phi_m and theta_m:
-            phi_val = phi_m.group(1)
-            theta_val = theta_m.group(1)
-            return f"self.frame.reorient({theta_val}, {phi_val})"
-        return "pass  # removed unparseable set_camera_orientation call"
+            return f"self.frame.reorient({theta_m.group(1)}, {phi_m.group(1)})"
+        return None
 
-    new, count = re.subn(outer, _replacer, code)
+    new, count = _replace_self_calls(code, "set_camera_orientation", build)
     if count:
         return new, f"set_camera_orientation -> self.frame.reorient ({count})"
     return code, None
@@ -1057,18 +1069,17 @@ def _fix_begin_ambient_camera_rotation(code: str) -> tuple[str, str | None]:
     the spin lives on the frame as add_ambient_rotation(angular_speed=...). The
     ManimCommunity `rate=` kwarg maps to ManimGL `angular_speed=`. A bare call
     with no args maps to add_ambient_rotation() (its angular_speed defaults).
+    Multi-line calls and nested parentheses are handled (#57).
     """
-    outer = re.compile(r"self\.begin_ambient_camera_rotation\(([^)]*)\)")
 
-    def _replacer(m: re.Match) -> str:
-        args = m.group(1).strip()
+    def build(args: str) -> str:
         rate_m = re.search(r"\brate\s*=\s*(-?[\d.]+)", args)
         if rate_m:
             return f"self.frame.add_ambient_rotation(angular_speed={rate_m.group(1)})"
         # bare call or unrecognized args: use the default spin
         return "self.frame.add_ambient_rotation()"
 
-    new, count = re.subn(outer, _replacer, code)
+    new, count = _replace_self_calls(code, "begin_ambient_camera_rotation", build)
     if count:
         return new, f"begin_ambient_camera_rotation -> add_ambient_rotation ({count})"
     return code, None
@@ -1101,30 +1112,22 @@ def _strip_label_kwarg_from_numberline(code: str) -> tuple[str, str | None]:
 
 
 def _fix_broken_call_args(code: str) -> tuple[str, list[str]]:
-    """Fix LLM-generated calls with leading/trailing commas in argument lists.
+    """Strip the stray leading comma from calls like get_axis_labels(, y_label=...).
 
-    Patterns like get_axis_labels(, y_label=...) and reorient(, theta=...)
-    are SyntaxErrors. Strip the stray leading comma.
+    ``f(, arg)`` is a SyntaxError. Runs only on code that does not compile: valid
+    code is never touched (a trailing comma, as in the 1-tuple ``(title,)``, is
+    legal Python and changes meaning if removed).
     """
-    applied: list[str] = []
-    # Leading comma after open paren: func(, arg) → func(arg)
+    try:
+        ast.parse(code)
+    except SyntaxError:
+        pass
+    else:
+        return code, []
     new, count = re.subn(r"\(\s*,\s*", "(", code)
     if count:
-        applied.append(f"removed leading comma in call args ({count})")
-        code = new
-    # Trailing comma before close paren when nothing follows: func(arg,) → func(arg)
-    new, count = re.subn(r",\s*\)", ")", code)
-    if count:
-        applied.append(f"removed trailing comma in call args ({count})")
-        code = new
-    # reorient(, theta=X * DEGREES) → reorient() — can't salvage partial 3D args
-    new, count = re.subn(
-        r"\.reorient\(\s*,\s*theta\s*=\s*[^)]+\)", ".reorient(-45, 70)", code
-    )
-    if count:
-        applied.append(f"fixed broken reorient call ({count})")
-        code = new
-    return code, applied
+        return new, [f"removed leading comma in call args ({count})"]
+    return code, []
 
 
 def _user_traceback_line(stderr: str) -> int | None:
