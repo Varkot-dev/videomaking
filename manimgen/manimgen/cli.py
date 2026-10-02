@@ -652,6 +652,36 @@ def _die(message: str):
     raise SystemExit(1)
 
 
+def _save_plan(lesson_plan: dict) -> None:
+    """Write the plan cache atomically so a crash never leaves a torn plan.json."""
+    os.makedirs(os.path.dirname(_PLAN_CACHE), exist_ok=True)
+    tmp_path = _PLAN_CACHE + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(lesson_plan, f, indent=2)
+    os.replace(tmp_path, _PLAN_CACHE)
+    logger.info("[manimgen] Plan saved to %s", _PLAN_CACHE)
+
+
+def _load_cached_plan() -> dict:
+    """Load the cached plan for --resume, exiting with a clear error if unusable."""
+    if not os.path.exists(_PLAN_CACHE):
+        _die(
+            f"--resume needs a cached plan but none exists at {_PLAN_CACHE} "
+            "(the path is relative to the current directory). "
+            "Run without --resume first."
+        )
+    try:
+        with open(_PLAN_CACHE, encoding="utf-8") as f:
+            lesson_plan = json.load(f)
+    except (OSError, ValueError) as e:
+        _die(f"cached plan {_PLAN_CACHE} is corrupt or unreadable ({e}). Delete it.")
+    if not isinstance(lesson_plan, dict) or not isinstance(
+        lesson_plan.get("sections"), list
+    ):
+        _die(f"cached plan {_PLAN_CACHE} is corrupt: no sections list. Delete it.")
+    return lesson_plan
+
+
 def main():
     # Windows writes redirected or piped output in the ANSI code page (cp1252),
     # which cannot encode the arrows used in log lines; replace instead of
@@ -664,13 +694,21 @@ def main():
                 pass
 
     parser = argparse.ArgumentParser(description="ManimGen: topic to 3B1B-style video")
-    group = parser.add_mutually_exclusive_group(required=True)
+    group = parser.add_mutually_exclusive_group()
     group.add_argument("topic", nargs="?", help="Topic string")
     group.add_argument("--pdf", metavar="FILE", help="Path to a PDF of lecture notes")
     parser.add_argument(
-        "--resume", action="store_true", help=f"Resume from cached plan ({_PLAN_CACHE})"
+        "--resume",
+        action="store_true",
+        help=(
+            f"Resume from the cached plan ({_PLAN_CACHE}). Alone it reuses the "
+            "plan as is; with a topic or --pdf the plan must match it or the "
+            "run is refused."
+        ),
     )
     args = parser.parse_args()
+    if not (args.topic or args.pdf or args.resume):
+        parser.error("one of the arguments topic, --pdf or --resume is required")
 
     _configure_logging()
 
@@ -681,12 +719,23 @@ def main():
     clear_mismatch_log()
 
     # --- Plan ---
-    if args.resume and os.path.exists(_PLAN_CACHE):
-        logger.info("[manimgen] Resuming from cached plan: %s", _PLAN_CACHE)
-        with open(_PLAN_CACHE, encoding="utf-8") as f:
-            lesson_plan = json.load(f)
-        # Recover topic hash from cached plan (stored during original run)
+    if args.resume:
+        # Refuse rather than replan: replanning spends LLM quota (#64).
+        lesson_plan = _load_cached_plan()
         current_topic_hash = lesson_plan.get("_topic_hash", "")
+        requested = None
+        if args.pdf:
+            requested = (args.pdf, _topic_hash(os.path.abspath(args.pdf)))
+        elif args.topic:
+            requested = (args.topic, _topic_hash(parse_input(args.topic)))
+        if requested and requested[1] != current_topic_hash:
+            _die(
+                f"cached plan {_PLAN_CACHE} is for "
+                f"'{lesson_plan.get('title', '?')}' and does not match the "
+                f"requested input '{requested[0]}'. Rerun without --resume to "
+                "plan it, or drop the input to resume the cached plan."
+            )
+        logger.info("[manimgen] Resuming from cached plan: %s", _PLAN_CACHE)
         if not current_topic_hash:
             logger.warning(
                 "[manimgen] Cached plan has no _topic_hash — all renders will be treated as stale"
@@ -696,20 +745,14 @@ def main():
         current_topic_hash = _topic_hash(os.path.abspath(args.pdf))
         lesson_plan = plan_lesson_from_pdf(args.pdf)
         lesson_plan["_topic_hash"] = current_topic_hash
-        os.makedirs(os.path.dirname(_PLAN_CACHE), exist_ok=True)
-        with open(_PLAN_CACHE, "w", encoding="utf-8") as f:
-            json.dump(lesson_plan, f, indent=2)
-        logger.info("[manimgen] Plan saved to %s", _PLAN_CACHE)
+        _save_plan(lesson_plan)
     else:
         logger.info("[manimgen] Input: %s", args.topic)
         topic = parse_input(args.topic)
         current_topic_hash = _topic_hash(topic)
         lesson_plan = plan_lesson(topic)
         lesson_plan["_topic_hash"] = current_topic_hash
-        os.makedirs(os.path.dirname(_PLAN_CACHE), exist_ok=True)
-        with open(_PLAN_CACHE, "w", encoding="utf-8") as f:
-            json.dump(lesson_plan, f, indent=2)
-        logger.info("[manimgen] Plan saved to %s", _PLAN_CACHE)
+        _save_plan(lesson_plan)
 
     logger.info("[manimgen] Planned %d sections", len(lesson_plan["sections"]))
     logger.info("[manimgen] TTS: %s", "enabled" if tts_on else "disabled")
