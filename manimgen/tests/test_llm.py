@@ -771,3 +771,19 @@ class TestOllamaHygiene:
         assert llm_mod._load_llm_config()["ollama_num_ctx"] == 16384
         cfg.write_text("llm: {}\n", encoding="utf-8")
         assert llm_mod._load_llm_config()["ollama_num_ctx"] == 32768
+
+
+class TestSuiteNeverLaunchesRealClaude:
+    """Guard against tests that spend plan allowance by starting `claude`."""
+
+    def test_claude_is_unfindable_by_default_in_tests(self):
+        import shutil
+
+        assert shutil.which("claude") is None
+
+    def test_unmocked_chat_fails_without_launching_anything(self, monkeypatch):
+        monkeypatch.setenv("LLM_PROVIDER", "claude_cli")
+        with patch.object(llm_mod, "_run_cli") as run:
+            with pytest.raises(RuntimeError, match="not found on PATH"):
+                chat(system="s", user="u")
+        run.assert_not_called()
