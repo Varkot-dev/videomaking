@@ -7,10 +7,12 @@ This directory exists to replace a prose estimate with a measurement.
 | path | purpose |
 |---|---|
 | `corpus/` | 57 labelled broken-scene cases, each with a provenance sidecar |
-| `run_corpus.py` | runs Codeguard's real static repair path over the corpus, emits the resolution rate |
+| `run_corpus.py` | runs Codeguard's real static repair path over the corpus, emits the static repair rate and the examples damage metric |
+| `damage.py` | must-not-break tier: runs the repair path over `examples/` and measures damage to known-good code |
 | `aggregate_logs.py` | computes the **same** metric from production evidence logs |
 | `results/codeguard.json` | machine-readable measurement output |
 | `results/codeguard.md` | human-readable summary |
+| `results/baseline.json` | committed ratchet floor enforced by `tests/test_eval_ratchet.py` |
 | `results/fix_rule_inventory.md` | exact fix-rule count + regex-vs-AST mechanism audit |
 
 ## Reproduce
@@ -19,6 +21,27 @@ This directory exists to replace a prose estimate with a measurement.
 python3 eval/run_corpus.py                 # corpus measurement
 python3 eval/aggregate_logs.py             # production measurement (needs real runs)
 python3 -m pytest tests/test_run_corpus.py tests/test_evidence_log.py -q
+```
+
+## Must-not-break tier and the ratchet
+
+The repair rate is a static number about broken code. It is not video quality, and
+it has no negative control. Every file in `examples/` is known-good ManimGL, so
+`damage.py` runs the same repair path over each one and records whether it still
+compiles, keeps every class/def and every `self.play`/`self.wait` call, introduces
+no undefined name and drops no animation, plus how many statements were removed.
+`damage` per example is statements removed + animations dropped + new undefined
+names (+1000 if it no longer compiles).
+
+`results/baseline.json` stores the numbers measured from the code when it was
+committed. `tests/test_eval_ratchet.py` fails if the repair count drops, an
+example that survived is now broken, or damage rises. No network, no LLM, a few
+seconds, any OS.
+
+```bash
+python3 eval/damage.py                     # per-example damage table
+python3 -m pytest tests/test_eval_ratchet.py -q
+python3 eval/run_corpus.py --write-baseline   # only after an intentional improvement
 ```
 
 ## How resolution is scored
