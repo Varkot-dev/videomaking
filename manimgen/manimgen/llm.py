@@ -11,6 +11,10 @@ Provider resolution order:
 The `claude_cli` provider shells out to `claude -p` (Claude Code in headless
 mode), so calls are billed to the signed-in Claude plan instead of per-token
 API usage. It needs Claude Code installed and logged in (`claude` on PATH).
+
+No-spend guard: the per-token providers (`anthropic`, `gemini`) are refused
+unless MANIMGEN_ALLOW_PAID_API=1 is set, and `claude_cli` refuses any reply
+that Claude Code produced with an API key instead of the subscription login.
 The `ollama` provider talks to a local Ollama server (default
 http://localhost:11434) and needs no API key — use it to exercise pipeline
 plumbing for free. Switching back to gemini/anthropic for a real
@@ -145,6 +149,20 @@ def _validate_ollama_url(url: str) -> str:
     return url
 
 
+# Providers that bill per token against an API key. `claude_cli` (Claude plan)
+# and `ollama` (local) never do.
+_PAID_PROVIDERS = frozenset({"anthropic", "gemini"})
+_ALLOW_PAID_ENV = "MANIMGEN_ALLOW_PAID_API"
+
+
+class PaidApiBlockedError(RuntimeError):
+    """Raised instead of making a call that would be billed per token."""
+
+
+def _paid_api_allowed() -> bool:
+    return os.environ.get(_ALLOW_PAID_ENV, "").strip().lower() in {"1", "true", "yes"}
+
+
 def _resolve_provider() -> str:
     env = os.environ.get("LLM_PROVIDER", "").strip().lower()
     if env:
@@ -174,6 +192,13 @@ def chat(
                 code fence around the JSON stripped.
     """
     provider = _resolve_provider()
+
+    if provider in _PAID_PROVIDERS and not _paid_api_allowed():
+        raise PaidApiBlockedError(
+            f"LLM_PROVIDER={provider} bills per token and paid API calls are "
+            f"disabled. Use LLM_PROVIDER=claude_cli (Claude subscription) or "
+            f"set {_ALLOW_PAID_ENV}=1 to allow paid calls."
+        )
 
     if provider == "gemini":
         return _gemini(system, user, images or [], json_mode=json_mode)
@@ -284,15 +309,29 @@ def _anthropic(system: str, user: str, images: list[str]) -> str:
     return text.strip()
 
 
+# Variables that make Claude Code authenticate with something other than the
+# subscription login: an API key / bearer token (billed per token) or a cloud
+# provider account (Bedrock, Vertex, Foundry; billed by that cloud).
+_CLI_PAID_AUTH_VARS = frozenset(
+    {
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX",
+        "CLAUDE_CODE_USE_FOUNDRY",
+    }
+)
+
+
 def _claude_cli_env() -> dict[str, str]:
     """Environment for the `claude` subprocess.
 
-    ANTHROPIC_API_KEY is removed so Claude Code bills the signed-in Claude plan
-    rather than silently switching to per-token API billing when a key happens
+    Paid-auth variables are removed so Claude Code bills the signed-in Claude
+    plan rather than silently switching to per-token billing when a key happens
     to be set (e.g. from .env for the `anthropic` provider). CLAUDE.md loading
     is disabled so project/user memory files do not leak into the prompt.
     """
-    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    env = {k: v for k, v in os.environ.items() if k not in _CLI_PAID_AUTH_VARS}
     env["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1"
     return env
 
@@ -369,6 +408,7 @@ def _claude_cli(system: str, user: str, images: list[str]) -> str:
                 continue
 
             stdout = proc.stdout.decode("utf-8", errors="replace")
+            _ensure_subscription_auth(stdout)
             result = _parse_claude_cli_result(stdout)
             if result is not None and not result.get("is_error"):
                 return str(result.get("result", "")).strip()
@@ -385,9 +425,8 @@ def _claude_cli(system: str, user: str, images: list[str]) -> str:
     raise RuntimeError(f"claude -p failed: {last_error}")
 
 
-def _parse_claude_cli_result(stdout: str) -> dict | None:
-    """Return the final `{"type": "result", ...}` event from stream-json output."""
-    result = None
+def _iter_cli_events(stdout: str):
+    """Yield each JSON object event from `claude -p` stream-json output."""
     for line in stdout.splitlines():
         line = line.strip()
         if not line.startswith("{"):
@@ -396,9 +435,42 @@ def _parse_claude_cli_result(stdout: str) -> dict | None:
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(event, dict) and event.get("type") == "result":
+        if isinstance(event, dict):
+            yield event
+
+
+def _parse_claude_cli_result(stdout: str) -> dict | None:
+    """Return the final `{"type": "result", ...}` event from stream-json output."""
+    result = None
+    for event in _iter_cli_events(stdout):
+        if event.get("type") == "result":
             result = event
     return result
+
+
+def _ensure_subscription_auth(stdout: str) -> None:
+    """Refuse output Claude Code produced with an API key instead of the login.
+
+    The init event reports where the credential came from: "none" means the
+    OAuth subscription login. Anything else ("ANTHROPIC_API_KEY",
+    "apiKeyHelper", ...) means the call was billed per token, e.g. because the
+    user's Claude Code settings configure an apiKeyHelper. That call has
+    already happened, so this stops the run before it makes any more. Paid
+    auth is allowed only with MANIMGEN_ALLOW_PAID_API=1.
+    """
+    if _paid_api_allowed():
+        return
+    for event in _iter_cli_events(stdout):
+        if event.get("type") == "system" and event.get("subtype") == "init":
+            source = event.get("apiKeySource", "none")
+            if source not in (None, "none"):
+                raise PaidApiBlockedError(
+                    f"Claude Code authenticated with {source!r} (per-token "
+                    "billing) instead of your Claude subscription. Remove the "
+                    "API key / apiKeyHelper from your Claude Code settings and "
+                    f"run `claude` to log in, or set {_ALLOW_PAID_ENV}=1."
+                )
+            return
 
 
 def _ollama(system: str, user: str, images: list[str]) -> str:
