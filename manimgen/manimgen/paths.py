@@ -101,10 +101,31 @@ def plan_cache() -> str:
 # ---------------------------------------------------------------------------
 
 
+# manimgl accepts exactly these quality flags (`manimgl --help`): -l is 480p,
+# -m is 720p, --hd is 1080p, --uhd is 4K. The configured name is mapped to one
+# of them; building "--" + name produced invalid flags such as "--l".
+_QUALITY_FLAGS = {
+    "l": "-l",
+    "low": "-l",
+    "m": "-m",
+    "medium": "-m",
+    "hd": "--hd",
+    "high": "--hd",
+    "uhd": "--uhd",
+    "4k": "--uhd",
+}
+
+
 def render_quality_flag() -> str:
     """Return the manimgl CLI flag for the configured quality, e.g. '--hd'."""
-    q = _RENDERING["quality"]
-    return f"--{q}"
+    q = str(_RENDERING["quality"]).strip().lower()
+    try:
+        return _QUALITY_FLAGS[q]
+    except KeyError:
+        raise ValueError(
+            f"rendering.quality {q!r} in config.yaml is not valid; use one of "
+            f"{sorted(_QUALITY_FLAGS)} (l = 480p, m = 720p, hd = 1080p, uhd = 4K)"
+        ) from None
 
 
 def render_resolution() -> str:
