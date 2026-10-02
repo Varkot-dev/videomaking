@@ -232,9 +232,12 @@ def chat(
         json_mode: When True, ask the provider to emit guaranteed-valid JSON
                 (Gemini response_mime_type='application/json'). Use only for
                 calls that expect a JSON object/array — never for code
-                generation, which returns Python. Gemini enforces it natively;
-                the other providers rely on the prompt and have any markdown
-                code fence around the JSON stripped.
+                generation, which returns Python. Only Gemini enforces it
+                natively. For anthropic, claude_cli and ollama this is NOT
+                guaranteed JSON: the prompt must ask for JSON, and the only
+                help given is stripping a surrounding markdown code fence.
+                The text is not validated, so callers still need their own
+                parse-and-retry (the planner has one).
         role:   What the call is for (see ROLES). Picks the model (env
                 MANIMGEN_MODEL_<ROLE>, then llm.models in config.yaml, then the
                 provider default) and labels the call in the usage ledger.

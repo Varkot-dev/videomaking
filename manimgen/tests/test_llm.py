@@ -294,6 +294,23 @@ class TestStripJsonFence:
         with patch("manimgen.llm._claude_cli", return_value="```json\n[1]\n```"):
             assert chat(system="s", user="u", json_mode=True) == "[1]"
 
+    @pytest.mark.parametrize(
+        "provider,helper",
+        [("anthropic", "_anthropic"), ("ollama", "_ollama")],
+    )
+    def test_chat_json_mode_strips_fence_for_anthropic_and_ollama(
+        self, monkeypatch, provider, helper
+    ):
+        monkeypatch.setenv("LLM_PROVIDER", provider)
+        monkeypatch.setenv("MANIMGEN_ALLOW_PAID_API", "1")
+        with patch(f"manimgen.llm.{helper}", return_value="```json\n[1]\n```"):
+            assert chat(system="s", user="u", json_mode=True) == "[1]"
+
+    def test_chat_docstring_does_not_promise_native_json_for_other_providers(self):
+        doc = chat.__doc__ or ""
+        assert "NOT" in doc and "guaranteed JSON" in doc
+        assert "Only Gemini enforces it" in doc
+
     def test_chat_leaves_code_fences_without_json_mode(self, monkeypatch):
         monkeypatch.setenv("LLM_PROVIDER", "claude_cli")
         reply = "```python\nx = 1\n```"
