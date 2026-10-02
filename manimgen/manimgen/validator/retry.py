@@ -2,7 +2,6 @@ import enum
 import logging
 import os
 import re
-import subprocess
 
 from manimgen import paths
 from manimgen.llm import chat
@@ -11,14 +10,8 @@ from manimgen.validator.codeguard import (
     apply_error_aware_fixes,
     precheck_and_autofix_file,
 )
-from manimgen.validator.env import get_render_env
 from manimgen.validator.layout_checker import check_layout
-from manimgen.validator.render_command import build_manimgl_command, with_utf8_io
-from manimgen.validator.runner import (
-    _find_rendered_video,
-    _is_3d_scene,
-    _render_floor,
-)
+from manimgen.validator.render_command import run_manimgl
 from manimgen.validator.timing_verifier import auto_fix_timing, verify_timing
 
 logger = logging.getLogger(__name__)
@@ -610,33 +603,13 @@ def _run_and_capture(scene_path: str, class_name: str) -> dict:
             )
         return {"success": False, "video_path": None, "stderr": stderr}
 
-    # Director scenes can be long; avoid false timeout-driven fallbacks.
-    timeout = 360 if _is_3d_scene(scene_path) else 240
-    # Freshness floor: without it, an attempt whose render silently produced no
-    # file would pick up the PREVIOUS attempt's video and validate that instead
-    # — shipping the pre-fix render while we pay for a fix that never landed.
-    render_started_at = _render_floor()
-    try:
-        result = subprocess.run(
-            build_manimgl_command(scene_path, class_name),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            env=with_utf8_io(get_render_env()),
-        )
-        if result.returncode == 0:
-            return {
-                "success": True,
-                "video_path": _find_rendered_video(
-                    class_name, newer_than=render_started_at
-                ),
-                "stderr": "",
-            }
-        return {"success": False, "video_path": None, "stderr": result.stderr}
-    except subprocess.TimeoutExpired:
-        return {"success": False, "video_path": None, "stderr": "TimeoutExpired"}
+    # Shared entry point (tree-kill timeout, configurable budget, fresh-video
+    # check). Exit 0 without a fresh video comes back as a failure, so callers
+    # never see success with video_path None.
+    result = run_manimgl(scene_path, class_name)
+    if result.ok:
+        return {"success": True, "video_path": result.video_path, "stderr": ""}
+    return {"success": False, "video_path": None, "stderr": result.stderr}
 
 
 _retry_system_prompt_cache: str | None = None

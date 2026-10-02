@@ -239,7 +239,7 @@ All `manimgl` subprocess calls use `-c "#1C1C1C"`. The flag is `-c`, NOT `--back
 - Subprocess timeouts are **per-call and sized to the work**, not one global
   value. Current tiers: ffprobe/audio probes 5–15s, short ffmpeg and
   frame-extract calls 30s, audio slicing 120s, full ffmpeg encodes 300s,
-  `manimgl` scene renders 240s (360s for 3D). Values live in named
+  `manimgl` scene renders 240s (360s for 3D, `rendering.render_timeout_*` in config.yaml, whole process tree killed on expiry). Values live in named
   `_*_TIMEOUT_SECONDS` constants near the top of each renderer module — read
   the constant rather than trusting this list. When adding a new subprocess
   call, always pass an explicit `timeout=`: an ffmpeg or ffprobe call without

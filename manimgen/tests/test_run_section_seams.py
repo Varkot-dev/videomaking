@@ -300,8 +300,6 @@ class TestPrecheckBlockedFirstDraft:
         """Through the real retry_scene: the blocked draft's first attempt is the
         precheck failure, the LLM fix receives its stderr, and only the existing
         per-section and per-run budgets are spent."""
-        import subprocess
-
         import manimgen.validator.retry as retry
 
         calls = self._wire(monkeypatch, tmp_path, _BLOCKED_DRAFT, fake_retry=False)
@@ -309,10 +307,10 @@ class TestPrecheckBlockedFirstDraft:
 
         def _no_render(cmd, *a, **k):
             renders.append(cmd)
-            raise subprocess.TimeoutExpired(cmd="manimgl", timeout=1)
+            return None, "", "", True  # timed out
 
         monkeypatch.setattr(retry, "_load_retry_system_prompt", lambda: "sys")
-        monkeypatch.setattr(retry.subprocess, "run", _no_render)
+        monkeypatch.setattr("manimgen.procutil.run_tree", _no_render)
         retry.reset_run_budget()
         prompts = []
 

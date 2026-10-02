@@ -100,7 +100,7 @@ def test_run_scene_invokes_manimgl_subprocess(mocker, tmp_path):
 
     fake_proc = mocker.MagicMock(returncode=0, stdout="ok", stderr="")
     run_mock = mocker.patch(
-        "manimgen.validator.runner.subprocess.run", return_value=fake_proc
+        "manimgen.procutil.run_tree", return_value=(fake_proc.returncode, "ok", fake_proc.stderr, False)
     )
     mocker.patch(
         "manimgen.validator.runner.precheck_and_autofix_file",
@@ -130,7 +130,7 @@ def test_run_scene_returns_failure_on_nonzero_exit(mocker, tmp_path):
 
     fake_proc = mocker.MagicMock(returncode=1, stdout="", stderr="boom")
     mocker.patch(
-        "manimgen.validator.runner.subprocess.run", return_value=fake_proc
+        "manimgen.procutil.run_tree", return_value=(fake_proc.returncode, "ok", fake_proc.stderr, False)
     )
     mocker.patch(
         "manimgen.validator.runner.precheck_and_autofix_file",
@@ -156,7 +156,7 @@ def test_fallback_scene_renders_without_llm(mocker, tmp_path):
     )
     fake_proc = mocker.MagicMock(returncode=0, stdout="ok", stderr="")
     run_mock = mocker.patch(
-        "manimgen.validator.fallback.subprocess.run", return_value=fake_proc
+        "manimgen.procutil.run_tree", return_value=(0, "ok", "", False)
     )
     mocker.patch(
         "manimgen.validator.runner._find_rendered_video",

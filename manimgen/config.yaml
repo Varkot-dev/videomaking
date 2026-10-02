@@ -34,6 +34,13 @@ rendering:
   resolution: "1920x1080"
   fps: 60
   max_retries: 3        # LLM retry calls per scene (increase for production)
+  # Render time budgets in seconds; the whole manimgl process tree is killed on
+  # expiry. Unmeasured on the target PC: run `python scripts/render_smoke.py`
+  # there and set these from the 1080p time. Env override:
+  # MANIMGEN_RENDER_TIMEOUT_2D / _3D / _FALLBACK.
+  render_timeout_2d: 240
+  render_timeout_3d: 360
+  render_timeout_fallback: 180
 
 # Codeguard Phase 3 — kwarg enforcement
 # When MANIMGEN_KWARG_ENFORCE=1, provably-invalid constructor kwargs are stripped

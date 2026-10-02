@@ -25,6 +25,11 @@ _RENDER_DEFAULTS = {
     "resolution": "1920x1080",
     "fps": 60,
     "max_retries": 1,
+    # Render time budgets in seconds. Not changed until measured on the target
+    # PC (scripts/render_smoke.py); only made configurable.
+    "render_timeout_2d": 240,
+    "render_timeout_3d": 360,
+    "render_timeout_fallback": 180,
 }
 
 
@@ -49,6 +54,18 @@ def _load() -> tuple[dict, dict]:
             "fps": int(rend.get("fps", _RENDER_DEFAULTS["fps"])),
             "max_retries": int(
                 rend.get("max_retries", _RENDER_DEFAULTS["max_retries"])
+            ),
+            "render_timeout_2d": float(
+                rend.get("render_timeout_2d", _RENDER_DEFAULTS["render_timeout_2d"])
+            ),
+            "render_timeout_3d": float(
+                rend.get("render_timeout_3d", _RENDER_DEFAULTS["render_timeout_3d"])
+            ),
+            "render_timeout_fallback": float(
+                rend.get(
+                    "render_timeout_fallback",
+                    _RENDER_DEFAULTS["render_timeout_fallback"],
+                )
             ),
         }
         return paths, rendering
@@ -126,6 +143,27 @@ def render_quality_flag() -> str:
             f"rendering.quality {q!r} in config.yaml is not valid; use one of "
             f"{sorted(_QUALITY_FLAGS)} (l = 480p, m = 720p, hd = 1080p, uhd = 4K)"
         ) from None
+
+
+def render_timeout(kind: str) -> float:
+    """Seconds a manimgl render may run before its process tree is killed.
+
+    ``kind`` is "2d", "3d" or "fallback". Defaults come from config.yaml
+    ``rendering.render_timeout_*``; the environment variable
+    ``MANIMGEN_RENDER_TIMEOUT_<KIND>`` (e.g. ``MANIMGEN_RENDER_TIMEOUT_2D``)
+    overrides it. A non-positive or unparsable value falls back to the config.
+    """
+    key = f"render_timeout_{kind}"
+    raw = os.environ.get(f"MANIMGEN_RENDER_TIMEOUT_{kind.upper()}")
+    if raw:
+        try:
+            value = float(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+    value = float(_RENDERING.get(key) or _RENDER_DEFAULTS[key])
+    return value if value > 0 else float(_RENDER_DEFAULTS[key])
 
 
 def render_resolution() -> str:
