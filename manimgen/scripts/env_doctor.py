@@ -53,6 +53,18 @@ def _warn(check: str, detail: str, fix: str) -> None:
     print(f"       fix: {fix}", file=sys.stderr)
 
 
+def _is_headless_linux() -> bool:
+    """True on Linux with neither an X11 nor a Wayland display available."""
+    if not sys.platform.startswith("linux"):
+        return False
+    return not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
+def _is_display_error(stderr: str) -> bool:
+    """True when an import traceback is pyglet failing to reach a display."""
+    return "NoSuchDisplayException" in stderr or "Cannot connect to" in stderr
+
+
 def check_manimlib_imports() -> None:
     """Landmine #1: editable install pointed at a moved/dead path."""
     if importlib.util.find_spec("manimlib") is None:
@@ -78,6 +90,22 @@ def check_manimlib_imports() -> None:
                 "manimlib imports pkg_resources, which setuptools 81+ removed",
                 "pip install 'setuptools<81'",
             )
+        elif _is_display_error(stderr) and _is_headless_linux():
+            # Not a broken install: manimlib opens a pyglet window at import time and
+            # there is no X/Wayland display. Rendering works under a virtual display.
+            if shutil.which("xvfb-run"):
+                _warn(
+                    "manimlib import (no display)",
+                    "headless Linux (no DISPLAY/WAYLAND_DISPLAY): pyglet cannot open a window",
+                    "run the command under a virtual display: xvfb-run -a "
+                    "python3 -m manimgen ...  (same for manimgl and pytest)",
+                )
+            else:
+                _fail(
+                    "manimlib import (no display)",
+                    "headless Linux (no DISPLAY/WAYLAND_DISPLAY) and xvfb-run is not installed",
+                    "sudo apt-get install xvfb, then run the command under: xvfb-run -a <command>",
+                )
         else:
             _fail("manimlib import", stderr.strip().splitlines()[-1:][0] if stderr else "unknown",
                   "investigate the traceback above")
@@ -117,25 +145,32 @@ def check_manimgen_entrypoint() -> None:
 def check_no_broken_fps_flag() -> None:
     """Landmine #5: manimgl 1.7.2 --fps crashes (int/str). It must not be in our argv."""
     hits: list[str] = []
+    unreadable: list[str] = []
     validator_dir = os.path.join(PROJECT_ROOT, "manimgen", "validator")
     for root, _dirs, files in os.walk(validator_dir):
         for fn in files:
             if fn.endswith(".py"):
                 path = os.path.join(root, fn)
                 try:
-                    with open(path, encoding="utf-8") as f:
+                    with open(path, encoding="utf-8", errors="replace") as f:
                         if '"--fps"' in f.read():
                             hits.append(os.path.relpath(path, PROJECT_ROOT))
-                except (OSError, UnicodeDecodeError):
-                    continue
+                except OSError:
+                    unreadable.append(os.path.relpath(path, PROJECT_ROOT))
     if hits:
         _fail(
             "broken --fps flag",
             f"--fps found in {', '.join(hits)} — crashes manimgl 1.7.2 (int/str)",
             "render via validator/render_command.build_manimgl_command(); never pass --fps",
         )
-    else:
+    elif not unreadable:
         _ok("no broken --fps flag in render code")
+    if unreadable:
+        _warn(
+            "--fps scan incomplete",
+            f"could not read {', '.join(unreadable)}; a broken --fps flag there would go unnoticed",
+            "fix the file permissions, then re-run scripts/env_doctor.py",
+        )
 
 
 def check_planner_uses_json_mode() -> None:
