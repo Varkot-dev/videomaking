@@ -18,6 +18,9 @@ _ALLOWED_EXACT = frozenset(
         "TMPDIR",  # temp render artifacts
         "LANG",  # locale (text rendering)
         "DISPLAY",  # X11 / OpenGL context discovery
+        # X11 cannot connect to the server (including a headless Xvfb) without
+        # the cookie file this points at. It is a path, not a secret.
+        "XAUTHORITY",
         # Windows: Python and OpenGL fail to start in a child process without
         # SYSTEMROOT/WINDIR, PATHEXT is how "manimgl"/"latex" resolve to .exe,
         # and TEMP/TMP/USERPROFILE/APPDATA are the Windows HOME/TMPDIR.
@@ -41,6 +44,11 @@ _ALLOWED_PREFIXES = (
     "LC_",  # locale categories (LC_ALL, LC_CTYPE, ...)
     "TEXLIVE_",  # TeX Live install/runtime config
     "PYTHON",  # PYTHONPATH, PYTHONHOME, PYTHONNOUSERSITE, ...
+    # Mesa software OpenGL (llvmpipe) selection. This is the fallback on a
+    # machine whose GPU driver cannot create an OpenGL 3.3 context.
+    "MESA_",
+    "GALLIUM_",
+    "LIBGL_",
 )
 
 _EXTRA_ENV_VAR = "MANIMGEN_RENDER_ENV_EXTRA"
