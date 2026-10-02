@@ -1,15 +1,15 @@
 {
   "summary": {
     "overall": {
-      "total": 57,
-      "resolved": 40,
-      "rate_pct": 70.2
+      "total": 58,
+      "resolved": 41,
+      "rate_pct": 70.7
     },
     "by_source": {
       "derived-from-fix-rule": {
-        "total": 40,
-        "resolved": 30,
-        "rate_pct": 75.0
+        "total": 41,
+        "resolved": 31,
+        "rate_pct": 75.6
       },
       "git-history": {
         "total": 17,
@@ -279,8 +279,8 @@
         "rate_pct": 100.0
       },
       "wrong_kwarg_names_arrange_in_grid": {
-        "total": 1,
-        "resolved": 1,
+        "total": 2,
+        "resolved": 2,
         "rate_pct": 100.0
       },
       "wrong_kwarg_names_reorient": {
@@ -336,9 +336,9 @@
         "rate_pct": 66.7
       },
       "TypeError": {
-        "total": 19,
-        "resolved": 15,
-        "rate_pct": 78.9
+        "total": 20,
+        "resolved": 16,
+        "rate_pct": 80.0
       },
       "ValueError": {
         "total": 3,
@@ -383,6 +383,7 @@
       "[error-aware] renamed kwarg 'tick_size' \u2192 'tick_frequency'": 1,
       "[error-aware] split mixed .animate + FadeIn/FadeOut": 1,
       "_mobjects -> submobjects": 1,
+      "fixed arrange_in_grid kwargs: row_buff= \u2192 v_buff (1), col_buff= \u2192 h_buff": 1,
       "injected color-role header (MUTED = GREY_A)": 1,
       "injected color-role header (PRIMARY = TEAL_A, STRUCT = GREY_B)": 1,
       "removed checkerboard_colors": 1,
@@ -390,7 +391,7 @@
       "begin_ambient_camera_rotation -> add_ambient_rotation": 1,
       "set_camera_orientation -> self.frame.reorient": 1,
       "get_point_at_angle -> point_at_angle": 1,
-      "fixed arrange_in_grid kwargs: rows= \u2192 n_rows (1), cols= \u2192 n_cols (1), row_buff= \u2192 buff": 1,
+      "fixed arrange_in_grid kwargs: rows= \u2192 n_rows (1), cols= \u2192 n_cols (1), row_buff= \u2192 v_buff": 1,
       "[error-aware] removed unexpected kwarg 'x_axis_config'": 1
     },
     "unresolved": [
@@ -1162,6 +1163,22 @@
       "unresolved_reason": "no rule rewrote the defect (detection-only or unhandled)"
     },
     {
+      "case_id": "fr41_arrange_in_grid_both_buffs",
+      "failure_mode": "wrong_kwarg_names_arrange_in_grid",
+      "error_class": "TypeError",
+      "source": "derived-from-fix-rule",
+      "expected_outcome": "repairable",
+      "resolved": true,
+      "code_changed": true,
+      "defect_cleared": true,
+      "validation_clean": true,
+      "validation_errors": [],
+      "rules_fired": [
+        "fixed arrange_in_grid kwargs: row_buff= \u2192 v_buff (1), col_buff= \u2192 h_buff (1)"
+      ],
+      "unresolved_reason": null
+    },
+    {
       "case_id": "gh01_nameerror_muted",
       "failure_mode": "undefined_color_role",
       "error_class": "NameError",
@@ -1347,7 +1364,7 @@
       "validation_clean": true,
       "validation_errors": [],
       "rules_fired": [
-        "fixed arrange_in_grid kwargs: rows= \u2192 n_rows (1), cols= \u2192 n_cols (1), row_buff= \u2192 buff (1)"
+        "fixed arrange_in_grid kwargs: rows= \u2192 n_rows (1), cols= \u2192 n_cols (1), row_buff= \u2192 v_buff (1)"
       ],
       "unresolved_reason": null
     },

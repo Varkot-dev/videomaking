@@ -169,8 +169,10 @@ _KWARG_NORMALIZATION_REGISTRY: dict[str, dict[str, str | None]] = {
     "arrange_in_grid": {
         "rows": "n_rows",
         "cols": "n_cols",
-        "row_buff": "buff",
-        "col_buff": "buff",
+        # ManimGL splits the gap: h_buff between columns, v_buff between rows.
+        # Mapping both to buff produced a repeated keyword argument (#55 class).
+        "row_buff": "v_buff",
+        "col_buff": "h_buff",
     },
     "reorient": {
         "theta_deg": "theta_degrees",
@@ -185,7 +187,8 @@ _KWARG_NORMALIZATION_REGISTRY: dict[str, dict[str, str | None]] = {
 def _fix_arrange_in_grid_kwargs(code: str) -> tuple[str, str | None]:
     """Normalize all wrong kwarg names on .arrange_in_grid() calls in one pass.
 
-    Correct signature: arrange_in_grid(n_rows=None, n_cols=None, buff=MED_SMALL_BUFF)
+    Correct signature: arrange_in_grid(n_rows=None, n_cols=None, buff=None,
+    h_buff=None, v_buff=None, ...).
     LLM commonly emits rows=, cols=, row_buff=, col_buff= simultaneously.
     """
     norm = _KWARG_NORMALIZATION_REGISTRY["arrange_in_grid"]
@@ -1036,8 +1039,10 @@ def validate_scene_code(code: str) -> list[str]:
     """
     errors: list[str] = []
 
+    # compile(), not ast.parse(): only the compiler rejects errors such as a
+    # repeated keyword argument or `return` outside a function.
     try:
-        ast.parse(code)
+        compile(code, "<scene>", "exec", dont_inherit=True)
     except SyntaxError as exc:
         errors.append(f"SyntaxError: {exc.msg} (line {exc.lineno})")
 

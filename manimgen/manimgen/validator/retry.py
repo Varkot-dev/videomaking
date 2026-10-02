@@ -478,7 +478,12 @@ def retry_scene(
 
         # Token-free deterministic fixes first.
         local_fixed, local_applied = apply_error_aware_fixes(code, result["stderr"])
-        if local_applied and local_fixed != code:
+        if local_applied and local_fixed != code and _breaks_compile(code, local_fixed):
+            print(
+                f"[retry] Attempt {attempt}/{MAX_RETRIES} discarded local fixes "
+                f"that left the scene uncompilable: {', '.join(local_applied)}"
+            )
+        elif local_applied and local_fixed != code:
             code = local_fixed
             with open(scene_path, "w", encoding="utf-8") as f:
                 f.write(code)
@@ -580,6 +585,19 @@ Original code:
         )
         return True, best_video_path
     return False, None
+
+
+def _breaks_compile(before: str, after: str) -> bool:
+    """True when a local fix turned compilable code into code that does not compile."""
+    try:
+        compile(before, "<scene>", "exec", dont_inherit=True)
+    except SyntaxError:
+        return False  # already broken: a partial structural fix is still progress
+    try:
+        compile(after, "<scene>", "exec", dont_inherit=True)
+    except SyntaxError:
+        return True
+    return False
 
 
 def _run_and_capture(scene_path: str, class_name: str) -> dict:

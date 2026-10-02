@@ -363,6 +363,49 @@ class TestValidateSceneCode:
         assert len(errors) >= 3
 
 
+class TestValidateUsesCompile:
+    """validate_scene_code must catch errors only the compiler raises (R11)."""
+
+    def test_duplicate_keyword_argument_is_a_syntax_error(self):
+        errors = validate_scene_code("f(a=1, a=2)\n")
+        assert any("SyntaxError" in e and "repeated" in e for e in errors)
+
+    def test_return_outside_function_is_a_syntax_error(self):
+        errors = validate_scene_code("return 1\n")
+        assert any("SyntaxError" in e for e in errors)
+
+    def test_valid_scene_still_clean(self):
+        code = (
+            "from manimlib import *\n\n"
+            "class Foo(Scene):\n"
+            "    def construct(self):\n"
+            "        self.wait(1)\n"
+        )
+        assert validate_scene_code(code) == []
+
+    def test_known_fixes_on_grid_kwargs_stay_compilable(self):
+        code = (
+            "from manimlib import *\n\n"
+            "class Foo(Scene):\n"
+            "    def construct(self):\n"
+            "        g = VGroup(*[Square() for _ in range(6)])\n"
+            "        g.arrange_in_grid(rows=2, cols=3, row_buff=0.5, col_buff=0.3)\n"
+        )
+        fixed, _ = apply_known_fixes(code)
+        assert validate_scene_code(fixed) == []
+        assert "n_rows=2" in fixed and "n_cols=3" in fixed
+        # ManimGL arrange_in_grid takes h_buff (between columns) / v_buff (between rows).
+        assert "v_buff=0.5" in fixed and "h_buff=0.3" in fixed
+        assert "buff=0.5, buff=" not in fixed
+
+    def test_error_aware_registry_maps_buffs_to_h_and_v(self):
+        code = "g.arrange_in_grid(n_rows=2, n_cols=3, row_buff=0.5, col_buff=0.3)\n"
+        stderr = "TypeError: arrange_in_grid() got an unexpected keyword argument 'row_buff'"
+        fixed, applied = apply_error_aware_fixes(code, stderr)
+        assert "v_buff=0.5" in fixed and "h_buff=0.3" in fixed
+        assert validate_scene_code(fixed) == []
+
+
 # ── apply_error_aware_fixes ───────────────────────────────────────────────────
 
 class TestApplyErrorAwareFixes:
