@@ -18,15 +18,15 @@ Return ONLY a valid JSON object. No markdown, no explanation.
       "cues": [
         {
           "index": 0,
-          "visual": "Technique: stagger_reveal. Title 'Binary Search' in white font_size 52 fades in at top-center. Below it, 10 grey filled boxes (fill_color #2a2a2a, stroke GREY_B) arranged in a row center-screen, each containing a sorted integer value (3, 7, 11, 15, 22, 31, 42, 58, 67, 74) in white font_size 22. Boxes appear one by one left-to-right via LaggedStart FadeIn. Yellow Text 'Target: 42' appears top-right corner."
+          "visual": "Technique: stagger_reveal. Title 'Binary Search' in white font_size 48 fades in at top-center. Below it, 10 grey filled boxes (fill_color #2a2a2a, stroke GREY_B) arranged in a row center-screen, each containing a sorted integer value (3, 7, 11, 15, 22, 31, 42, 58, 67, 74) in white font_size 22. Boxes appear one by one left-to-right via LaggedStart FadeIn. GOLD Text 'Target: 42' appears above the box row at the right (content zone, not in the title zone)."
         },
         {
           "index": 1,
-          "visual": "Technique: sweep_highlight. A yellow SurroundingRectangle scans left-to-right across the 10 boxes at 0.18s per step. A Text counter in the bottom-left corner reads 'Checks: N' and updates via FadeTransform each step from 0 to 7. When the highlight reaches the box containing 42 (index 7), that box's Square and Text both animate to GREEN. FlashAround the found box in green."
+          "visual": "Technique: sweep_highlight. A teal (TEAL_A) SurroundingRectangle scans left-to-right across the 10 boxes at 0.18s per step. A Text counter in the bottom-left corner reads 'Checks: N' and updates via FadeTransform each step from 0 to 7. When the highlight reaches the box containing 42 (index 7), that box's Square and Text both animate to GREEN. FlashAround the found box in green."
         },
         {
           "index": 2,
-          "visual": "Technique: fade_reveal. All boxes and the scan rect fade out. Screen clears. Then a single yellow Text 'O(n) — up to 1,000,000 checks' fades in center-screen at font_size 44. A red SurroundingRectangle appears around it. Below it in GREY_A font_size 32: 'There must be a better way.'"
+          "visual": "Technique: fade_reveal. All boxes and the scan rect dim to 25% opacity and stay on screen (nothing clears mid-scene). Then a single GOLD Text 'O(n) — up to 1,000,000 checks' fades in above the dimmed row at font_size 44. A red SurroundingRectangle appears around it. Below it in GREY_A font_size 36: 'There must be a better way.'"
         }
       ]
     }
@@ -88,7 +88,7 @@ The `visual` field MUST start with `Technique: <name>`. Choose from this exact l
 | `tracker_label` | a value changing continuously, "as x grows", "derivative at each point" | ValueTracker + always_redraw dot + label |
 | `brace_annotation` | labeling a span, distance, width, interval of a region | Brace + Text label |
 | `split_screen` | "compare", "before vs after", "left side vs right side" | two Axes side by side with a divider |
-| `fade_reveal` | dramatic pause, key insight revealed after clearing clutter | FadeOut clutter → Write key statement |
+| `fade_reveal` | dramatic pause, key insight revealed after clearing clutter | dim clutter to 25% opacity → Write key statement |
 | `axes_curve` | standard function plot (use sparingly — max 2 per video total) | Axes + get_graph + optional dot |
 | `code_reveal` | pseudocode or algorithm steps appearing line by line | VGroup of Text lines with LaggedStart |
 | `3d_surface` | 3D function plots, rotating geometry, surfaces in ℝ³ — when topic requires visualizing z=f(x,y) or parametric curves | ThreeDScene with ParametricSurface + ThreeDAxes |
@@ -125,10 +125,10 @@ The visual field must give the animator enough information to write exact ManimG
 - **Which technique** (starts with `Technique: <name>`)
 - **Exact objects**: shapes, axes, boxes, text — be specific about count and content
 - **Exact values**: actual numbers, actual formulas (e.g. `f(x) = x²` not "a parabola"), actual sorted arrays
-- **Colors**: yellow SurroundingRectangle, white Text, blue curve, red dot — never "highlight" without a color
+- **Colors**: teal SurroundingRectangle, white Text, teal curve, red dot (red only for wrong or invalid) — never "highlight" without a color
 - **Positions**: "top-center", "center-screen", "to the right of the axes", "bottom-left corner"
 - **Motion**: "scans left-to-right at 0.18s per box", "dot moves from x=−2 to x=2", "frame zooms in 3×"
-- **What disappears**: if something fades out, say "fade out all boxes"
+- **What disappears**: if something is dimmed or replaced, say so (for example "dim all boxes to 25% opacity"); only the last cue of a section fades everything out
 
 **What NOT to write in the visual field:**
 - Do NOT describe 3D objects or rotation unless the chosen technique is `3d_surface` or `camera_rotation` — the default `Scene` class is 2D. Only those two techniques use `ThreeDScene`.
@@ -165,7 +165,7 @@ The visual field must give the animator enough information to write exact ManimG
 
 **GOOD visual description:**
 ```
-"visual": "Technique: sweep_highlight. A horizontal row of 10 grey filled squares (fill_color #2a2a2a, stroke GREY_B, side_length 0.75) center-screen, each labeled with a sorted integer (3, 7, 11, 15, 22, 31, 42, 58, 67, 74) in white Text font_size 22. A yellow SurroundingRectangle scans from box 0 to box 6 (value 42) at 0.18s per step. Each step, a bottom-left counter 'Checks: N' updates via FadeTransform. On reaching 42: box Square and Text animate to GREEN. FlashAround the green box."
+"visual": "Technique: sweep_highlight. A horizontal row of 10 grey filled squares (fill_color #2a2a2a, stroke GREY_B, side_length 0.75) center-screen, each labeled with a sorted integer (3, 7, 11, 15, 22, 31, 42, 58, 67, 74) in white Text font_size 22. A teal (TEAL_A) SurroundingRectangle scans from box 0 to box 6 (value 42) at 0.18s per step. Each step, a bottom-left counter 'Checks: N' updates via FadeTransform. On reaching 42: box Square and Text animate to GREEN. FlashAround the green box."
 ```
 
 ---

@@ -16,9 +16,9 @@ Return ONLY a valid JSON object — no markdown fencing, no explanation, just JS
       "title": "Why do we even need this?",
       "narration": "Before we dive into the mechanics, let's ask the uncomfortable question every student should ask: why should you care about this at all? Imagine you have a million records — names, grades, transactions — stored in no particular order. [CUE] Finding anything means scanning every single entry, which sounds terrible, and it is. [CUE] What if there were a way to organize data so that every single lookup, insert, and delete took the same short time no matter how large your dataset grows? That's the promise we're going to cash in on today, and it's more elegant than you might expect.",
       "cues": [
-        {"index": 0, "visual": "Technique: stagger_reveal. 20 grey filled squares (fill_color #2a2a2a, stroke GREY_B) labelled with unsorted integers appear one by one across the screen via LaggedStart FadeIn; a yellow Text 'Find 42' sits top-right."},
-        {"index": 1, "visual": "Technique: sweep_highlight. A yellow SurroundingRectangle scans the boxes left-to-right at 0.18s per step while a bottom-left Text counter 'Checks: N' updates; the box holding 42 turns GREEN."},
-        {"index": 2, "visual": "Technique: fade_reveal. All boxes fade out, then a white Text 'O(n) vs O(log n)' fades in center-screen at font_size 44 with a red SurroundingRectangle around 'O(n)'."}
+        {"index": 0, "visual": "Technique: stagger_reveal. 20 grey filled squares (fill_color #2a2a2a, stroke GREY_B) labelled with unsorted integers appear one by one across the screen via LaggedStart FadeIn; a GOLD Text 'Find 42' sits above the box row at the right (content zone, not in the title zone)."},
+        {"index": 1, "visual": "Technique: sweep_highlight. A teal (TEAL_A) SurroundingRectangle scans the boxes left-to-right at 0.18s per step while a bottom-left Text counter 'Checks: N' updates; the box holding 42 turns GREEN."},
+        {"index": 2, "visual": "Technique: fade_reveal. All boxes dim to 25% opacity and stay on screen, then a white Text 'O(n) vs O(log n)' fades in above them at font_size 44 with a red SurroundingRectangle around 'O(n)'."}
       ],
       "duration_seconds": 40,
       "source_confidence": "high"
