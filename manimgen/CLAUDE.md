@@ -18,7 +18,9 @@ breakage: fix it, add a check to `scripts/env_doctor.py`, document it in
 Automated pipeline: **topic string or PDF → 3Blue1Brown-style animated explainer video with narration.**
 Uses an audio-first CUE pipeline where spoken word timestamps drive animation durations — no speed warping.
 
-**Stack:** Python 3.13, ManimGL (3b1b fork), Gemini 2.5 Flash, FFmpeg 8.1, LaTeX, edge-tts, Flask (editor)
+**Stack:** Python 3.11+ (CI uses 3.13), ManimGL 1.7.2 (3b1b fork), Claude via Claude Code `claude -p` (default LLM provider), FFmpeg, LaTeX, edge-tts, Flask (editor)
+
+**Platforms:** macOS, Linux and Windows. The user's own machine is a Windows 11 PC without admin rights, so keep every code path cross-platform (`os.pathsep`, `shutil.which`, no POSIX-only commands) and keep the no-admin Windows setup in the root README.md working.
 
 **Repo:** `https://github.com/Varkot-dev/videomaking.git` — branch `main`
 
@@ -61,7 +63,7 @@ The importable package lives at **`manimgen/manimgen/`** (the nested directory).
 manimgen/
 ├── manimgen/                    # source package (the importable one)
 │   ├── cli.py                   # entry: manimgen <topic> | --pdf <file> | --resume
-│   ├── llm.py                   # shared LLM client (Gemini/Anthropic toggle, config-driven)
+│   ├── llm.py                   # shared LLM client (claude_cli/anthropic/gemini/ollama, config-driven)
 │   ├── utils.py                 # shared: strip_fencing(), section_class_name()
 │   ├── input/
 │   │   ├── parser.py            # normalize topic string
@@ -82,7 +84,7 @@ manimgen/
 │   │   ├── layout_checker.py    # LLM vision check on rendered frames (multi-frame)
 │   │   ├── frame_checker.py     # zero-cost PIL-based black/frozen/clipping detection
 │   │   ├── timing_verifier.py   # loop-aware static timing analysis + auto-fix (wired via retry.apply_timing_gate)
-│   │   ├── env.py               # render environment vars (LaTeX PATH)
+│   │   ├── env.py               # render environment vars (cross-platform PATH, LaTeX lookup)
 │   │   └── prompts/             # retry_system.md, fallback_system.md, layout_checker_system.md
 │   ├── renderer/
 │   │   ├── tts.py               # edge-tts with WordBoundary → per-word timestamps
@@ -98,7 +100,8 @@ manimgen/
 │                                # docstring — scene_generator._index_examples() indexes them at runtime
 ├── tests/                       # pytest suite (run `python3 -m pytest -q`)
 ├── config.yaml                  # LLM provider, model names, TTS config, render quality
-├── requirements.txt
+├── requirements.txt             # runtime deps (setup.py reads it for install_requires)
+├── requirements-dev.txt         # -r requirements.txt + pytest, pytest-mock, hypothesis, ruff==0.15.13
 └── setup.py                     # console_scripts: manimgen, manimgen-edit
 ```
 
@@ -166,18 +169,24 @@ For each section:
 ## Running the pipeline
 
 ```bash
-# From manimgen/ project root
-GEMINI_API_KEY=<key> MANIMGEN_MAX_RETRY_LLM_CALLS=2 manimgen "gradient descent"
-GEMINI_API_KEY=<key> manimgen --pdf notes.pdf
-GEMINI_API_KEY=<key> manimgen --resume   # resume from cached plan.json
+# From manimgen/ project root. Default provider (claude_cli) needs no API key,
+# only Claude Code on PATH and logged in (run `claude` once).
+MANIMGEN_MAX_RETRY_LLM_CALLS=2 manimgen "gradient descent"
+manimgen --pdf notes.pdf
+manimgen --resume   # resume from cached plan.json
+
+# Another provider for one run
+# (gemini and anthropic bill per token and are blocked without MANIMGEN_ALLOW_PAID_API=1)
+MANIMGEN_ALLOW_PAID_API=1 LLM_PROVIDER=gemini GEMINI_API_KEY=<key> manimgen "gradient descent"
 
 manimgen-edit   # launch clip editor
 
-# Run tests (zero cost — everything LLM/subprocess is mocked)
+# Run tests (zero cost, everything LLM/subprocess is mocked)
 python3 -m pytest -q
 ```
 
-**API key location:** `manimgen/.env` (GEMINI_API_KEY=...)
+**API keys** (only for the `anthropic` / `gemini` providers): `manimgen/.env`
+(`GEMINI_API_KEY=...`, `ANTHROPIC_API_KEY=...`), git-ignored, loaded by `llm.py`.
 
 **Output locations:**
 - Final video: `manimgen/output/videos/<title>.mp4`
@@ -190,15 +199,25 @@ python3 -m pytest -q
 
 Resolution order (first wins):
 1. `LLM_PROVIDER` env var
-2. `llm_provider` in `config.yaml`
-3. Default: `"gemini"`
+2. `llm_provider` in `config.yaml` (currently `claude_cli`)
+3. Default: `"claude_cli"`
 
-Model names and `max_tokens` are configured under `llm:` in `config.yaml` — never hardcoded.
+Model names and `max_tokens` are configured under `llm:` in `config.yaml`, never hardcoded.
 
-| Provider | Model | SDK |
-|---|---|---|
-| `gemini` | `gemini-2.5-flash` | `google.genai` (NOT the deprecated `google.generativeai`) |
-| `anthropic` | `claude-sonnet-4-6` | `anthropic` |
+| Provider | Model (config key) | Mechanism | Billing |
+|---|---|---|---|
+| `claude_cli` (default) | `sonnet` or `opus` (`llm.claude_cli_model`) | `claude -p` subprocess (Claude Code headless) | User's Claude plan usage limits, no API key |
+| `anthropic` | `claude-sonnet-5-5` (`llm.anthropic_model`), `max_tokens` 16000 | `anthropic` SDK | Per token, `ANTHROPIC_API_KEY` |
+| `gemini` | `gemini-2.5-flash` (`llm.gemini_model`) | `google.genai` (NOT the deprecated `google.generativeai`) | Per token, `GEMINI_API_KEY` |
+| `ollama` | `llama3.1` (`llm.ollama_model`) | local HTTP, loopback/private URLs only (SSRF guard) | Free |
+
+**`claude_cli` details (`llm._claude_cli`):**
+- Needs Claude Code installed and logged in (`claude` once). `llm.claude_cli_path` overrides the executable name or gives a full path; `scripts/env_doctor.py` warns when it is not on PATH.
+- System prompt goes through `--system-prompt-file` in a temp dir; the user turn and any base64 PNG frames go on stdin as one `stream-json` message. Nothing large is put on argv (Windows caps a command line at ~32K chars).
+- Flags: `--tools=` (single token, so it survives the Windows cmd shim), `--strict-mcp-config`, `--no-session-persistence`, `--model <claude_cli_model>`. cwd is an empty temp dir.
+- Env: `ANTHROPIC_API_KEY` is stripped on purpose (otherwise Claude Code would bill the API instead of the plan) and `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` keeps CLAUDE.md files out of the prompt.
+- 600s timeout per call, 3 attempts; the final `{"type": "result"}` stream event is the reply.
+- `json_mode=True` is native only on Gemini. For `claude_cli`, `anthropic` and `ollama` the prompt asks for JSON and `chat()` strips a surrounding markdown `json` code fence.
 
 ---
 
@@ -427,8 +446,8 @@ Confirmed wired in `validator/retry.py` — `check_frames()` runs after every su
 ### 4. LOW — `.hypothesis/` and `.DS_Store` committed
 Should be in `.gitignore`. Clutters diffs.
 
-### 5. LOW — `_load_llm_config()` called on every LLM call
-Parses `config.yaml` twice per `chat()` call. Should be cached at module load.
+### 5. RESOLVED: `_load_llm_config()` called on every LLM call
+`llm.py` now parses `config.yaml` once at import into `_LLM_CONFIG`.
 
 ### 6. LOW — Cue-word tokenization mismatch risk
 `cue_parser` uses `str.split()` word counts; edge-tts may tokenize differently.
@@ -452,6 +471,10 @@ python3 -m pytest tests/test_pipeline_contracts.py -v  # A/V sync contracts
 python3 -m pytest tests/test_research_step.py -v       # researcher + planner
 python3 -m pytest tests/test_frame_checker.py -v       # zero-cost visual checks
 python3 -m pytest tests/test_timing_verifier.py -v     # static timing analysis
+python3 -m pytest tests/test_llm.py -v                 # provider switch, claude -p invocation
+
+# Lint, same pinned version as CI (installed by requirements-dev.txt)
+ruff check manimgen/ && ruff format --check manimgen/
 ```
 
 ---
