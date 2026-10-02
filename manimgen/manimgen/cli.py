@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import sys
+import time
 from collections.abc import Callable
 
 import yaml
@@ -613,6 +614,44 @@ def _run_section(
 # ---------------------------------------------------------------------------
 
 
+def _configure_logging() -> None:
+    """Show INFO progress on stderr and keep a DEBUG run log under logs_dir().
+
+    main() is the installed console-script entry point, so logging must be set
+    up here rather than under ``__main__`` (#63). If the root logger already
+    has handlers (a host app, a test harness, or an earlier call) it is left
+    alone so output is never duplicated.
+    """
+    root = logging.getLogger()
+    if root.handlers:
+        return
+    root.setLevel(logging.DEBUG)
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    console.setFormatter(logging.Formatter("%(message)s"))
+    root.addHandler(console)
+    try:
+        os.makedirs(paths.logs_dir(), exist_ok=True)
+        log_path = os.path.join(
+            paths.logs_dir(), time.strftime("run_%Y%m%d_%H%M%S.log")
+        )
+        run_log = logging.FileHandler(log_path, encoding="utf-8")
+    except OSError as e:
+        logger.warning("[manimgen] Could not open a run log file (%s)", e)
+        return
+    run_log.setLevel(logging.DEBUG)
+    run_log.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    root.addHandler(run_log)
+
+
+def _die(message: str):
+    """Print an error to stderr and exit non-zero."""
+    print(f"[manimgen] error: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
 def main():
     # Windows writes redirected or piped output in the ANSI code page (cp1252),
     # which cannot encode the arrows used in log lines; replace instead of
@@ -632,6 +671,8 @@ def main():
         "--resume", action="store_true", help=f"Resume from cached plan ({_PLAN_CACHE})"
     )
     args = parser.parse_args()
+
+    _configure_logging()
 
     cfg = _load_config()
     tts_on = _tts_enabled(cfg)
@@ -720,7 +761,11 @@ def main():
             )
         )
 
+    if not rendered_videos:
+        _die("No video was produced: no section rendered. See the log above.")
     output = assemble_video(rendered_videos, lesson_plan["title"])
+    if not output or not os.path.exists(output):
+        _die(f"No video was produced: expected the final output at {output}.")
 
     # --- A/V mismatch summary ---
     mismatches = get_mismatch_log()
@@ -744,9 +789,10 @@ def main():
     else:
         logger.info("[manimgen] A/V sync: all cues matched within threshold")
 
-    logger.info("[manimgen] Done: %s", output)
+    # print() so the path shows on stdout even when a host app mutes logging.
+    print(f"[manimgen] Done: {output}")
+    logger.debug("[manimgen] Done: %s", output)
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
     main()
