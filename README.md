@@ -304,8 +304,13 @@ brew install ffmpeg
 brew install --cask basictex
 
 # Debian / Ubuntu (manimgl also needs the pango/cairo headers to build)
-sudo apt-get install ffmpeg pkg-config libpango1.0-dev libcairo2-dev texlive-latex-extra
+sudo apt-get install ffmpeg pkg-config libpango1.0-dev libcairo2-dev
+# Only for Tex() formulas; see the LaTeX note below for why each package is needed
+sudo apt-get install texlive-latex-base texlive-latex-recommended texlive-latex-extra \
+    texlive-fonts-recommended texlive-fonts-extra texlive-science dvisvgm
 ```
+
+**LaTeX on Linux needs more than `texlive-latex-extra`.** ManimGL's default Tex template loads `dsfont` (package `texlive-fonts-extra`) and `physics` (package `texlive-science`), and it converts the compiled `.dvi` with `dvisvgm` (package `dvisvgm`). Without them every `Tex()` scene dies with `LatexError: File dsfont.sty not found` (or `physics.sty`). On macOS use the full MacTeX, or add the missing packages to BasicTeX with `sudo tlmgr install dsfont physics`. `Text()` needs none of this.
 
 **Claude Code** (for the default provider):
 
