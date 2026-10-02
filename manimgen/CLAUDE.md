@@ -146,7 +146,7 @@ For each section:
 - **Template engine is GONE.** The Director writes ManimGL Python directly. Visual variety comes from the storyboard descriptions.
 - **Storyboard-level planner.** The planner outputs pixel-level visual descriptions per cue — not concept descriptions.
 - **codeguard is the safety net.** `precheck_and_autofix()` runs on the generated code string before saving.
-- **Render cache with hash sidecar.** Each rendered video has a `.hash` sidecar file storing the topic hash. Stale renders (different topic) are detected and re-rendered automatically.
+- **Content-keyed cache with hash sidecars.** Each rendered video and each muxed cue clip has a `.hash` sidecar storing the section's content key (`cli._section_key`: the section dict, topic or PDF-bytes hash, TTS voice and speed, cue durations rounded to 0.05s). Files are shared across plans and named only by section id, so a file whose sidecar is missing, empty or different is rebuilt; same content (`--resume`) is reused. Audio slices are always re-sliced.
 - **Retry loop always reloads code.** After each fix attempt (codeguard or LLM), the file is always re-read from disk — codeguard may have applied in-place fixes that would otherwise be discarded.
 
 ---

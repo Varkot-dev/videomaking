@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sys
 import time
 from collections.abc import Callable
@@ -99,8 +100,38 @@ def _muxed_path_for(section: dict, idx: int, cue_index: int) -> str:
     return os.path.join(paths.muxed_dir(), f"{section_id}_cue{cue_index:02d}.mp4")
 
 
-def _all_cues_muxed(section: dict, idx: int, n_cues: int) -> bool:
-    return all(os.path.exists(_muxed_path_for(section, idx, i)) for i in range(n_cues))
+def _all_cues_muxed(section: dict, idx: int, n_cues: int, key: str) -> bool:
+    """True only if every cue clip exists AND was muxed for this content key."""
+    return all(
+        _render_is_fresh(_muxed_path_for(section, idx, i), key) for i in range(n_cues)
+    )
+
+
+# Per-cue files in the shared muxed folder: <id>_cueNN.mp4 (muxed),
+# <id>_cueNN_video.mp4 (silent cut) and their .hash sidecars.
+_CUE_FILE_SUFFIX = re.compile(r"_cue\d+(?:_video)?\.mp4(?:\.hash)?")
+
+
+def _remove_cue_files(
+    section_id: str, log: logging.LoggerAdapter | logging.Logger
+) -> None:
+    """Delete a section's cut/muxed cue files before re-cutting (#66).
+
+    Stale cues from another plan would otherwise linger (a plan with fewer
+    cues leaves the old higher-numbered ones behind for manimgen-edit to list).
+    """
+    muxed_dir = paths.muxed_dir()
+    if not os.path.isdir(muxed_dir):
+        return
+    for name in os.listdir(muxed_dir):
+        if not name.startswith(section_id):
+            continue
+        if not _CUE_FILE_SUFFIX.fullmatch(name[len(section_id) :]):
+            continue
+        try:
+            os.remove(os.path.join(muxed_dir, name))
+        except OSError as e:
+            log.warning("[manimgen] Could not remove stale cue file %s: %s", name, e)
 
 
 def _mux_one_cue(
@@ -122,10 +153,8 @@ def _mux_one_cue(
     section_id = section.get("id", f"section_{idx:02d}")
     muxed = _muxed_path_for(section, idx, cue_index)
 
-    if os.path.exists(muxed):
-        log.info("[manimgen] Skipping cue %d (already muxed)", cue_index)
-        return CueMuxResult(cue_index, MuxStatus.SUCCESS, muxed)
-
+    # No "already muxed" shortcut here: an existing file may belong to another
+    # plan (#66). Reuse is decided once per section by _all_cues_muxed.
     if not os.path.exists(audio_slice):
         msg = f"audio slice missing: {audio_slice}"
         log.error(
@@ -176,39 +205,77 @@ def _topic_hash(topic_or_pdf: str) -> str:
     return hashlib.sha256(topic_or_pdf.encode()).hexdigest()[:8]
 
 
+def _file_hash(path: str) -> str:
+    """Stable 8-char hash of a file's bytes (a PDF edited in place must differ)."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()[:8]
+
+
+def _section_key(
+    section: dict, topic_hash: str, cue_durations: list[float] | None
+) -> str:
+    """Content key for every cached per-section artifact (#66).
+
+    Section files live in shared folders named only by section id, and planners
+    emit generic ids, so the id alone says nothing about which plan produced a
+    file. The key covers the whole section dict (narration, cue indices, cue
+    visuals, title), the run hash (topic or PDF bytes plus TTS voice and speed)
+    and the cue durations rounded to 0.05s, so small TTS timing jitter on
+    --resume still hits the cache while any real change misses it.
+    """
+    durations = [round(d * 20) for d in cue_durations or []]
+    payload = json.dumps([topic_hash, section, durations], sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
 def _sidecar_hash_path(video_path: str) -> str:
-    """Sidecar file that stores the topic hash next to a rendered video."""
+    """Sidecar file that stores the content key next to a cached video."""
     return video_path + ".hash"
 
 
-def _render_is_fresh(video_path: str, topic_hash: str) -> bool:
-    """Return True only if the video exists AND was rendered for this topic."""
+def _render_is_fresh(video_path: str, key: str) -> bool:
+    """Return True only if the video exists, is non-empty AND its sidecar
+    records this content key. Used for renders and muxed cue clips alike."""
     if not os.path.exists(video_path):
+        return False
+    if os.path.getsize(video_path) == 0:
+        logger.warning(
+            "[manimgen] %s is empty; treating as stale", os.path.basename(video_path)
+        )
         return False
     sidecar = _sidecar_hash_path(video_path)
     if not os.path.exists(sidecar):
-        # Legacy render with no sidecar — treat as stale to be safe
+        # Legacy file with no sidecar, treat as stale to be safe
         logger.warning(
-            "[manimgen] No .hash sidecar for %s — treating as stale render",
+            "[manimgen] No .hash sidecar for %s; treating as stale",
             os.path.basename(video_path),
         )
         return False
-    with open(sidecar, encoding="utf-8") as f:
-        stored = f.read().strip()
-    if stored != topic_hash:
+    try:
+        with open(sidecar, encoding="utf-8") as f:
+            stored = f.read().strip()
+    except (OSError, UnicodeDecodeError):
+        stored = ""
+    if stored != key:
         logger.warning(
-            "[manimgen] Stale render detected: %s was built for topic hash %s, current is %s — re-rendering",
+            "[manimgen] Stale file detected: %s was built for content key %s, current is %s; rebuilding",
             os.path.basename(video_path),
             stored,
-            topic_hash,
+            key,
         )
         return False
     return True
 
 
-def _write_hash_sidecar(video_path: str, topic_hash: str) -> None:
-    with open(_sidecar_hash_path(video_path), "w", encoding="utf-8") as f:
-        f.write(topic_hash)
+def _write_hash_sidecar(video_path: str, key: str) -> None:
+    sidecar = _sidecar_hash_path(video_path)
+    tmp = sidecar + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(key)
+    os.replace(tmp, sidecar)
 
 
 def _code_blocking_freezes(code: str, cue_durations: list[float]) -> list[str]:
@@ -377,13 +444,15 @@ def _cut_and_mux(
     audio_slices: list[str],
     cue_durations: list[float],
     log: logging.LoggerAdapter | logging.Logger,
+    key: str,
 ) -> list[str]:
     """Cut a rendered section into per-cue clips and mux narration onto each.
 
     Returns the ordered list of muxed clip paths. If ANY cue fails to mux with
     narration, the whole section is dropped (returns []) and logged loudly — a
     silent clip must never reach the assembler (#28). A FAILED cue's silent
-    video is deliberately never appended to the produced list.
+    video is deliberately never appended to the produced list. On success each
+    muxed clip gets a ``.hash`` sidecar holding ``key`` (#66).
     """
     from manimgen.renderer.cutter import (
         cue_start_times_from_durations,
@@ -392,6 +461,7 @@ def _cut_and_mux(
     from manimgen.renderer.muxer import mux_audio_video
 
     section_id = safe_section_id(section, idx)
+    _remove_cue_files(section_id, log)
     cue_starts = cue_start_times_from_durations(cue_durations)
     cue_video_clips = cut_video_at_cues(
         video_path,
@@ -431,6 +501,8 @@ def _cut_and_mux(
             ),
         )
         return []
+    for path in produced:
+        _write_hash_sidecar(path, key)
     return produced
 
 
@@ -503,6 +575,9 @@ def _segment_and_slice(
         segments,
         output_dir=paths.audio_dir(),
         section_id=section_id,
+        # Always re-slice: Phase 1 rewrites <id>.mp3 every run, and an old
+        # slice with the same name may come from another plan (#66).
+        overwrite=True,
     )
     return segments, audio_slices
 
@@ -536,7 +611,10 @@ def _run_section(
             log.info(
                 "[manimgen] Using precomputed audio: %d cue segment(s)", len(segments)
             )
-            if _all_cues_muxed(section, idx, len(segments)):
+            key = _section_key(
+                section, current_topic_hash, [s.duration for s in segments]
+            )
+            if _all_cues_muxed(section, idx, len(segments), key):
                 log.info("[manimgen] All cues already muxed, skipping section")
                 return [_muxed_path_for(section, idx, i) for i in range(len(segments))]
     elif tts_on:
@@ -545,7 +623,10 @@ def _run_section(
             segments, audio_slices = _segment_and_slice(section, tts_result, section_id)
             log.info("[manimgen] %d cue segment(s) for this section", len(segments))
 
-            if _all_cues_muxed(section, idx, len(segments)):
+            key = _section_key(
+                section, current_topic_hash, [s.duration for s in segments]
+            )
+            if _all_cues_muxed(section, idx, len(segments), key):
                 log.info("[manimgen] All cues already muxed, skipping section")
                 return [_muxed_path_for(section, idx, i) for i in range(len(segments))]
 
@@ -556,14 +637,13 @@ def _run_section(
 
     # --- Generate ONE scene for the whole section ---
     cue_durations = [seg.duration for seg in segments] if segments else None
+    key = _section_key(section, current_topic_hash, cue_durations)
 
     from manimgen.utils import section_class_name
 
     class_name = section_class_name(section)
     found_video = _find_rendered_video(class_name)
-    cache_is_usable = bool(found_video) and _render_is_fresh(
-        found_video, current_topic_hash
-    )
+    cache_is_usable = bool(found_video) and _render_is_fresh(found_video, key)
     # #24: the render-cache / --resume shortcut bypasses EVERY quality gate.
     # A cached section with a multi-second freeze-frame tail would ship
     # unchecked. Re-run the zero-cost timing freeze check against the cached
@@ -593,7 +673,7 @@ def _run_section(
         success, video_path = _render_with_retry(section, gate, cue_durations, log)
         # Write hash sidecar after any successful render (including fallback)
         if success and video_path and os.path.exists(video_path):
-            _write_hash_sidecar(video_path, current_topic_hash)
+            _write_hash_sidecar(video_path, key)
 
     if not video_path:
         log.warning("[manimgen] No video for section %d, skipping", idx)
@@ -602,7 +682,7 @@ def _run_section(
     # --- Cut + mux per cue ---
     if segments and audio_slices and success:
         return _cut_and_mux(
-            section, idx, video_path, segments, audio_slices, cue_durations, log
+            section, idx, video_path, segments, audio_slices, cue_durations, log, key
         )
 
     # TTS off — use the full section video directly
@@ -742,7 +822,7 @@ def main():
             )
     elif args.pdf:
         logger.info("[manimgen] PDF input: %s", args.pdf)
-        current_topic_hash = _topic_hash(os.path.abspath(args.pdf))
+        current_topic_hash = _file_hash(args.pdf)
         lesson_plan = plan_lesson_from_pdf(args.pdf)
         lesson_plan["_topic_hash"] = current_topic_hash
         _save_plan(lesson_plan)
@@ -756,6 +836,13 @@ def main():
 
     logger.info("[manimgen] Planned %d sections", len(lesson_plan["sections"]))
     logger.info("[manimgen] TTS: %s", "enabled" if tts_on else "disabled")
+
+    # Voice and speed change the narration without changing the plan, so they
+    # are part of every section's content key (#66).
+    tts_cfg = cfg.get("tts") or {}
+    content_hash = _topic_hash(
+        json.dumps([current_topic_hash, tts_cfg.get("voice"), tts_cfg.get("speed")])
+    )
 
     # --- Global audio phase: run all TTS before any codegen ---
     all_section_audio: dict[str, dict] = {}
@@ -798,7 +885,7 @@ def main():
                 section,
                 idx,
                 tts_on,
-                current_topic_hash,
+                content_hash,
                 section_audio=section_audio,
                 overview=overview,
             )
