@@ -75,10 +75,6 @@ _BANNED_PATTERNS: list[tuple[str, str]] = [
         "Text has no set_text() method in ManimGL. To update a counter label: create a new Text(...) and use FadeOut(old), FadeIn(new) or ReplacementTransform(old, new).",
     ),
     (
-        r"\bscale_factor\s*=",
-        "Remove `scale_factor`; FadeIn/FadeOut in ManimGL does not support it.",
-    ),
-    (
         r"\bCircumscribe\s*\(",
         "Use `FlashAround(...)` in ManimGL, not `Circumscribe(...)`.",
     ),
@@ -214,6 +210,30 @@ def _binding_key(node: ast.AST) -> str | None:
     if isinstance(node, ast.Attribute):
         return node.attr
     return None
+
+
+_SCALE_FACTOR_MESSAGE = (
+    "Remove `scale_factor`; FadeIn/FadeOut in ManimGL does not support it "
+    "(use scale=). Indicate(..., scale_factor=) is valid and is not flagged."
+)
+
+
+def _scale_factor_errors(code: str) -> list[str]:
+    """Flag scale_factor= only on the callees _BANNED_KWARGS names (FadeIn/FadeOut).
+
+    Indicate takes scale_factor in ManimGL 1.7.2, so a spelling-based regex would
+    reject valid scenes; the AST decides, exactly as the autofix does.
+    """
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return []  # reported by the compile() check
+    banned = _BANNED_KWARGS["scale_factor"]
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and _callee_name(node) in banned:
+            if any(kw.arg == "scale_factor" for kw in node.keywords):
+                return [_SCALE_FACTOR_MESSAGE]
+    return []
 
 
 def _vgroup_item_assignment_errors(code: str) -> list[str]:
@@ -1353,6 +1373,8 @@ def validate_scene_code(code: str) -> list[str]:
             errors.append(message)
 
     errors.extend(_vgroup_item_assignment_errors(code))
+
+    errors.extend(_scale_factor_errors(code))
 
     errors.extend(_detect_tmt_on_text(code))
 

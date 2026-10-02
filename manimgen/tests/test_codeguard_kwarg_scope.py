@@ -192,3 +192,34 @@ def test_valid_scene_with_indicate_scale_factor_survives_precheck():
         "            x_length = 8\n"
     )
     assert precheck_and_autofix(code) == code
+
+
+class TestIndicateScaleFactorAgreesAcrossValidators:
+    """manimlib 1.7.2 Indicate.__init__ takes scale_factor; only FadeIn/FadeOut reject it."""
+
+    def test_validate_scene_code_accepts_indicate_scale_factor(self):
+        from manimgen.validator.codeguard import validate_scene_code
+
+        code = "self.play(Indicate(sq, color=YELLOW, scale_factor=1.05))\n"
+        assert not any("scale_factor" in e for e in validate_scene_code(code))
+
+    def test_validate_scene_code_still_rejects_fade_scale_factor(self):
+        from manimgen.validator.codeguard import validate_scene_code
+
+        for call in ("FadeIn", "FadeOut"):
+            errs = validate_scene_code(f"self.play({call}(sq, scale_factor=1.5))\n")
+            assert any("scale_factor" in e for e in errs), call
+
+    def test_text_reveal_example_survives_codeguard_untouched(self):
+        from pathlib import Path
+
+        import manimgen
+        from manimgen.validator.codeguard import apply_known_fixes
+
+        src = (
+            Path(manimgen.__file__).parent / "examples" / "text_reveal_scene.py"
+        ).read_text(encoding="utf-8")
+        assert "scale_factor=1.05" in src
+        fixed, applied = apply_known_fixes(src)
+        assert "scale_factor=1.05" in fixed
+        assert not any("scale_factor" in a for a in applied)

@@ -164,3 +164,10 @@ def test_director_does_not_claim_images_that_are_not_shipped():
     if not load_reference_frames():
         assert not re.search(r"screenshot|reference frames|provided with actual", text, re.I)
     assert "bottom of this prompt" not in text
+
+
+def test_director_scale_factor_guidance_matches_validator():
+    """Indicate takes scale_factor, FadeIn/FadeOut do not; the prompt must not teach the latter."""
+    text = _text(DIRECTOR)
+    assert not re.search(r"Fade(?:In|Out)\([^)\n]*scale_factor", text)
+    assert codeguard._BANNED_KWARGS["scale_factor"] == frozenset({"FadeIn", "FadeOut"})
