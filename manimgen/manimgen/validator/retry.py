@@ -539,6 +539,7 @@ Full error:
 
 Original code:
 {prompt_code}""",
+            role="error_fix",
         )
         section_error_llm_calls_used += 1
         seen_error_signatures.add(error_signature)
@@ -653,6 +654,7 @@ Fix the code to resolve these visual defects. Return only the corrected Python â
 Original code:
 {prompt_code}""",
         images=ref_frames + frames,
+        role="visual_fix",
     )
     return strip_fencing(fixed)
 

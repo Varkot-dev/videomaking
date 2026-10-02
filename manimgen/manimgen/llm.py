@@ -86,12 +86,27 @@ _DEFAULTS = {
     "anthropic_max_tokens": 16000,
     "claude_cli_model": "sonnet",
     "claude_cli_path": "claude",
+    # Per-role model overrides (role -> alias or model ID). Empty: every role
+    # uses the provider default above.
+    "models": {},
     "ollama_model": "llama3.1",
     "ollama_base_url": "http://localhost:11434",
     # Ollama's default context window is smaller than the Director prompt, so
     # without an explicit num_ctx the prompt is silently truncated.
     "ollama_num_ctx": 32768,
 }
+
+
+def _parse_role_models(raw) -> dict[str, str]:
+    """llm.models from config.yaml as {role: model}; anything unusable is dropped."""
+    if not isinstance(raw, dict):
+        return {}
+    models = {}
+    for role, model in raw.items():
+        model = str(model).strip() if model is not None else ""
+        if model:
+            models[str(role).strip().lower()] = model
+    return models
 
 
 def _load_llm_config() -> dict:
@@ -117,6 +132,7 @@ def _load_llm_config() -> dict:
             "claude_cli_path": str(
                 llm_cfg.get("claude_cli_path", _DEFAULTS["claude_cli_path"])
             ),
+            "models": _parse_role_models(llm_cfg.get("models")),
             "ollama_model": llm_cfg.get("ollama_model", _DEFAULTS["ollama_model"]),
             "ollama_base_url": str(
                 llm_cfg.get("ollama_base_url", _DEFAULTS["ollama_base_url"])
@@ -219,8 +235,9 @@ def chat(
                 generation, which returns Python. Gemini enforces it natively;
                 the other providers rely on the prompt and have any markdown
                 code fence around the JSON stripped.
-        role:   What the call is for (researcher, planner, critic, director,
-                ...). Labels the call in the usage ledger.
+        role:   What the call is for (see ROLES). Picks the model (env
+                MANIMGEN_MODEL_<ROLE>, then llm.models in config.yaml, then the
+                provider default) and labels the call in the usage ledger.
     """
     provider = _resolve_provider()
 
@@ -234,19 +251,22 @@ def chat(
     if provider not in ("gemini", "anthropic", "claude_cli", "ollama"):
         raise ValueError(f"Unknown LLM_PROVIDER: {provider}")
 
+    # The role goes to the provider helper only when there is one, so a call
+    # without a role looks exactly as it did before roles existed.
+    kw = {"role": role} if role else {}
     _tls.meta = {}
     before = dict(_plan_windows)
     started = time.monotonic()
     error: str | None = None
     try:
         if provider == "gemini":
-            return _gemini(system, user, images or [], json_mode=json_mode)
+            return _gemini(system, user, images or [], json_mode=json_mode, **kw)
         if provider == "anthropic":
-            text = _anthropic(system, user, images or [])
+            text = _anthropic(system, user, images or [], **kw)
         elif provider == "claude_cli":
-            text = _claude_cli(system, user, images or [])
+            text = _claude_cli(system, user, images or [], **kw)
         else:
-            text = _ollama(system, user, images or [])
+            text = _ollama(system, user, images or [], **kw)
         return _strip_json_fence(text) if json_mode else text
     except BaseException as exc:
         error = f"{type(exc).__name__}: {exc}"[:500]
@@ -255,7 +275,7 @@ def chat(
         _record_call(
             role=role,
             provider=provider,
-            model=_default_model(provider),
+            model=_model_for(provider, role),
             duration_s=time.monotonic() - started,
             before=before,
             error=error,
@@ -273,11 +293,16 @@ def _strip_json_fence(text: str) -> str:
     return stripped
 
 
-def _gemini(system: str, user: str, images: list[str], json_mode: bool = False) -> str:
+def _gemini(
+    system: str,
+    user: str,
+    images: list[str],
+    json_mode: bool = False,
+    role: str | None = None,
+) -> str:
     from google import genai
     from google.genai import types
 
-    cfg = _LLM_CONFIG
     client = genai.Client(
         api_key=os.environ["GEMINI_API_KEY"],
         http_options=types.HttpOptions(
@@ -311,14 +336,16 @@ def _gemini(system: str, user: str, images: list[str], json_mode: bool = False) 
         config_kwargs["response_mime_type"] = "application/json"
 
     response = client.models.generate_content(
-        model=cfg["gemini_model"],
+        model=_model_for("gemini", role),
         contents=contents,
         config=types.GenerateContentConfig(**config_kwargs),
     )
     return response.text.strip()
 
 
-def _anthropic(system: str, user: str, images: list[str]) -> str:
+def _anthropic(
+    system: str, user: str, images: list[str], role: str | None = None
+) -> str:
     import anthropic
 
     cfg = _LLM_CONFIG
@@ -339,7 +366,7 @@ def _anthropic(system: str, user: str, images: list[str]) -> str:
     content.append({"type": "text", "text": user})
 
     message = client.messages.create(
-        model=cfg["anthropic_model"],
+        model=_model_for("anthropic", role),
         max_tokens=cfg["anthropic_max_tokens"],
         system=system,
         messages=[{"role": "user", "content": content}],
@@ -539,7 +566,9 @@ def _run_cli(
     return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 
 
-def _claude_cli(system: str, user: str, images: list[str]) -> str:
+def _claude_cli(
+    system: str, user: str, images: list[str], role: str | None = None
+) -> str:
     """Run one prompt through `claude -p` and return the reply text.
 
     The system prompt goes in a temp file and the user turn (text + images) on
@@ -586,7 +615,7 @@ def _claude_cli(system: str, user: str, images: list[str]) -> str:
             "--system-prompt-file",
             system_file,
             "--model",
-            cfg["claude_cli_model"],
+            _model_for("claude_cli", role),
             # One "--tools=" token rather than "--tools" "": an empty argv entry
             # does not survive the cmd.exe shim npm installs on Windows.
             "--tools=",
@@ -1004,18 +1033,58 @@ def usage_summary(path: str | None = None) -> str:
     return "\n".join(lines)
 
 
-def _default_model(provider: str) -> str:
-    """The configured model for `provider`, as recorded in the ledger."""
-    key = {
-        "claude_cli": "claude_cli_model",
-        "anthropic": "anthropic_model",
-        "gemini": "gemini_model",
-        "ollama": "ollama_model",
-    }[provider]
-    return str(_LLM_CONFIG[key])
+_PROVIDER_MODEL_KEY = {
+    "claude_cli": "claude_cli_model",
+    "anthropic": "anthropic_model",
+    "gemini": "gemini_model",
+    "ollama": "ollama_model",
+}
+
+# Roles call sites pass to chat(role=...). Any other string is accepted and
+# simply uses the default model.
+ROLES = (
+    "researcher",
+    "planner",
+    "planner_pdf",
+    "critic",
+    "cue_refill",
+    "director",
+    "error_fix",
+    "visual_fix",
+    "layout_check",
+)
 
 
-def _ollama(system: str, user: str, images: list[str]) -> str:
+def _model_for(provider: str, role: str | None = None) -> str:
+    """Model to use for `role` on `provider`.
+
+    Order: MANIMGEN_MODEL_<ROLE> env var, then llm.models[role] in config.yaml,
+    then the provider's default model. An unknown or missing role, or an
+    unusable value (empty, or starting with "-" so it could pass as a CLI flag),
+    falls back to the default; it is never an error.
+    """
+    default = str(_LLM_CONFIG[_PROVIDER_MODEL_KEY[provider]])
+    name = (role or "").strip().lower()
+    if not name:
+        return default
+    env_name = "MANIMGEN_MODEL_" + "".join(
+        c if c.isalnum() else "_" for c in name.upper()
+    )
+    configured = _LLM_CONFIG.get("models")
+    candidates = (
+        os.environ.get(env_name, ""),
+        configured.get(name, "") if isinstance(configured, dict) else "",
+    )
+    for value in candidates:
+        value = str(value).strip()
+        if value and not value.startswith("-"):
+            return value
+        if value:
+            logger.warning("[llm] ignoring unusable model %r for role %s", value, name)
+    return default
+
+
+def _ollama(system: str, user: str, images: list[str], role: str | None = None) -> str:
     import requests
 
     cfg = _LLM_CONFIG
@@ -1026,7 +1095,7 @@ def _ollama(system: str, user: str, images: list[str]) -> str:
 
     url = f"{base_url}/api/chat"
     payload = {
-        "model": cfg["ollama_model"],
+        "model": _model_for("ollama", role),
         "messages": [{"role": "system", "content": system}, user_msg],
         "stream": False,
         "options": {"num_ctx": cfg["ollama_num_ctx"]},

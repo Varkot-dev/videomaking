@@ -258,7 +258,7 @@ def generate_scenes(
         )
 
     ref_frames = load_reference_frames()
-    raw = chat(system=system, user=user_message, images=ref_frames)
+    raw = chat(system=system, user=user_message, images=ref_frames, role="director")
     code = strip_fencing(raw)
 
     if not code.startswith("from manimlib"):

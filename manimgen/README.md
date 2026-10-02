@@ -36,6 +36,24 @@ before a plan can run into "extra usage" (overage) billing, and
 reports whether any charge is possible. Tune the stop point with
 `MANIMGEN_MAX_PLAN_UTILIZATION` (default `0.90`).
 
+**Models by role.** Each LLM call carries a role (`researcher`, `planner`,
+`planner_pdf`, `critic`, `cue_refill`, `director`, `error_fix`, `visual_fix`,
+`layout_check`). The optional `llm.models:` block in `config.yaml` maps a role
+to `haiku`, `sonnet`, `opus` or a full model ID, and `MANIMGEN_MODEL_<ROLE>`
+(for example `MANIMGEN_MODEL_DIRECTOR=opus`) overrides it for one run. Nothing is
+changed by default: every role uses `llm.claude_cli_model`, and an unknown role
+or empty value falls back to it. Tiers worth trialling, one role at a time:
+`planner` on opus; `researcher`, `critic`, `director`, `error_fix` and
+`visual_fix` on sonnet; `cue_refill` and `layout_check` on haiku. Judge each
+change with the usage ledger over about 10 topics.
+
+**Usage ledger.** Every call appends one JSON line to
+`<logs_dir>/llm_usage.jsonl` (role, model, provider, seconds, input and output
+tokens, an API-price cost equivalent, and 5-hour and 7-day plan utilization
+before and after). `manimgen.llm.usage_summary()` returns a per-role table and
+the plan-utilization change over the run, so you can see what share of the
+5-hour allowance one video costs.
+
 See [../README.md](../README.md) for the pipeline architecture, the Codeguard
 repair harness, LLM provider details, macOS/Linux and Windows (no admin) setup,
 and the cost model.

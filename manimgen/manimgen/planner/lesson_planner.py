@@ -111,7 +111,10 @@ def _self_correct(plan: dict, limit: int = _SELF_CORRECT_LIMIT) -> dict:
     critic_system = _load_critic_system_prompt()
     for _ in range(limit):
         raw = chat(
-            system=critic_system, user=json.dumps(plan, indent=2), json_mode=True
+            system=critic_system,
+            user=json.dumps(plan, indent=2),
+            json_mode=True,
+            role="critic",
         )
         try:
             candidate = _parse_plan_json(raw)
@@ -399,7 +402,9 @@ def _refill_cues_via_llm(
         f"LaTeX backslashes inside Tex() only."
     )
     try:
-        raw = chat(system=_load_system_prompt(), user=user, json_mode=True)
+        raw = chat(
+            system=_load_system_prompt(), user=user, json_mode=True, role="cue_refill"
+        )
         # This path INTENTIONALLY accepts a top-level JSON array (the cue list),
         # so use the lenient parser rather than the dict-guaranteeing wrapper.
         parsed = _safe_json_loads_any(_strip_fencing(raw))
@@ -600,14 +605,19 @@ def _checked_plan(raw: str) -> dict:
     return plan
 
 
-def _chat_plan(system: str, user: str, images: list[str] | None = None) -> dict:
+def _chat_plan(
+    system: str,
+    user: str,
+    images: list[str] | None = None,
+    role: str = "planner",
+) -> dict:
     """Ask for a plan and parse it, re-asking exactly once on a bad reply.
 
     A reply is bad when it holds no JSON object or no usable ``sections``.
 
     Both calls go through ``chat`` so the usage guard and budget apply.
     """
-    raw = chat(system=system, user=user, images=images, json_mode=True)
+    raw = chat(system=system, user=user, images=images, json_mode=True, role=role)
     try:
         return _checked_plan(raw)
     except ValueError as e:
@@ -618,7 +628,9 @@ def _chat_plan(system: str, user: str, images: list[str] | None = None) -> dict:
             f"{user}\n\nYour previous reply could not be used: {e}. "
             "Return ONLY the complete JSON object, with no text before or after it."
         )
-        raw = chat(system=system, user=retry_user, images=images, json_mode=True)
+        raw = chat(
+            system=system, user=retry_user, images=images, json_mode=True, role=role
+        )
         return _checked_plan(raw)
 
 
@@ -633,6 +645,7 @@ def research_topic(topic: str) -> dict:
         system=system,
         user=f"Research this topic for an educational video: {topic}",
         json_mode=True,
+        role="researcher",
     )
     try:
         brief = _safe_json_loads(_strip_fencing(raw))
@@ -828,7 +841,9 @@ def plan_lesson_from_pdf(pdf_path: str) -> dict:
     logger.info(
         "[planner] Calling LLM for PDF lesson plan (images: %d)...", len(images)
     )
-    plan = _chat_plan(system, user_message, images if images else None)
+    plan = _chat_plan(
+        system, user_message, images if images else None, role="planner_pdf"
+    )
     titles = [
         str(sec.get("title", "?")) if isinstance(sec, dict) else "?"
         for sec in plan["sections"]

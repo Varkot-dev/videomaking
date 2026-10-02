@@ -179,6 +179,7 @@ def check_layout(video_path: str) -> dict:
             system=_load_layout_system_prompt(),
             user=user,
             images=ref_frames + frames,
+            role="layout_check",
         )
     except Exception as exc:
         logger.warning("[layout_checker] LLM call failed: %s", exc)

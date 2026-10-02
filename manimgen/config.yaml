@@ -13,6 +13,35 @@ llm_provider: "claude_cli"
 llm:
   claude_cli_model: "sonnet"   # alias or full model ID, e.g. "opus" for the strongest model
   claude_cli_path: "claude"    # executable name or full path to Claude Code
+  # Per-role model routing. Every role uses the provider's default model (above)
+  # unless listed here, so nothing is changed by default. Uncomment one line to
+  # route that role elsewhere; values are an alias ("haiku", "sonnet", "opus") or
+  # a full model ID and must be valid for the active llm_provider. An
+  # MANIMGEN_MODEL_<ROLE> environment variable (for example
+  # MANIMGEN_MODEL_DIRECTOR=opus) beats this block; an unknown role or an empty
+  # value falls back to the default.
+  #   researcher    research brief                     (planner/lesson_planner.py)
+  #   planner       topic storyboard                   (planner/lesson_planner.py)
+  #   planner_pdf   PDF storyboard                     (planner/lesson_planner.py)
+  #   critic        storyboard self-critique           (planner/lesson_planner.py)
+  #   cue_refill    re-ask for a missing cue list      (planner/lesson_planner.py)
+  #   director      scene code per section             (generator/scene_generator.py)
+  #   error_fix     fix a scene that failed to render  (validator/retry.py)
+  #   visual_fix    fix defects found in rendered frames (validator/retry.py)
+  #   layout_check  vision verdict on rendered frames  (validator/layout_checker.py)
+  # Tiers worth trialling, one role at a time, compared with the usage ledger
+  # (llm.usage_summary()) over about 10 topics: planner on opus; researcher,
+  # critic, director, error_fix and visual_fix on sonnet; cue_refill and
+  # layout_check on haiku.
+  models: {}
+  #   planner: "opus"
+  #   researcher: "sonnet"
+  #   critic: "sonnet"
+  #   director: "sonnet"
+  #   error_fix: "sonnet"
+  #   visual_fix: "sonnet"
+  #   cue_refill: "haiku"
+  #   layout_check: "haiku"
   gemini_model: "gemini-2.5-flash"
   anthropic_model: "claude-sonnet-5-5"
   max_tokens: 16000       # Only used by Anthropic provider
