@@ -6,11 +6,16 @@ Leaf seam: ``chat`` is mocked. Zero API cost.
 
 import json
 import logging
+import os
 from unittest.mock import patch
 
 import pytest
 
-from manimgen.planner.lesson_planner import plan_lesson, plan_lesson_from_pdf
+from manimgen.planner.lesson_planner import (
+    _MAX_SECTIONS_PDF,
+    plan_lesson,
+    plan_lesson_from_pdf,
+)
 
 PL = "manimgen.planner.lesson_planner"
 
@@ -309,3 +314,122 @@ class TestPlanEntryGuard:
             patch(f"{PL}.chat", side_effect=["{}", json.dumps(_good_plan())]),
         ):
             assert len(plan_lesson("x")["sections"]) == 2
+
+
+# ── R23 ──────────────────────────────────────────────────────────────────────
+
+_PDF_PROMPT = os.path.join(
+    os.path.dirname(__file__),
+    "..",
+    "manimgen",
+    "planner",
+    "prompts",
+    "planner_pdf_system.md",
+)
+
+
+def _pdf_plan(n):
+    plan = _good_plan(n)
+    for sec in plan["sections"]:
+        sec["source_confidence"] = "high"
+    return json.dumps(plan)
+
+
+def _parsed(chunks=("lecture notes " * 5,), images=()):
+    return {
+        "raw_text": "\n".join(chunks),
+        "chunks": list(chunks),
+        "extracted_pages": 1,
+        "images": list(images),
+    }
+
+
+class TestPdfPromptSchema:
+    def _text(self):
+        with open(_PDF_PROMPT, encoding="utf-8") as f:
+            return f.read()
+
+    def test_uses_topic_schema_not_dead_fields(self):
+        text = self._text()
+        for dead in ("visual_description", "key_objects", "animation_style"):
+            assert dead not in text
+        assert '"cues"' in text
+        assert "Technique:" in text
+        assert "[CUE]" in text
+        assert "source_confidence" in text
+
+    def test_prompt_agrees_with_code_cap(self):
+        text = self._text()
+        assert f"{_MAX_SECTIONS_PDF} sections" in text
+        assert "6 to 10" not in text and "6\u201310" not in text
+        assert "more than 10" not in text
+
+    @patch(f"{PL}.chat")
+    @patch("manimgen.input.pdf_parser.parse_pdf")
+    def test_pdf_system_prompt_carries_technique_menu(self, mock_parse, mock_chat):
+        mock_parse.return_value = _parsed()
+        mock_chat.side_effect = [_pdf_plan(2), _pdf_plan(2)]
+        plan_lesson_from_pdf("n.pdf")
+        system = mock_chat.call_args_list[0].kwargs["system"]
+        assert "stagger_reveal" in system and "camera_flythrough" in system
+
+
+class TestPdfPlanFlow:
+    @patch(f"{PL}.chat")
+    @patch("manimgen.input.pdf_parser.parse_pdf")
+    def test_cue_schema_plan_costs_two_calls(self, mock_parse, mock_chat):
+        mock_parse.return_value = _parsed()
+        mock_chat.side_effect = [_pdf_plan(6), _pdf_plan(6)]
+        plan = plan_lesson_from_pdf("n.pdf")
+        assert mock_chat.call_count == 2  # plan + critic, no per-section refill
+        assert len(plan["sections"]) == 6
+        assert plan["source_coverage"]["sections_dropped"] == []
+
+    @patch(f"{PL}.chat")
+    @patch("manimgen.input.pdf_parser.parse_pdf")
+    def test_dropped_sections_are_reported(self, mock_parse, mock_chat, caplog):
+        mock_parse.return_value = _parsed()
+        mock_chat.side_effect = [_pdf_plan(10), _pdf_plan(8)]
+        with caplog.at_level(logging.WARNING, logger=PL):
+            plan = plan_lesson_from_pdf("n.pdf")
+        assert len(plan["sections"]) == _MAX_SECTIONS_PDF
+        assert plan["source_coverage"]["sections_dropped"] == ["S9", "S10"]
+        msgs = " ".join(r.getMessage() for r in caplog.records)
+        assert "S9" in msgs and "S10" in msgs
+
+    @patch(f"{PL}.chat")
+    @patch("manimgen.input.pdf_parser.parse_pdf")
+    def test_text_truncation_is_reported(self, mock_parse, mock_chat, caplog):
+        chunks = ["x" * 5000 for _ in range(10)]  # 24K cap fits only 4
+        mock_parse.return_value = _parsed(chunks)
+        mock_chat.side_effect = [_pdf_plan(3), _pdf_plan(3)]
+        with caplog.at_level(logging.WARNING, logger=PL):
+            plan = plan_lesson_from_pdf("n.pdf")
+        cov = plan["source_coverage"]
+        assert cov["chunks_total"] == 10
+        assert cov["chunks_sent"] == 4
+        assert any("chunk" in r.getMessage() for r in caplog.records)
+
+    @patch(f"{PL}.chat")
+    @patch("manimgen.input.pdf_parser.parse_pdf")
+    def test_image_truncation_is_reported(self, mock_parse, mock_chat, caplog):
+        mock_parse.return_value = _parsed(images=[f"img{i}" for i in range(15)])
+        mock_chat.side_effect = [_pdf_plan(3), _pdf_plan(3)]
+        with caplog.at_level(logging.WARNING, logger=PL):
+            plan = plan_lesson_from_pdf("n.pdf")
+        assert len(mock_chat.call_args_list[0].kwargs["images"]) == 10
+        cov = plan["source_coverage"]
+        assert cov["images_total"] == 15 and cov["images_sent"] == 10
+        assert any("page" in r.getMessage() for r in caplog.records)
+
+    @patch(f"{PL}.chat")
+    @patch("manimgen.input.pdf_parser.parse_pdf")
+    def test_no_truncation_reports_full_coverage(self, mock_parse, mock_chat, caplog):
+        mock_parse.return_value = _parsed(images=["a", "b"])
+        mock_chat.side_effect = [_pdf_plan(3), _pdf_plan(3)]
+        with caplog.at_level(logging.WARNING, logger=PL):
+            plan = plan_lesson_from_pdf("n.pdf")
+        cov = plan["source_coverage"]
+        assert cov["chunks_sent"] == cov["chunks_total"] == 1
+        assert cov["images_sent"] == cov["images_total"] == 2
+        assert not [r for r in caplog.records if "truncat" in r.getMessage().lower()]
