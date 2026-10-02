@@ -102,7 +102,7 @@ manimgen/
 ├── tests/                       # pytest suite (run `python3 -m pytest -q`)
 ├── config.yaml                  # LLM provider, model names, TTS config, render quality
 ├── requirements.txt             # runtime deps (setup.py reads it for install_requires)
-├── requirements-dev.txt         # -r requirements.txt + pytest, pytest-mock, hypothesis, ruff==0.15.13
+├── requirements-dev.txt         # -r requirements.txt + pytest, pytest-mock, pytest-timeout, pytest-cov, hypothesis, ruff==0.15.13
 └── setup.py                     # console_scripts: manimgen, manimgen-edit
 ```
 

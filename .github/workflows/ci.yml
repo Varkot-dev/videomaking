@@ -29,6 +29,7 @@ jobs:
   lint:
     name: Lint (ruff)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -44,6 +45,7 @@ jobs:
   test:
     name: Full test suite (no ignores, Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       # Report every interpreter's result instead of cancelling the rest on
       # the first failure: a 3.11-only break is the signal this matrix exists for.
@@ -80,11 +82,28 @@ jobs:
         # No --maxfail: report a change's FULL blast radius, not just the
         # first failure. --strict-markers is also set in pyproject.toml so a
         # bare local `pytest` matches this invocation (local == CI).
+        if: matrix.python-version != '3.13'
         run: python3 -m pytest tests/ -q --strict-markers
+
+      - name: Run the ENTIRE suite with a coverage report (3.13 only)
+        # Same suite, same flags, plus a coverage table in the job summary so
+        # a reader can see how much of cli.py and renderer/ the tests execute.
+        # Report only: there is deliberately no --cov-fail-under until a
+        # baseline exists.
+        if: matrix.python-version == '3.13'
+        run: >
+          python3 -m pytest tests/ -q --strict-markers
+          --cov=manimgen --cov-report=term
+          --cov-report=markdown-append:$GITHUB_STEP_SUMMARY
 
   smoke:
     name: Mocked-LLM pipeline smoke
+    # Kept although these three files also run in the full suite: this exact
+    # job name is a REQUIRED status check in docs/BRANCH_PROTECTION.md, and
+    # deleting it would leave main's protection waiting on a check that never
+    # reports. Remove it only together with that branch protection rule.
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -122,6 +141,7 @@ jobs:
     # deliberately NOT set here: the job has to run under Windows' real
     # default encoding to catch a missing encoding="utf-8".
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

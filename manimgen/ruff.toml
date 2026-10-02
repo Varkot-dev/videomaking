@@ -10,7 +10,10 @@
 # and fight the formatter. The linter owns logic/correctness (F), import
 # order (I), and the non-line-length pycodestyle rules.
 
-target-version = "py313"
+# py311 is the oldest supported interpreter (CI tests 3.11 and 3.13, the owner
+# runs 3.11): linting against py313 let 3.12+ only syntax such as PEP 695
+# generics through, and it would only fail later as an import error on 3.11.
+target-version = "py311"
 line-length = 88
 
 # The few-shot examples are ManimGL data files (star imports by design).
