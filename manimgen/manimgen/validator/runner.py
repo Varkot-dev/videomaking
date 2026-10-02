@@ -5,7 +5,6 @@ from datetime import datetime
 from manimgen import paths
 from manimgen.validator.codeguard import precheck_and_autofix_file
 from manimgen.validator.render_command import run_manimgl
-from manimgen.validator.scene_ast_gate import inspect_scene_file
 
 # Slack subtracted from "now" when computing the freshness floor for
 # _find_rendered_video. Some filesystems store mtime at whole-second
@@ -106,28 +105,11 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
             f.write("\n")
         return False, None
 
-    # Pre-execution AST gate (#27): manimgl imports the scene module, running
-    # every top-level statement before the Scene is instantiated. Inspect the
-    # exact file we are about to execute for disallowed top-level statements
-    # (shelling out, importing os/subprocess, exec/eval, second class, ...).
+    # The scene safety gate (#27, #87) is enforced inside run_manimgl, the one
+    # entry point every render goes through: a rejected file is never handed to
+    # manimgl and comes back as a failure whose stderr lists the findings
+    # (written to this attempt's log below). Codeguard is not a security check.
     #
-    # Warning-only by design: codeguard's banned-pattern denylist already
-    # blocks the known exec/eval/shell primitives outright, and hard-breaking
-    # here would regress any scene that emits a benign extra top-level
-    # statement. We log findings loudly so they are visible in the run log.
-    # TODO(#27): once Director output is constrained enough that findings are
-    # reliably malicious, hard-block here (return False, None) instead of only
-    # warning.
-    gate = inspect_scene_file(scene_path)
-    if not gate.ok:
-        import logging as _logging
-
-        _logging.getLogger(__name__).warning(
-            "[runner] AST gate findings for %s (warning-only, render continues): %s",
-            class_name,
-            "; ".join(gate.findings),
-        )
-
     # One shared entry point: scene-kind timeout from config, whole-tree kill on
     # timeout, and exit 0 without a fresh video counts as a failure.
     result = run_manimgl(scene_path, class_name)

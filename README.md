@@ -52,9 +52,9 @@ Input (topic string or PDF)
 │     (token-free)                50+ known ManimGL API      │
 │                                 mistakes auto-corrected    │
 │                                                            │
-│  3. AST gate ────────────────► scene_ast_gate: only allows │
-│     (security, token-free)      whitelisted top-level      │
-│                                 statements (no shell-out)  │
+│  3. Safety gate ─────────────► scene_ast_gate: whole-tree  │
+│     (security, token-free)      import allowlist + denylist│
+│                                 hard block before render   │
 │                                                            │
 │  4. Timing verifier ─────────► static loop-aware timing    │
 │     (token-free)                analysis; auto-fix or      │
@@ -169,7 +169,7 @@ videomaking/                      # git root (this README)
     │   │   ├── codeguard.py      # static analysis + 50+ auto-fixes
     │   │   ├── manimlib_signatures.py # type-aware kwarg introspection (Phase 2 shadow)
     │   │   ├── manimlib_symbols.py    # call-target name validation
-    │   │   ├── scene_ast_gate.py # security: AST allowlist for top-level statements
+    │   │   ├── scene_ast_gate.py # security: whole-tree static gate (not a sandbox)
     │   │   ├── timing_verifier.py# loop-aware cue timing analysis + auto-fix
     │   │   ├── render_validator.py # unified post-render quality gate (frame + layout)
     │   │   ├── frame_checker.py  # zero-cost PIL: black/frozen/clipping detection
@@ -513,7 +513,7 @@ The suite covers:
 - Every codeguard auto-fix and banned pattern
 - Type-aware kwarg introspection (manimlib_signatures)
 - Loop-aware timing analysis and auto-fix (timing_verifier)
-- AST security gate (scene_ast_gate)
+- Scene safety gate (scene_ast_gate): attack corpus, every example passes, hard block on every render path
 - Error-aware repair from real stderr tracebacks
 - Section cap enforcement in the planner
 - A/V sync contracts (muxer, slicer, segmenter)
@@ -521,6 +521,43 @@ The suite covers:
 - PDF parser output structure and chunking logic
 - The LLM provider switch, including how `claude -p` is invoked
 - Documentation accuracy (`tests/test_docs_accuracy.py`: cited paths exist, no stale counts)
+
+---
+
+## Security: generated code runs with your rights
+
+The scene code is written by an LLM (the Director, the retry fixes) and run by
+`manimgl` as you, with your normal user rights. The LLM reads the topic or PDF
+you give it, so a document crafted to inject instructions could try to make it
+write harmful code.
+
+**What protects you today.** `validator/scene_ast_gate.py` parses every scene
+(it never runs it) and walks the whole syntax tree, including method bodies,
+nested functions, lambdas, comprehensions, decorators and default arguments.
+It allows imports only from a short list of pure modules (`manimlib`, `numpy`,
+`math`, `random`, `itertools`, `functools`, `typing`, `colorsys`,
+`dataclasses`, `enum`, `collections` and a few more) and rejects `exec`,
+`eval`, `compile`, `open`, `__import__`, `globals`/`locals`/`vars`,
+`getattr`-style calls on computed names, dunder and private attribute access,
+names such as `os`, `sys`, `subprocess` and `pickle` that `from manimlib import *`
+leaks into scope, file, pickle and process methods (`.save`, `.load`,
+`.system` ...), URL and network-path strings, TeX file and shell primitives,
+and non-UTF-8 source encodings. A rejected scene is never rendered: the single
+render entry point (`render_command.run_manimgl`) refuses it, a rejected Director
+draft goes straight to the retry loop with the findings, and a rejected LLM fix
+is thrown away.
+
+**What it does not do.** It is a static denylist, **not a sandbox**. It stops
+naive and moderately disguised payloads, but a determined author can still
+reach something dangerous through a route no fixed list anticipates (for
+example, building a config key or a URL from pieces at runtime). Once a scene
+passes, it runs with your full rights. Codeguard is not a security check
+either.
+
+**Until stronger containment exists, use only topics and PDFs from sources you
+trust.** The planned next step, a launcher that installs a Python audit hook to
+deny network connections, unexpected processes and writes outside the output
+folder, is deferred until untrusted PDFs need to be supported.
 
 ---
 

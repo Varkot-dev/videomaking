@@ -291,6 +291,20 @@ After every fix, the file is **always reloaded from disk** — previously a bug 
 
 ---
 
+## Security: generated scene code
+LLM-written scenes run under `manimgl` with the user's full rights.
+`validator/scene_ast_gate.py` is a whole-tree static gate (import allowlist plus
+denylist of dangerous names, attributes, strings and encodings). It is a HARD
+block: `render_command.run_manimgl` refuses a rejected file, the generator routes
+a rejected draft to retry, and retry discards a rejected LLM fix. It is NOT a
+sandbox and can be bypassed by a determined author; only trusted topics and PDFs
+should be used until the audit-hook launcher (deferred, issue #87 option 2)
+exists. Every file in `manimgen/examples/` must pass the gate
+(`tests/test_scene_gate_attacks.py`). When a legit scene is rejected, widen the
+gate narrowly and add a test; never route a render around `run_manimgl`.
+
+---
+
 ## Key rules for development
 
 1. **Never use `--background_color`** — the correct flag is `-c "#1C1C1C"`

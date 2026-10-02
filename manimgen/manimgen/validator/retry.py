@@ -12,6 +12,7 @@ from manimgen.validator.codeguard import (
 )
 from manimgen.validator.layout_checker import check_layout
 from manimgen.validator.render_command import run_manimgl
+from manimgen.validator.scene_ast_gate import inspect_scene_code
 from manimgen.validator.timing_verifier import auto_fix_timing, verify_timing
 
 logger = logging.getLogger(__name__)
@@ -447,6 +448,7 @@ def retry_scene(
                 return True, best_video_path or result["video_path"]
 
             print("[retry] Requesting visual fix from LLM...")
+            previous_code = code
             code = _request_visual_fix(
                 code, "\n".join(combined_issues), system_prompt, defective_frames
             )
@@ -458,6 +460,8 @@ def retry_scene(
             # Always reload — precheck may have applied auto-fixes in-place
             with open(scene_path, encoding="utf-8") as f:
                 code = f.read()
+            if _discard_unsafe_fix(scene_path, code, previous_code, "visual"):
+                return True, best_video_path or result["video_path"]
             # Timing pass — catch timing bugs in the LLM's visual fix
             if cue_durations:
                 code, tw = apply_timing_gate(code, scene_path, cue_durations)
@@ -546,6 +550,7 @@ Original code:
 
         fixed = strip_fencing(fixed)
 
+        previous_code = code
         code = fixed
         with open(scene_path, "w", encoding="utf-8") as f:
             f.write(code)
@@ -555,6 +560,8 @@ Original code:
         precheck_and_autofix_file(scene_path)
         with open(scene_path, encoding="utf-8") as f:
             code = f.read()
+        if _discard_unsafe_fix(scene_path, code, previous_code, "error"):
+            break
 
         # Timing pass — auto-fix self.wait() values and inject remaining
         # timing warnings into the next attempt's error context.
@@ -579,6 +586,33 @@ Original code:
         )
         return True, best_video_path
     return False, None
+
+
+def _discard_unsafe_fix(
+    scene_path: str, code: str, previous_code: str, kind: str
+) -> bool:
+    """Discard an LLM fix that the scene safety gate rejects (#87).
+
+    A rejected fix is never rendered: the previous code is written back to
+    ``scene_path`` and True is returned so the caller stops asking for fixes
+    (it then ships the best earlier render or falls back). run_manimgl would
+    refuse the file anyway; discarding here also keeps the unsafe text off disk.
+    """
+    gate = inspect_scene_code(code)
+    if gate.ok:
+        return False
+    logger.warning(
+        "[retry] %s fix rejected by the scene safety gate and discarded: %s",
+        kind,
+        "; ".join(gate.findings),
+    )
+    print(
+        f"[retry] LLM {kind} fix rejected by the scene safety gate; discarded "
+        f"({len(gate.findings)} finding(s)). Not rendering it."
+    )
+    with open(scene_path, "w", encoding="utf-8") as f:
+        f.write(previous_code)
+    return True
 
 
 def _breaks_compile(before: str, after: str) -> bool:

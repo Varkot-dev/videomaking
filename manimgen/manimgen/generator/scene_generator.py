@@ -23,6 +23,7 @@ from manimgen.utils import (
     strip_fencing,
 )
 from manimgen.validator.codeguard import precheck_and_autofix, precheck_and_autofix_file
+from manimgen.validator.scene_ast_gate import format_gate_error, inspect_scene_code
 
 logger = logging.getLogger(__name__)
 
@@ -296,6 +297,24 @@ def generate_scenes(
         raise ScenePrecheckError(
             f"Generated scene {os.path.basename(scene_path)} failed precheck "
             f"validation:\n{precheck['stderr']}",
+            code,
+            class_name,
+            scene_path,
+        )
+
+    # Scene safety gate (#87). A rejected scene is never rendered: it takes the
+    # same route as a precheck failure, so the first render is skipped and the
+    # retry loop (whose renders are also gated) gets the findings to fix.
+    gate = inspect_scene_code(code)
+    if not gate.ok:
+        logger.warning(
+            "[generator] scene safety gate rejected %s: %s",
+            os.path.basename(scene_path),
+            "; ".join(gate.findings),
+        )
+        raise ScenePrecheckError(
+            f"Generated scene {os.path.basename(scene_path)} was rejected by "
+            f"the scene safety gate:\n{format_gate_error(gate)}",
             code,
             class_name,
             scene_path,

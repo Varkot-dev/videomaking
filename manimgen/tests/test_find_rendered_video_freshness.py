@@ -164,11 +164,7 @@ def test_run_scene_threads_a_freshness_floor(tmp_path, monkeypatch):
     monkeypatch.setattr(
         runner, "precheck_and_autofix_file", lambda p: {"ok": True, "stderr": ""}
     )
-    monkeypatch.setattr(
-        runner,
-        "inspect_scene_file",
-        lambda p: type("G", (), {"ok": True, "findings": []})(),
-    )
+    # The scene safety gate now runs inside run_manimgl; this scene passes it.
     monkeypatch.setattr("manimgen.paths.logs_dir", lambda: str(tmp_path / "logs"))
     monkeypatch.setattr(
         "manimgen.procutil.run_tree", lambda *a, **k: (0, "", "", False)
