@@ -711,3 +711,19 @@ class TestOverageGuard:
             json.dumps({"type": "rate_limit_event", "rate_limit_info": "nope"}),
         )
         assert out == "fine"
+
+
+class TestSuiteNeverLaunchesRealClaude:
+    """Guard against tests that spend plan allowance by starting `claude`."""
+
+    def test_claude_is_unfindable_by_default_in_tests(self):
+        import shutil
+
+        assert shutil.which("claude") is None
+
+    def test_unmocked_chat_fails_without_launching_anything(self, monkeypatch):
+        monkeypatch.setenv("LLM_PROVIDER", "claude_cli")
+        with patch.object(llm_mod, "_run_cli") as run:
+            with pytest.raises(RuntimeError, match="not found on PATH"):
+                chat(system="s", user="u")
+        run.assert_not_called()
