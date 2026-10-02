@@ -503,6 +503,7 @@ self.play(GrowFromCenter(obj))
 self.play(LaggedStart(*[FadeIn(item) for item in items], lag_ratio=0.15))
 self.play(FlashAround(obj, color=TEAL_A))
 self.play(Indicate(obj, color=TEAL_A))
+# Indicate takes scale_factor (default 1.2, e.g. scale_factor=1.05 for a gentle pulse). FadeIn/FadeOut do NOT: use scale= there.
 self.play(FadeTransform(a, b))
 self.play(grid.animate.apply_matrix([[a, b], [c, d]]), run_time=2.5)
 self.wait(seconds)

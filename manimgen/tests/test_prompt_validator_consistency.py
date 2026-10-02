@@ -180,3 +180,10 @@ def test_director_does_not_teach_become_then_showcreation():
     assert "self.play(scan_rect.animate.become(" in text
     fixed, applied = codeguard._fix_become_inside_play("self.play(r.become(Square()))\n")
     assert ".animate.become(" in fixed and applied
+
+
+def test_director_scale_factor_guidance_matches_validator():
+    """Indicate takes scale_factor, FadeIn/FadeOut do not; the prompt must not teach the latter."""
+    text = _text(DIRECTOR)
+    assert not re.search(r"Fade(?:In|Out)\([^)\n]*scale_factor", text)
+    assert codeguard._BANNED_KWARGS["scale_factor"] == frozenset({"FadeIn", "FadeOut"})
