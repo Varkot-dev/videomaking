@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 
 from manimgen.llm import chat
 from manimgen.planner.cue_parser import parse_cues
@@ -31,9 +32,8 @@ def _self_correct(plan: dict, limit: int = _SELF_CORRECT_LIMIT) -> dict:
         raw = chat(
             system=critic_system, user=json.dumps(plan, indent=2), json_mode=True
         )
-        stripped = _strip_fencing(raw)
         try:
-            plan = _safe_json_loads(stripped)
+            plan = _parse_plan_json(raw)
         except Exception:
             logger.warning(
                 "[planner] Self-correction returned non-JSON — keeping original plan"
@@ -397,6 +397,99 @@ def _is_valid_unicode_escape(s: str, backslash_idx: int) -> bool:
     return all(c in _HEX_DIGITS for c in s[hex_start:hex_end])
 
 
+# LaTeX commands that start with a letter JSON also accepts as an escape
+# (\b \f \n \r \t). A reply like "\theta" or "\nabla" parses "successfully"
+# into a tab or newline plus text, silently corrupting the Tex() string, so a
+# backslash starting one of these is doubled before the first parse. Names are
+# matched whole, so a real "\nNext line" escape is left alone.
+_LATEX_ESCAPE_CLASH = frozenset(
+    """neq ne nabla nu not notin neg newline nolimits ni
+    rho right rightarrow rangle rceil rfloor rm rightleftharpoons
+    text textbf textit textrm theta tau tan times to top triangle tilde tfrac
+    therefore thinspace tag tiny tanh""".split()
+)
+_LETTER_RUN = re.compile(r"[A-Za-z]+")
+
+
+def _protect_latex_backslashes(s: str) -> str:
+    """Double backslashes that start LaTeX commands so JSON keeps them.
+
+    Walks the text so an already-valid ``\\\\`` pair is never touched. A
+    backslash followed by two or more letters is always a LaTeX command unless
+    it is a JSON ``\\n``/``\\r``/``\\t`` escape glued to a word, which is told
+    apart by matching the whole letter run against known commands.
+    """
+    out = []
+    i = 0
+    n = len(s)
+    while i < n:
+        ch = s[i]
+        if ch != "\\":
+            out.append(ch)
+            i += 1
+            continue
+        nxt = s[i + 1] if i + 1 < n else ""
+        if nxt == "\\":
+            out.append("\\\\")  # keep a valid escaped backslash as-is
+            i += 2
+            continue
+        run = _LETTER_RUN.match(s, i + 1)
+        word = run.group(0) if run else ""
+        if len(word) >= 2 and (word[0] not in "nrt" or word in _LATEX_ESCAPE_CLASH):
+            out.append("\\\\")  # LaTeX command: double the backslash
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _parse_plan_json(raw: str) -> dict:
+    """Parse a planner reply into a plan dict, tolerating chatty replies.
+
+    Takes the first JSON object found (``raw_decode`` from a ``{``), so prose
+    before or after it, or around a code fence, is ignored. LaTeX backslashes
+    are protected before the first parse. Raises ValueError when no object
+    can be read.
+    """
+    text = _protect_latex_backslashes(raw)
+    decoder = json.JSONDecoder()
+    last_err: Exception | None = None
+    pos = text.find("{")
+    while pos != -1:
+        try:
+            obj, _ = decoder.raw_decode(text, pos)
+        except json.JSONDecodeError as e:
+            last_err = e
+            pos = text.find("{", pos + 1)
+            continue
+        if isinstance(obj, dict):
+            return obj
+        pos = text.find("{", pos + 1)
+    raise ValueError(
+        f"no JSON object found in the reply ({last_err or 'no opening brace'})"
+    )
+
+
+def _chat_plan(system: str, user: str, images: list[str] | None = None) -> dict:
+    """Ask for a plan and parse it, re-asking exactly once on a bad reply.
+
+    Both calls go through ``chat`` so the usage guard and budget apply.
+    """
+    raw = chat(system=system, user=user, images=images, json_mode=True)
+    try:
+        return _parse_plan_json(raw)
+    except ValueError as e:
+        logger.warning(
+            "[planner] Plan reply was not usable JSON (%s) - re-asking once", e
+        )
+        retry_user = (
+            f"{user}\n\nYour previous reply could not be used: {e}. "
+            "Return ONLY the complete JSON object, with no text before or after it."
+        )
+        raw = chat(system=system, user=retry_user, images=images, json_mode=True)
+        return _parse_plan_json(raw)
+
+
 def research_topic(topic: str) -> dict:
     """Call LLM with researcher prompt to build a structured knowledge brief.
 
@@ -519,8 +612,7 @@ def plan_lesson(topic: str) -> dict:
     else:
         user_message = f"Create a visual storyboard for: {topic}"
 
-    raw = chat(system=system, user=user_message, json_mode=True)
-    plan = _cap_sections(_safe_json_loads(_strip_fencing(raw)), _MAX_SECTIONS_TOPIC)
+    plan = _cap_sections(_chat_plan(system, user_message), _MAX_SECTIONS_TOPIC)
     plan = _self_correct(plan)
     # _self_correct wholesale-replaces `plan` with the critic LLM's output,
     # which can re-inflate section count past the cap. Re-assert the
@@ -582,13 +674,10 @@ def plan_lesson_from_pdf(pdf_path: str) -> dict:
     logger.info(
         "[planner] Calling LLM for PDF lesson plan (images: %d)...", len(images)
     )
-    raw = chat(
-        system=system,
-        user=user_message,
-        images=images if images else None,
-        json_mode=True,
+    plan = _cap_sections(
+        _chat_plan(system, user_message, images if images else None),
+        _MAX_SECTIONS_PDF,
     )
-    plan = _cap_sections(_safe_json_loads(_strip_fencing(raw)), _MAX_SECTIONS_PDF)
     plan = _self_correct(plan)
     # Same invariant as the topic path: _self_correct wholesale-replaces
     # `plan` with the critic LLM's output and can re-inflate section count
