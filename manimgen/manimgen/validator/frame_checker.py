@@ -36,6 +36,28 @@ except ImportError:
     _HAS_PIL = False
     logger.debug("[frame_checker] PIL not installed — deterministic checks disabled")
 
+# numpy ships with manimgl, so it is always present in a working install. It is
+# still imported defensively so a broken environment degrades to a clear
+# warning (checks skipped) instead of an ImportError at import time.
+try:
+    import numpy as np
+
+    _HAS_NUMPY = True
+except ImportError:
+    np = None  # type: ignore[assignment]
+    _HAS_NUMPY = False
+    logger.debug("[frame_checker] numpy not installed — deterministic checks disabled")
+
+
+def _require_numpy() -> None:
+    """Raise a clear error when a pixel check is called without numpy."""
+    if not _HAS_NUMPY:
+        raise RuntimeError(
+            "frame_checker needs numpy for pixel comparison but it is not "
+            "installed. numpy is a dependency of manimgl; reinstall it with "
+            "'pip install numpy'."
+        )
+
 
 @dataclass
 class FrameCheckResult:
@@ -55,8 +77,23 @@ class FrameCheckResult:
 _BLACK_THRESHOLD = 15  # mean pixel value below this → "black frame"
 _EDGE_MARGIN_PX = 12  # pixels from edge to check for clipping
 _EDGE_BRIGHTNESS_THRESHOLD = 30  # pixels brighter than this near edges → clipping risk
-_FROZEN_SIMILARITY = 0.98  # fraction of identical pixels for "frozen" detection
 _BACKGROUND_COLOR = (28, 28, 28)  # #1C1C1C — the pipeline's dark background
+
+# Pixel comparison runs on a frame downscaled (box filter) to this width.
+_ANALYSIS_WIDTH = 480
+# Per-pixel change tolerance (sum of |dR|+|dG|+|dB|) that absorbs compression noise.
+_PIXEL_TOLERANCE = 15
+# Two frames are "frozen" when at most this fraction of pixels changed.
+# Measured on synthetic 1080p frames (see tests/test_frame_checker.py):
+#   identical or +-2 noise  -> 0.00000 changed
+#   one 120px text stroke    -> 0.00048 changed (deliberate tiny animation)
+#   real Section01Scene pair -> 0.0039  changed (sparse white-on-dark text)
+#   a 100px dot moving       -> 0.0083  changed
+# 0.0002 sits above compression noise and below the smallest deliberate motion.
+_FROZEN_MAX_CHANGED = 0.0002
+# A frame is "empty" when fewer than this fraction of pixels differ from the
+# background. A flat #1C1C1C frame measures 0.0; any title or diagram is > 0.005.
+_EMPTY_MAX_NONBG = 0.0005
 
 
 # ---------------------------------------------------------------------------
@@ -122,15 +159,37 @@ def _extract_frame_pil(video_path: str, timestamp: float) -> "Image.Image | None
 # ---------------------------------------------------------------------------
 
 
+def _small_array(img: "Image.Image") -> "np.ndarray":
+    """Return the frame as an int16 H x W x 3 array, box-downscaled when large."""
+    _require_numpy()
+    w, h = img.size
+    if w > _ANALYSIS_WIDTH:
+        img = img.resize(
+            (_ANALYSIS_WIDTH, max(1, round(h * _ANALYSIS_WIDTH / w))), Image.BOX
+        )
+    return np.asarray(img, dtype=np.int16)
+
+
+def _changed_fraction(a: "np.ndarray", b: "np.ndarray") -> float:
+    """Fraction of pixels whose summed channel difference reaches the tolerance."""
+    return float((np.abs(a - b).sum(axis=2) >= _PIXEL_TOLERANCE).mean())
+
+
 def _check_black_frame(img: "Image.Image", timestamp: float) -> str | None:
-    """Return an issue string if the frame is effectively black."""
+    """Return an issue string if the frame is effectively black or empty.
+
+    "Empty" means almost no pixel differs from the pipeline background: the mean
+    brightness test alone can never fire on #1C1C1C (28 > _BLACK_THRESHOLD).
+    """
     stat = ImageStat.Stat(img)
     mean_brightness = sum(stat.mean) / 3  # average of R, G, B means
+    nonbg = _changed_fraction(
+        _small_array(img), np.array(_BACKGROUND_COLOR, dtype=np.int16)
+    )
 
-    # Allow for the dark background (#1C1C1C ≈ 28)
-    if mean_brightness < _BLACK_THRESHOLD:
+    if mean_brightness < _BLACK_THRESHOLD or nonbg < _EMPTY_MAX_NONBG:
         return (
-            f"ISSUE: Black/empty frame at t={timestamp:.1f}s (mean brightness {mean_brightness:.0f}) | "
+            f"ISSUE: Black/empty frame at t={timestamp:.1f}s (mean brightness {mean_brightness:.0f}, {nonbg:.2%} non-background pixels) | "
             f"CAUSE: Scene likely FadeOut'd all elements before this point, "
             f"or no objects were added | "
             f"FIX: Ensure visual continuity — never FadeOut everything until the final cue"
@@ -140,6 +199,7 @@ def _check_black_frame(img: "Image.Image", timestamp: float) -> str | None:
 
 def _check_edge_clipping(img: "Image.Image", timestamp: float) -> str | None:
     """Return an issue string if non-background content appears near frame edges."""
+    _require_numpy()
     w, h = img.size
     margin = min(_EDGE_MARGIN_PX, w // 20, h // 20)
 
@@ -152,19 +212,14 @@ def _check_edge_clipping(img: "Image.Image", timestamp: float) -> str | None:
     }
 
     clipped_edges = []
-    bg_r, bg_g, bg_b = _BACKGROUND_COLOR
+    bg = np.array(_BACKGROUND_COLOR, dtype=np.int16)
 
     for edge_name, edge_img in edges.items():
-        pixels = list(edge_img.getdata())
-        bright_count = 0
-        for r, g, b in pixels:
-            # Count pixels that are significantly brighter than background
-            if (
-                abs(r - bg_r) + abs(g - bg_g) + abs(b - bg_b)
-            ) > _EDGE_BRIGHTNESS_THRESHOLD * 3:
-                bright_count += 1
+        arr = np.asarray(edge_img, dtype=np.int16)
+        # Count pixels that are significantly brighter than background
+        bright = np.abs(arr - bg).sum(axis=2) > _EDGE_BRIGHTNESS_THRESHOLD * 3
         # If more than 5% of edge pixels are bright, something may be clipped
-        if bright_count > len(pixels) * 0.05:
+        if bright.sum() > bright.size * 0.05:
             clipped_edges.append(edge_name)
 
     if clipped_edges:
@@ -190,23 +245,16 @@ def _check_frozen_frames(
     if img_a.size != img_b.size:
         return None
 
-    pixels_a = list(img_a.getdata())
-    pixels_b = list(img_b.getdata())
-    total = len(pixels_a)
-
-    if total == 0:
+    arr_a = _small_array(img_a)
+    arr_b = _small_array(img_b)
+    if arr_a.size == 0:
         return None
 
-    same = 0
-    for pa, pb in zip(pixels_a, pixels_b):
-        # Count pixels that are identical (within a small tolerance for compression)
-        if abs(pa[0] - pb[0]) + abs(pa[1] - pb[1]) + abs(pa[2] - pb[2]) < 15:
-            same += 1
-
-    similarity = same / total
-    if similarity > _FROZEN_SIMILARITY:
+    changed = _changed_fraction(arr_a, arr_b)
+    similarity = 1.0 - changed
+    if changed <= _FROZEN_MAX_CHANGED:
         return (
-            f"ISSUE: Frames at t={ts_a:.1f}s and t={ts_b:.1f}s are {similarity:.0%} identical — "
+            f"ISSUE: Frames at t={ts_a:.1f}s and t={ts_b:.1f}s are {similarity:.2%} identical — "
             f"animation appears frozen | "
             f"CAUSE: Director likely used self.wait() for too long without any animation, "
             f"or all play() calls have very short run_time | "
@@ -285,6 +333,13 @@ def check_frames(video_path: str) -> FrameCheckResult:
     structured ISSUE|CAUSE|FIX lines matching the layout_checker format.
     """
     if not _HAS_PIL:
+        return FrameCheckResult(ok=True, skipped=True)
+
+    if not _HAS_NUMPY:
+        logger.warning(
+            "[frame_checker] numpy not installed — frame checks skipped "
+            "(pip install numpy)"
+        )
         return FrameCheckResult(ok=True, skipped=True)
 
     if not os.path.exists(video_path):
