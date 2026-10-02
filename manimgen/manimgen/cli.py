@@ -805,7 +805,13 @@ def main():
         current_topic_hash = lesson_plan.get("_topic_hash", "")
         requested = None
         if args.pdf:
-            requested = (args.pdf, _topic_hash(os.path.abspath(args.pdf)))
+            # The plan stores a hash of the PDF's bytes (#66), so compare that.
+            try:
+                requested = (args.pdf, _file_hash(args.pdf))
+            except OSError as e:
+                _die(
+                    f"cannot read --pdf {args.pdf} to check it against the cached plan ({e})."
+                )
         elif args.topic:
             requested = (args.topic, _topic_hash(parse_input(args.topic)))
         if requested and requested[1] != current_topic_hash:

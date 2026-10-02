@@ -167,7 +167,9 @@ class TestResume:
 
         monkeypatch.setattr(cli, "_run_section", fake_run_section)
         _run(monkeypatch, "bubble sort", "--resume")
-        assert seen["hash"] == h
+        # _run_section gets the run hash: the plan hash plus the narration voice
+        # and speed (#66); the stubbed config has no tts section.
+        assert seen["hash"] == cli._topic_hash(json.dumps([h, None, None]))
         assert env["calls"] == {"plan_lesson": 0, "plan_pdf": 0}
 
     def test_topic_with_resume_mismatch_refuses(self, env, monkeypatch, capsys):
@@ -192,8 +194,11 @@ class TestResume:
         assert e.value.code == 1
         assert env["calls"] == {"plan_lesson": 0, "plan_pdf": 0}
 
-    def test_pdf_with_resume_matching_hash_works(self, env, monkeypatch):
-        _write_plan(env, _plan(topic_hash=cli._topic_hash(os.path.abspath("n.pdf"))))
+    def test_pdf_with_resume_matching_hash_works(self, env, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "n.pdf").write_bytes(b"%PDF-1.4 fake")
+        # The plan stores a hash of the file's bytes (#66), not of its path.
+        _write_plan(env, _plan(topic_hash=cli._file_hash("n.pdf")))
         _run(monkeypatch, "--pdf", "n.pdf", "--resume")
         assert env["calls"] == {"plan_lesson": 0, "plan_pdf": 0}
 

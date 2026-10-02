@@ -175,7 +175,10 @@ class _Fakes:
 
     def _assemble(self, clips, title):
         self.assembled = list(clips)
-        return "final.mp4"
+        # main() now fails a run whose final video is missing on disk (#63).
+        out = os.path.join(self.dirs["videos"], "final.mp4")
+        _write(out, "final")
+        return out
 
     # -- driver ---------------------------------------------------------------
     def run(self, monkeypatch, plan: dict | None, topic: str, resume=False, pdf=None):
