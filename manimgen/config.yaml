@@ -1,15 +1,21 @@
 # API keys — set via environment variables, not hardcoded here
-anthropic_api_key: ""   # ANTHROPIC_API_KEY — used in production only
-gemini_api_key: ""      # GEMINI_API_KEY — used during development/testing
+anthropic_api_key: ""   # ANTHROPIC_API_KEY — only for llm_provider: anthropic
+gemini_api_key: ""      # GEMINI_API_KEY — only for llm_provider: gemini
 
-# Which LLM to use: "anthropic" | "gemini" | "ollama"
-llm_provider: "gemini"
+# Which LLM to use: "claude_cli" | "anthropic" | "gemini" | "ollama"
+#   claude_cli — runs `claude -p` (Claude Code), billed to your Claude plan; no API key
+#   anthropic  — Claude API, billed per token
+#   gemini     — Gemini API, billed per token
+#   ollama     — local model, free, lower quality
+llm_provider: "claude_cli"
 
 # Model selection — override here without touching code
 llm:
+  claude_cli_model: "sonnet"   # alias or full model ID, e.g. "opus" for the strongest model
+  claude_cli_path: "claude"    # executable name or full path to Claude Code
   gemini_model: "gemini-2.5-flash"
-  anthropic_model: "claude-sonnet-4-6"
-  max_tokens: 4096        # Only used by Anthropic provider
+  anthropic_model: "claude-sonnet-5-5"
+  max_tokens: 16000       # Only used by Anthropic provider
   ollama_model: "llama3.1"
   ollama_base_url: "http://localhost:11434"
 

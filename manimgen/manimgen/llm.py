@@ -1,12 +1,16 @@
 """
-Shared LLM client. Switches between Ollama (free local testing), Gemini
-(dev/testing), and Anthropic (production).
+Shared LLM client. Switches between the Claude Code CLI (uses a Claude
+subscription, no API key), Anthropic (API key), Gemini (API key) and Ollama
+(free local testing).
 
 Provider resolution order:
   1. LLM_PROVIDER env var  (highest priority)
   2. llm_provider key in config.yaml
-  3. Falls back to "gemini"
+  3. Falls back to "claude_cli"
 
+The `claude_cli` provider shells out to `claude -p` (Claude Code in headless
+mode), so calls are billed to the signed-in Claude plan instead of per-token
+API usage. It needs Claude Code installed and logged in (`claude` on PATH).
 The `ollama` provider talks to a local Ollama server (default
 http://localhost:11434) and needs no API key — use it to exercise pipeline
 plumbing for free. Switching back to gemini/anthropic for a real
@@ -18,9 +22,13 @@ Usage:
 """
 
 import ipaddress
+import json
 import logging
 import os
+import shutil
 import socket
+import subprocess
+import tempfile
 from urllib.parse import urlparse
 
 import yaml
@@ -34,16 +42,24 @@ _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
 
 # Network resilience defaults. Both providers hang indefinitely on a flaky
 # TLS handshake without explicit timeouts.
-# 120s is comfortable for multi-second generations; 3 retries with
-# exponential backoff survive transient blips without failing a whole run.
-_REQUEST_TIMEOUT_SECONDS = 120.0
+# 300s covers a full scene file (several thousand output tokens); 3 retries
+# with exponential backoff survive transient blips without failing a whole run.
+_REQUEST_TIMEOUT_SECONDS = 300.0
 _REQUEST_RETRY_ATTEMPTS = 3
 
+# A `claude -p` call also starts a Node process and loads Claude Code before
+# the model runs, so it gets a longer ceiling than a raw HTTP request.
+_CLI_TIMEOUT_SECONDS = 600.0
+
 _DEFAULTS = {
-    "llm_provider": "gemini",
+    "llm_provider": "claude_cli",
     "gemini_model": "gemini-2.5-flash",
-    "anthropic_model": "claude-sonnet-4-6",
-    "anthropic_max_tokens": 4096,
+    "anthropic_model": "claude-sonnet-5-5",
+    # Scene files from the Director prompt routinely exceed 4096 tokens, which
+    # truncated them mid-file. 16000 stays under the SDK's non-streaming limit.
+    "anthropic_max_tokens": 16000,
+    "claude_cli_model": "sonnet",
+    "claude_cli_path": "claude",
     "ollama_model": "llama3.1",
     "ollama_base_url": "http://localhost:11434",
 }
@@ -65,6 +81,12 @@ def _load_llm_config() -> dict:
             ),
             "anthropic_max_tokens": int(
                 llm_cfg.get("max_tokens", _DEFAULTS["anthropic_max_tokens"])
+            ),
+            "claude_cli_model": str(
+                llm_cfg.get("claude_cli_model", _DEFAULTS["claude_cli_model"])
+            ),
+            "claude_cli_path": str(
+                llm_cfg.get("claude_cli_path", _DEFAULTS["claude_cli_path"])
             ),
             "ollama_model": llm_cfg.get("ollama_model", _DEFAULTS["ollama_model"]),
             "ollama_base_url": str(
@@ -147,20 +169,34 @@ def chat(
         json_mode: When True, ask the provider to emit guaranteed-valid JSON
                 (Gemini response_mime_type='application/json'). Use only for
                 calls that expect a JSON object/array — never for code
-                generation, which returns Python. Currently honored by the
-                Gemini provider; ignored by others (they degrade to prompt-only
-                JSON, the prior behavior).
+                generation, which returns Python. Gemini enforces it natively;
+                the other providers rely on the prompt and have any markdown
+                code fence around the JSON stripped.
     """
     provider = _resolve_provider()
 
     if provider == "gemini":
         return _gemini(system, user, images or [], json_mode=json_mode)
     elif provider == "anthropic":
-        return _anthropic(system, user, images or [])
+        text = _anthropic(system, user, images or [])
+    elif provider == "claude_cli":
+        text = _claude_cli(system, user, images or [])
     elif provider == "ollama":
-        return _ollama(system, user, images or [])
+        text = _ollama(system, user, images or [])
     else:
         raise ValueError(f"Unknown LLM_PROVIDER: {provider}")
+    return _strip_json_fence(text) if json_mode else text
+
+
+def _strip_json_fence(text: str) -> str:
+    """Remove a ```json ... ``` wrapper that prompt-only JSON often arrives in."""
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    lines = stripped.splitlines()
+    if len(lines) >= 2 and lines[-1].strip() == "```":
+        return "\n".join(lines[1:-1]).strip()
+    return stripped
 
 
 def _gemini(system: str, user: str, images: list[str], json_mode: bool = False) -> str:
@@ -234,7 +270,135 @@ def _anthropic(system: str, user: str, images: list[str]) -> str:
         system=system,
         messages=[{"role": "user", "content": content}],
     )
-    return message.content[0].text.strip()
+    # Join every text block: content[0] is not guaranteed to be text (thinking
+    # or other block types can precede it).
+    text = "".join(
+        block.text for block in message.content if getattr(block, "type", "") == "text"
+    )
+    if message.stop_reason == "max_tokens":
+        logger.warning(
+            "[llm] Anthropic response hit max_tokens=%d and is truncated — "
+            "raise llm.max_tokens in config.yaml",
+            cfg["anthropic_max_tokens"],
+        )
+    return text.strip()
+
+
+def _claude_cli_env() -> dict[str, str]:
+    """Environment for the `claude` subprocess.
+
+    ANTHROPIC_API_KEY is removed so Claude Code bills the signed-in Claude plan
+    rather than silently switching to per-token API billing when a key happens
+    to be set (e.g. from .env for the `anthropic` provider). CLAUDE.md loading
+    is disabled so project/user memory files do not leak into the prompt.
+    """
+    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    env["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1"
+    return env
+
+
+def _claude_cli(system: str, user: str, images: list[str]) -> str:
+    """Run one prompt through `claude -p` and return the reply text.
+
+    The system prompt goes in a temp file and the user turn (text + images) on
+    stdin as a stream-json message, so no prompt text is passed as a command
+    line argument (Windows caps a command line at ~32K characters and the
+    Director system prompt alone is larger). Tools and MCP servers are disabled:
+    this is a plain completion, the model must not touch the filesystem.
+    """
+    cfg = _LLM_CONFIG
+    exe = shutil.which(cfg["claude_cli_path"])
+    if exe is None:
+        raise RuntimeError(
+            f"LLM_PROVIDER=claude_cli but {cfg['claude_cli_path']!r} was not found "
+            "on PATH. Install Claude Code and run `claude` once to log in, or set "
+            "llm.claude_cli_path in config.yaml."
+        )
+
+    content: list = [
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": b64},
+        }
+        for b64 in images
+    ]
+    content.append({"type": "text", "text": user})
+    stdin_msg = json.dumps(
+        {"type": "user", "message": {"role": "user", "content": content}}
+    )
+
+    # An empty working directory keeps Claude Code from picking up anything
+    # from the repo (CLAUDE.md, .claude/ settings, hooks).
+    with tempfile.TemporaryDirectory(prefix="manimgen-claude-") as workdir:
+        system_file = os.path.join(workdir, "system.md")
+        with open(system_file, "w", encoding="utf-8") as f:
+            f.write(system)
+        cmd = [
+            exe,
+            "-p",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--system-prompt-file",
+            system_file,
+            "--model",
+            cfg["claude_cli_model"],
+            # One "--tools=" token rather than "--tools" "": an empty argv entry
+            # does not survive the cmd.exe shim npm installs on Windows.
+            "--tools=",
+            "--strict-mcp-config",
+            "--no-session-persistence",
+        ]
+
+        last_error = ""
+        for attempt in range(1, _REQUEST_RETRY_ATTEMPTS + 1):
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    input=stdin_msg.encode("utf-8"),
+                    capture_output=True,
+                    cwd=workdir,
+                    env=_claude_cli_env(),
+                    timeout=_CLI_TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired:
+                last_error = f"timed out after {_CLI_TIMEOUT_SECONDS:.0f}s"
+                logger.warning("[llm] claude -p attempt %d %s", attempt, last_error)
+                continue
+
+            stdout = proc.stdout.decode("utf-8", errors="replace")
+            result = _parse_claude_cli_result(stdout)
+            if result is not None and not result.get("is_error"):
+                return str(result.get("result", "")).strip()
+
+            stderr = proc.stderr.decode("utf-8", errors="replace").strip()
+            if result is not None:
+                last_error = str(result.get("result") or result.get("subtype"))
+            else:
+                last_error = (
+                    stderr or stdout.strip() or f"exit code {proc.returncode}"
+                )[-2000:]
+            logger.warning("[llm] claude -p attempt %d failed: %s", attempt, last_error)
+
+    raise RuntimeError(f"claude -p failed: {last_error}")
+
+
+def _parse_claude_cli_result(stdout: str) -> dict | None:
+    """Return the final `{"type": "result", ...}` event from stream-json output."""
+    result = None
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict) and event.get("type") == "result":
+            result = event
+    return result
 
 
 def _ollama(system: str, user: str, images: list[str]) -> str:
