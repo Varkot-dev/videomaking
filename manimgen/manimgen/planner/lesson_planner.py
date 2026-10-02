@@ -18,12 +18,97 @@ _MAX_SECTIONS_PDF = 8
 _SELF_CORRECT_LIMIT = 1  # number of critic passes per plan
 
 
+_TECHNIQUE_ROW = re.compile(r"^\|\s*`([a-z0-9_]+)`\s*\|", re.MULTILINE)
+_TECHNIQUE_NAME = re.compile(r"^\s*Technique:\s*`?([A-Za-z0-9_]+)")
+
+# A critic rewrite whose narration shrinks below this fraction of the original
+# is treated as damage, not an edit (the critic is asked to expand, not trim).
+_CRITIC_MIN_NARRATION_RATIO = 0.6
+
+
+def _technique_menu() -> frozenset[str]:
+    """Technique names the planner may use, read from the planner prompt's menu."""
+    here = os.path.dirname(__file__)
+    with open(
+        os.path.join(here, "prompts", "planner_system.md"), encoding="utf-8"
+    ) as f:
+        return frozenset(_TECHNIQUE_ROW.findall(f.read()))
+
+
 def _load_critic_system_prompt() -> str:
     here = os.path.dirname(__file__)
     with open(
         os.path.join(here, "prompts", "storyboard_critic_system.md"), encoding="utf-8"
     ) as f:
-        return f.read()
+        text = f.read()
+    return text.replace(
+        "{{TECHNIQUES}}", ", ".join(f"`{t}`" for t in sorted(_technique_menu()))
+    )
+
+
+def _check_plan_shape(plan: dict) -> None:
+    """Raise ValueError unless ``plan`` has a usable non-empty ``sections`` list.
+
+    Every section must be an object with a non-empty string ``narration``.
+    A missing ``id`` is tolerated because ``_sanitize_section_ids`` repairs it.
+    """
+    sections = plan.get("sections")
+    if not isinstance(sections, list) or not sections:
+        raise ValueError("plan has no non-empty 'sections' list")
+    for i, sec in enumerate(sections, start=1):
+        if not isinstance(sec, dict):
+            raise ValueError(f"plan 'sections' entry {i} is not an object")
+        narration = sec.get("narration")
+        if not isinstance(narration, str) or not narration.strip():
+            raise ValueError(f"plan 'sections' entry {i} has no narration")
+
+
+def _technique_names(section: dict) -> set[str]:
+    names = set()
+    for cue in section.get("cues") or []:
+        visual = cue.get("visual") if isinstance(cue, dict) else None
+        m = _TECHNIQUE_NAME.match(visual) if isinstance(visual, str) else None
+        if m:
+            names.add(m.group(1))
+    return names
+
+
+def _critic_rejection(original: dict, candidate: dict) -> str | None:
+    """Why the critic's plan must not replace the original, or None to accept.
+
+    The critic is told to keep the same sections and fix quality problems, but
+    only the prompt enforces that. Accept it only when it keeps the section
+    count and ids, does not gut the narration, keeps cues consistent with the
+    [CUE] markers, and introduces no technique outside the planner menu.
+    """
+    try:
+        _check_plan_shape(candidate)
+    except ValueError as e:
+        return str(e)
+    old, new = original["sections"], candidate["sections"]
+    if len(new) != len(old):
+        return f"section count changed from {len(old)} to {len(new)}"
+    menu = _technique_menu()
+    for i, (o, n) in enumerate(zip(old, new), start=1):
+        if n.get("id") != o.get("id"):
+            return f"section {i} id changed from {o.get('id')!r} to {n.get('id')!r}"
+        old_words = len(o.get("narration", "").split())
+        new_words = len(n["narration"].split())
+        if new_words < _CRITIC_MIN_NARRATION_RATIO * old_words:
+            return f"section {i} narration shrank from {old_words} to {new_words} words"
+        cues = n.get("cues")
+        if o.get("cues") and not cues:
+            return f"section {i} cues were dropped"
+        if cues is not None:
+            if not isinstance(cues, list):
+                return f"section {i} cues is not a list"
+            expected = n["narration"].count("[CUE]") + 1
+            if len(cues) != expected:
+                return f"section {i} has {len(cues)} cues for {expected} segments"
+        unknown = (_technique_names(n) - menu) - _technique_names(o)
+        if unknown:
+            return f"section {i} uses unknown technique(s) {sorted(unknown)}"
+    return None
 
 
 def _self_correct(plan: dict, limit: int = _SELF_CORRECT_LIMIT) -> dict:
@@ -33,12 +118,20 @@ def _self_correct(plan: dict, limit: int = _SELF_CORRECT_LIMIT) -> dict:
             system=critic_system, user=json.dumps(plan, indent=2), json_mode=True
         )
         try:
-            plan = _parse_plan_json(raw)
+            candidate = _parse_plan_json(raw)
         except Exception:
             logger.warning(
-                "[planner] Self-correction returned non-JSON — keeping original plan"
+                "[planner] Storyboard critic returned non-JSON - keeping original plan"
             )
             break
+        reason = _critic_rejection(plan, candidate)
+        if reason:
+            logger.warning(
+                "[planner] Storyboard critic output rejected (%s) - keeping original plan",
+                reason,
+            )
+            break
+        plan = candidate
     return plan
 
 
@@ -470,14 +563,22 @@ def _parse_plan_json(raw: str) -> dict:
     )
 
 
+def _checked_plan(raw: str) -> dict:
+    plan = _parse_plan_json(raw)
+    _check_plan_shape(plan)
+    return plan
+
+
 def _chat_plan(system: str, user: str, images: list[str] | None = None) -> dict:
     """Ask for a plan and parse it, re-asking exactly once on a bad reply.
+
+    A reply is bad when it holds no JSON object or no usable ``sections``.
 
     Both calls go through ``chat`` so the usage guard and budget apply.
     """
     raw = chat(system=system, user=user, images=images, json_mode=True)
     try:
-        return _parse_plan_json(raw)
+        return _checked_plan(raw)
     except ValueError as e:
         logger.warning(
             "[planner] Plan reply was not usable JSON (%s) - re-asking once", e
@@ -487,7 +588,7 @@ def _chat_plan(system: str, user: str, images: list[str] | None = None) -> dict:
             "Return ONLY the complete JSON object, with no text before or after it."
         )
         raw = chat(system=system, user=retry_user, images=images, json_mode=True)
-        return _parse_plan_json(raw)
+        return _checked_plan(raw)
 
 
 def research_topic(topic: str) -> dict:
