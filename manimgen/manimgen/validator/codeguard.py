@@ -1,9 +1,15 @@
 import ast
 import os
 import re
-from typing import Any
+from collections import Counter
+from typing import Any, Callable
 
 from manimgen.validator.invariants import run_all as _run_invariants
+from manimgen.validator.manimlib_signatures import (
+    _line_col_to_offset,
+    _split_source_lines,
+    excise_span,
+)
 
 _CANONICAL_FONT_SIZES = (48, 44, 36, 28, 22, 20, 18)
 
@@ -284,17 +290,47 @@ def _vgroup_item_assignment_errors(code: str) -> list[str]:
     return []
 
 
-_BANNED_KWARGS = [
-    "tip_length",
-    "tip_width",
-    "tip_shape",
-    "corner_radius",
-    "scale_factor",
-    "target_position",
+_ARROW_CALLEES = frozenset(
+    {"Arrow", "Vector", "DoubleArrow", "CurvedArrow", "CurvedDoubleArrow"}
+)
+_SURFACE_CALLEES = frozenset(
+    {
+        "Surface",
+        "ParametricSurface",
+        "Sphere",
+        "Torus",
+        "Cylinder",
+        "Cone",
+        "Disk3D",
+        "Prism",
+        "Cube",
+    }
+)
+
+# Kwargs ManimGL rejects, mapped to the only callees they are stripped from. A
+# kwarg of the same name on any other call is valid (Indicate(scale_factor=),
+# RoundedRectangle(corner_radius=)) or a plain name, and is left alone.
+_BANNED_KWARGS: dict[str, frozenset[str]] = {
+    "tip_length": _ARROW_CALLEES,
+    "tip_width": _ARROW_CALLEES,
+    "tip_shape": _ARROW_CALLEES,
+    # RoundedRectangle takes corner_radius; plain Rectangle-family constructors do not.
+    "corner_radius": frozenset({"Rectangle", "Square", "SurroundingRectangle"}),
+    # Fade takes scale=; Indicate really does take scale_factor=.
+    "scale_factor": frozenset({"FadeIn", "FadeOut"}),
+    "target_position": frozenset({"move_to"}),
     # ManimCommunity surface kwarg; ManimGL surfaces have no checkerboard concept.
     # Stripping it (rather than translating) lets the surface render in a solid color.
-    "checkerboard_colors",
-]
+    "checkerboard_colors": _SURFACE_CALLEES,
+}
+
+# ManimCommunity Axes size kwargs, renamed on the calls that take them.
+_AXES_CALLEES = frozenset({"Axes", "ThreeDAxes", "NumberPlane", "ComplexPlane"})
+_AXES_LENGTH_RENAMES: dict[str, str] = {
+    "x_length": "width",
+    "y_length": "height",
+    "z_length": "depth",
+}
 
 # Canonical color-role → ManimGL constant map. Single source of truth, mirrors
 # the palette table in generator/prompts/director_system.md. The Director shows
@@ -311,6 +347,71 @@ _COLOR_ROLE_CONSTANTS: dict[str, str] = {
     "WARNING": "YELLOW",
     "ALERT": "RED",
 }
+
+
+def _callee_name(node: ast.Call) -> str | None:
+    """Name a call is made through: ``Foo(...)`` -> Foo, ``x.foo(...)`` -> foo."""
+    if isinstance(node.func, ast.Name):
+        return node.func.id
+    if isinstance(node.func, ast.Attribute):
+        return node.func.attr
+    return None
+
+
+def _edit_call_kwargs(
+    code: str,
+    plan: Callable[[ast.Call, str | None, ast.keyword], str | None],
+) -> tuple[str, list[tuple[str | None, str, str]]]:
+    """Strip or rename keyword arguments of specific calls, by AST source span.
+
+    ``plan(call, callee, keyword)`` returns None to leave the keyword alone, ""
+    to strip it, or a new name to rename it. Only the keyword's own span is
+    touched (plus one bordering comma on a strip), so comments, formatting and
+    every other call survive; nothing goes through ``ast.unparse``. A rename that
+    would duplicate a keyword already on the call is skipped. Fail-open: code
+    that does not parse is returned unchanged. Returns ``(code, edits)`` with one
+    ``(callee, old_kwarg, new_kwarg_or_"")`` per edit, in source order.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code, []
+    lines = _split_source_lines(code)
+    # (start, end, new_name, callee, old_name)
+    edits: list[tuple[int, int, str, str | None, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        callee = _callee_name(node)
+        present = {kw.arg for kw in node.keywords if kw.arg}
+        for kw in node.keywords:
+            if kw.arg is None:
+                continue
+            action = plan(node, callee, kw)
+            if action is None or (action and action in present):
+                continue
+            if kw.end_col_offset is None or kw.end_lineno is None:
+                continue
+            start = _line_col_to_offset(lines, kw.lineno, kw.col_offset)
+            end = _line_col_to_offset(lines, kw.end_lineno, kw.end_col_offset)
+            edits.append((start, end, action, callee, kw.arg))
+    if not edits:
+        return code, []
+    strips = [(s, e) for s, e, new, _, _ in edits if not new]
+    out = code
+    done: list[tuple[str | None, str, str]] = []
+    for start, end, new, callee, old in sorted(edits, key=lambda e: -e[0]):
+        # An edit inside a keyword that is itself being stripped is moot.
+        if any(s <= start and end <= e and (s, e) != (start, end) for s, e in strips):
+            continue
+        if new:
+            out = out[:start] + new + out[start + len(old) :]
+        else:
+            out = excise_span(out, start, end)
+        done.append((callee, old, new))
+    done.reverse()
+    return out, done
+
 
 # Registry of known-wrong kwarg names per method.
 # Maps method_name → {wrong_kwarg: correct_kwarg or None (strip)}.
@@ -334,6 +435,28 @@ _KWARG_NORMALIZATION_REGISTRY: dict[str, dict[str, str | None]] = {
 }
 
 
+def _apply_registry(
+    code: str,
+    method: str,
+    targets: Callable[[ast.Call], bool] | None = None,
+) -> tuple[str, list[tuple[str | None, str, str]]]:
+    """Apply every registry fix for ``method`` to the calls made through that name.
+
+    ``targets`` optionally narrows which of those calls are edited (the error-aware
+    path uses it to pin the call named by the traceback line).
+    """
+    norm = _KWARG_NORMALIZATION_REGISTRY[method]
+
+    def plan(call: ast.Call, callee: str | None, kw: ast.keyword) -> str | None:
+        if callee != method or kw.arg not in norm:
+            return None
+        if targets is not None and not targets(call):
+            return None
+        return norm[kw.arg] or ""
+
+    return _edit_call_kwargs(code, plan)
+
+
 def _fix_arrange_in_grid_kwargs(code: str) -> tuple[str, str | None]:
     """Normalize all wrong kwarg names on .arrange_in_grid() calls in one pass.
 
@@ -341,28 +464,12 @@ def _fix_arrange_in_grid_kwargs(code: str) -> tuple[str, str | None]:
     h_buff=None, v_buff=None, ...).
     LLM commonly emits rows=, cols=, row_buff=, col_buff= simultaneously.
     """
-    norm = _KWARG_NORMALIZATION_REGISTRY["arrange_in_grid"]
-    applied = []
-    fixed = code
-    for wrong, right in norm.items():
-        if right is None:
-            new, count = re.subn(
-                rf"(\.arrange_in_grid\([^)]*?),?\s*{re.escape(wrong)}\s*=\s*[^,\)\n]+",
-                r"\1",
-                fixed,
-                flags=re.DOTALL,
-            )
-        else:
-            new, count = re.subn(
-                rf"(\.arrange_in_grid\([^)]*?)\b{re.escape(wrong)}\s*=",
-                rf"\1{right}=",
-                fixed,
-                flags=re.DOTALL,
-            )
-        if count:
-            applied.append(f"{wrong}= → {right or 'stripped'} ({count})")
-            fixed = new
-    if applied:
+    fixed, edits = _apply_registry(code, "arrange_in_grid")
+    if edits:
+        applied = [
+            f"{old}= → {new or 'stripped'} ({n})"
+            for (old, new), n in Counter((o, n) for _, o, n in edits).items()
+        ]
         return fixed, "fixed arrange_in_grid kwargs: " + ", ".join(applied)
     return code, None
 
@@ -377,12 +484,6 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
         (r"\bCreate\s*\(", "ShowCreation(", "Create -> ShowCreation"),
         (r"self\.camera\.frame", "self.frame", "self.camera.frame -> self.frame"),
         (r"\bCircumscribe\s*\(", "FlashAround(", "Circumscribe -> FlashAround"),
-        # ManimCommunity Axes uses x_length/y_length; ManimGL uses width/height
-        (r"\bx_length\s*=", "width=", "x_length -> width (ManimGL Axes)"),
-        (r"\by_length\s*=", "height=", "y_length -> height (ManimGL Axes)"),
-        # ManimCommunity ThreeDAxes uses z_length; ManimGL uses depth.
-        # (x_axis_config/y_axis_config are VALID ManimGL Axes kwargs — do NOT touch.)
-        (r"\bz_length\s*=", "depth=", "z_length -> depth (ManimGL ThreeDAxes)"),
         # NOTE: fill_color/fill_opacity are NOT rewritten. They are VALID on every
         # VMobject subclass (Square/Circle/Line/Tex/Text/... — vectorized_mobject.py
         # names them explicitly + has **kwargs). The old blanket fill_color->color /
@@ -412,6 +513,19 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
         (r"\bLIGHT_GREY\b", "GREY_A", "LIGHT_GREY -> GREY_A"),
         (r"\bLIGHT_GRAY\b", "GREY_A", "LIGHT_GRAY -> GREY_A"),
     ]
+
+    # ManimCommunity Axes uses x_length/y_length; ManimGL uses width/height, and
+    # ThreeDAxes z_length -> depth. (x_axis_config/y_axis_config are VALID ManimGL
+    # Axes kwargs: do NOT touch.) Renamed only as keywords of the Axes family, never
+    # as variable names or kwargs of other calls.
+    fixed, renamed = _edit_call_kwargs(
+        fixed,
+        lambda call, callee, kw: (
+            _AXES_LENGTH_RENAMES.get(kw.arg) if callee in _AXES_CALLEES else None
+        ),
+    )
+    for (old, new), count in Counter((o, n) for _, o, n in renamed).items():
+        applied.append(f"{old} -> {new} (ManimGL Axes) ({count})")
 
     for pattern, repl, label in replacements:
         new_fixed, count = re.subn(pattern, repl, fixed)
@@ -491,33 +605,14 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
         applied.append(f"frame y-bounds -> set_height ({count})")
         fixed = new_fixed
 
-    for kw in _BANNED_KWARGS:
-        # The value alternation must try bracketed forms before the scalar one.
-        # A plain [^,)\n]+ stops at the first comma, so a list value such as
-        # checkerboard_colors=[BLUE_D, BLUE_E] had only "[BLUE_D" removed and
-        # left ", BLUE_E]" orphaned inside the call — Surface(, BLUE_E], ...) —
-        # a SyntaxError. The auto-fixer was corrupting valid code while trying
-        # to repair it, and the project's own root-cause notes recorded exactly
-        # that mangling in a real run.
-        #
-        # Bracket contents are matched without spanning newlines, so a nested or
-        # unbalanced literal is left untouched rather than swallowing the rest
-        # of the call.
-        # A separator is consumed on exactly one side. Taking the leading comma
-        # when present, and otherwise the trailing one, keeps the argument list
-        # well-formed whether the banned kwarg is first, middle, or last —
-        # stripping neither leaves Surface(, v_range=...) when it was first.
-        value = (
-            r"(?:\[[^\[\]\n]*\]"  # list literal
-            r"|\([^()\n]*\)"  # tuple literal
-            r"|\{[^{}\n]*\}"  # dict or set literal
-            r"|[^,)\n]+)"  # plain scalar
-        )
-        pattern = rf",\s*{kw}\s*=\s*{value}|{kw}\s*=\s*{value}\s*,?\s*"
-        new_fixed, count = re.subn(pattern, "", fixed)
-        if count:
-            applied.append(f"removed {kw} ({count})")
-            fixed = new_fixed
+    fixed, stripped = _edit_call_kwargs(
+        fixed,
+        lambda call, callee, kw: (
+            "" if callee in _BANNED_KWARGS.get(kw.arg, ()) else None
+        ),
+    )
+    for kw_name, count in Counter(old for _, old, _ in stripped).items():
+        applied.append(f"removed {kw_name} ({count})")
 
     new_fixed, count = re.subn(
         r"Arrow\(\s*ORIGIN\s*,\s*ORIGIN(\s*[,)])",
@@ -987,28 +1082,21 @@ def _fix_reorient_wrong_kwargs(code: str) -> tuple[str, str | None]:
 
     The real param names are theta_degrees= and phi_degrees= (or positional).
     """
-    applied = []
-    fixed = code
-
-    for wrong, right in [
-        ("theta_deg=", "theta_degrees="),
-        ("phi_deg=", "phi_degrees="),
-    ]:
-        new, count = re.subn(re.escape(wrong), right, fixed)
-        if count:
-            applied.append(f"{wrong} -> {right} ({count})")
-            fixed = new
-
-    if applied:
+    fixed, edits = _apply_registry(code, "reorient")
+    if edits:
+        applied = [
+            f"{old}= -> {new}= ({n})"
+            for (old, new), n in Counter((o, n) for _, o, n in edits).items()
+        ]
         return fixed, "fixed reorient kwarg names: " + ", ".join(applied)
     return code, None
 
 
 def _strip_label_kwarg_from_numberline(code: str) -> tuple[str, str | None]:
     """Strip label= kwarg from NumberLine() — not a valid ManimGL parameter."""
-    new, count = re.subn(r"(NumberLine\([^)]*?),?\s*label\s*=\s*[^,\)]+", r"\1", code)
-    if count:
-        return new, f"removed label= from NumberLine ({count})"
+    new, edits = _apply_registry(code, "NumberLine")
+    if edits:
+        return new, f"removed label= from NumberLine ({len(edits)})"
     return code, None
 
 
@@ -1039,6 +1127,86 @@ def _fix_broken_call_args(code: str) -> tuple[str, list[str]]:
     return code, applied
 
 
+def _user_traceback_line(stderr: str) -> int | None:
+    """Line of the innermost traceback frame that is in the user's scene file."""
+    line = None
+    for m in re.finditer(r'File "([^"]+)", line (\d+)', stderr):
+        path = m.group(1).replace("\\", "/")
+        if "manimlib" in path or "site-packages" in path or "dist-packages" in path:
+            continue
+        line = int(m.group(2))
+    return line
+
+
+def _fix_unexpected_kwarg(
+    code: str,
+    bad_kw: str,
+    method: str | None,
+    good_kw: str,
+    tb_line: int | None,
+    applied: list[str],
+) -> str:
+    """Repair one "unexpected keyword argument" error on the call that raised it.
+
+    Known-wrong kwargs of ``method`` are fixed from the registry first. Otherwise
+    the kwarg is renamed to ``good_kw`` (the traceback's "Did you mean") or, with no
+    hint, stripped. Only keywords of the failing call are touched, found as: the
+    call made through ``method``; else (the error can come from a base-class
+    ``__init__``) a call spanning the traceback line; else the only call in the file
+    that carries the kwarg. A same-named kwarg on any other call is never edited.
+    """
+    if method and method in _KWARG_NORMALIZATION_REGISTRY:
+        # Fix ALL known wrong kwargs for this method in one pass, not just the one
+        # named in the error. This prevents the one-kwarg-at-a-time peeling pattern.
+        new_code, edits = _apply_registry(code, method)
+        if edits:
+            for (old, new), n in Counter((o, n) for _, o, n in edits).items():
+                applied.append(f"registry fix: {old}= → {new or 'stripped'} ({n})")
+            return new_code
+
+    def spans_tb_line(call: ast.Call) -> bool:
+        end = getattr(call, "end_lineno", call.lineno)
+        return tb_line is not None and call.lineno <= tb_line <= end
+
+    carriers = [
+        n
+        for n in ast.walk(_safe_parse(code))
+        if isinstance(n, ast.Call) and any(k.arg == bad_kw for k in n.keywords)
+    ]
+    scopes: list[Callable[[ast.Call, str | None], bool]] = []
+    if method:
+        scopes.append(lambda call, callee: callee == method)
+    else:
+        scopes.append(lambda call, callee: True)
+    scopes.append(lambda call, callee: spans_tb_line(call))
+    if len(carriers) == 1:
+        # Nodes differ between parses, so identify the call by its position.
+        at = (carriers[0].lineno, carriers[0].col_offset)
+        scopes.append(lambda call, callee: (call.lineno, call.col_offset) == at)
+
+    for scope in scopes:
+        new_code, edits = _edit_call_kwargs(
+            code,
+            lambda call, callee, kw, scope=scope: (
+                good_kw if kw.arg == bad_kw and scope(call, callee) else None
+            ),
+        )
+        if edits:
+            if good_kw:
+                applied.append(f"renamed kwarg '{bad_kw}' → '{good_kw}' ({len(edits)})")
+            else:
+                applied.append(f"removed unexpected kwarg '{bad_kw}' ({len(edits)})")
+            return new_code
+    return code
+
+
+def _safe_parse(code: str) -> ast.AST:
+    try:
+        return ast.parse(code)
+    except SyntaxError:
+        return ast.Module(body=[], type_ignores=[])
+
+
 def apply_error_aware_fixes(code: str, stderr: str) -> tuple[str, list[str]]:
     """Deterministic, token-free repairs driven by actual runtime traceback."""
     fixed = code
@@ -1066,49 +1234,27 @@ def apply_error_aware_fixes(code: str, stderr: str) -> tuple[str, list[str]]:
     if "unexpected keyword argument" in stderr:
         kw_match = re.search(r"got an unexpected keyword argument '(\w+)'", stderr)
         hint_match = re.search(r"Did you mean '(\w+)'\?", stderr)
+        # "Arrow.__init__() got ..." names the class, "Mobject.arrange_in_grid()
+        # got ..." names the method; take the callable the user wrote, not __init__.
         method_match = re.search(
-            r"(\w+)\(\) got an unexpected keyword argument", stderr
+            r"(?:(\w+)\.)?(\w+)\(\) got an unexpected keyword argument", stderr
         )
         if kw_match:
             bad_kw = kw_match.group(1)
-            method = method_match.group(1) if method_match else None
+            method = None
+            if method_match:
+                owner, name = method_match.groups()
+                method = owner if name == "__init__" else name
             # font_size= is a valid kwarg on Tex() (handled internally) — do not strip or convert.
-            if bad_kw == "font_size":
-                pass
-            elif method and method in _KWARG_NORMALIZATION_REGISTRY:
-                # Fix ALL known wrong kwargs for this method in one pass — not just the one
-                # named in the error. This prevents the one-kwarg-at-a-time peeling pattern.
-                norm = _KWARG_NORMALIZATION_REGISTRY[method]
-                for wrong, right in norm.items():
-                    if right is None:
-                        new_fixed, count = re.subn(
-                            rf",?\s*{re.escape(wrong)}\s*=\s*[^,\)\n]+", "", fixed
-                        )
-                    else:
-                        new_fixed, count = re.subn(
-                            rf"\b{re.escape(wrong)}\s*=", f"{right}=", fixed
-                        )
-                    if count:
-                        applied.append(
-                            f"registry fix: {wrong}= → {right or 'stripped'} ({count})"
-                        )
-                        fixed = new_fixed
-            elif hint_match:
-                # Rename, don't strip — the traceback tells us what the right name is.
-                good_kw = hint_match.group(1)
-                new_fixed, count = re.subn(
-                    rf"\b{re.escape(bad_kw)}\s*=",
-                    f"{good_kw}=",
+            if bad_kw != "font_size":
+                fixed = _fix_unexpected_kwarg(
                     fixed,
+                    bad_kw,
+                    method,
+                    hint_match.group(1) if hint_match else "",
+                    _user_traceback_line(stderr),
+                    applied,
                 )
-                if count:
-                    applied.append(f"renamed kwarg '{bad_kw}' → '{good_kw}' ({count})")
-                    fixed = new_fixed
-            else:
-                new_fixed, count = re.subn(rf",?\s*{bad_kw}\s*=\s*[^,\)\n]+", "", fixed)
-                if count:
-                    applied.append(f"removed unexpected kwarg '{bad_kw}' ({count})")
-                    fixed = new_fixed
 
     if "NameError: name '" in stderr:
         name_match = re.search(r"NameError: name '(\w+)' is not defined", stderr)
@@ -1125,16 +1271,14 @@ def apply_error_aware_fixes(code: str, stderr: str) -> tuple[str, list[str]]:
                 "LIGHT_BLUE": "BLUE_A",
                 "LIGHT_GREEN": "GREEN_A",
                 "LIGHT_RED": "RED_A",
-                "DARK_BROWN": "GREY_D",
-                "MAROON": "MAROON_B",
-                "TEAL": "TEAL_C",
-                "PURPLE": "PURPLE_B",
-                "PINK": "PINK",
                 # Common model mistake: this easing name is not present in ManimGL
                 "slow_into_fast": "smooth",
             }
             if bad_name in _name_fixes:
-                fixed = fixed.replace(bad_name, _name_fixes[bad_name])
+                # Whole identifiers only: TEAL_A must not become TEAL_C_A.
+                fixed = re.sub(
+                    rf"\b{re.escape(bad_name)}\b", _name_fixes[bad_name], fixed
+                )
                 applied.append(f"{bad_name} -> {_name_fixes[bad_name]} (error-aware)")
 
     if "TypeError" in stderr and "color_gradient" in stderr:

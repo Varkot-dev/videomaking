@@ -29,6 +29,7 @@ import ast
 import inspect
 import logging
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -268,10 +269,47 @@ def shadow_check_kwargs(code: str) -> list[FlaggedKwarg]:
     return flagged
 
 
+def _split_source_lines(code: str) -> list[str]:
+    """Split like the Python tokenizer does (\\n, \\r\\n, \\r only).
+
+    ``str.splitlines`` also breaks on form feeds and Unicode separators, which
+    would put every later AST line number out of step with the offsets.
+    """
+    return re.findall(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+", code)
+
+
 def _line_col_to_offset(lines: list[str], lineno: int, col: int) -> int:
     """Convert a 1-based (lineno, 0-based col) AST position to an absolute char
-    offset in the original source string (lines kept with their newlines)."""
-    return sum(len(lines[i]) for i in range(lineno - 1)) + col
+    offset in the original source string (lines kept with their newlines).
+
+    ``col`` is a UTF-8 byte offset (that is what ``ast`` reports), so it is
+    converted to a character offset on the line first.
+    """
+    line = lines[lineno - 1] if lineno - 1 < len(lines) else ""
+    char_col = len(line.encode("utf-8")[:col].decode("utf-8", errors="ignore"))
+    return sum(len(lines[i]) for i in range(lineno - 1)) + char_col
+
+
+def excise_span(text: str, start: int, end: int) -> str:
+    """Remove ``text[start:end]`` plus one bordering comma.
+
+    Prefers the preceding comma (and its spaces); otherwise takes the following
+    one, so no dangling ", ," or "(, " is left behind whichever position the
+    removed argument held.
+    """
+    lo, hi = start, end
+    j = lo - 1
+    while j >= 0 and text[j] in " \t":
+        j -= 1
+    if j >= 0 and text[j] == ",":
+        lo = j
+    else:
+        k = hi
+        while k < len(text) and text[k] in " \t":
+            k += 1
+        if k < len(text) and text[k] == ",":
+            hi = k + 1
+    return text[:lo] + text[hi:]
 
 
 def strip_invalid_kwargs(code: str) -> tuple[str, list[tuple[str, str]]]:
@@ -292,7 +330,7 @@ def strip_invalid_kwargs(code: str) -> tuple[str, list[tuple[str, str]]]:
     aliases = _import_alias_map(tree)
     # (start_offset, end_offset, class_name, kwarg) for each keyword to remove.
     spans: list[tuple[int, int, str, str]] = []
-    src_lines = code.splitlines(keepends=True)
+    src_lines = _split_source_lines(code)
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
@@ -325,21 +363,7 @@ def strip_invalid_kwargs(code: str) -> tuple[str, list[tuple[str, str]]]:
     for start, end, class_name, kwarg in sorted(
         spans, key=lambda s: s[0], reverse=True
     ):
-        # Absorb one bordering comma (and surrounding spaces) so we don't leave a
-        # dangling ", ," or "(, ". Prefer the preceding comma; else the following.
-        lo, hi = start, end
-        j = lo - 1
-        while j >= 0 and out[j] in " \t":
-            j -= 1
-        if j >= 0 and out[j] == ",":
-            lo = j  # eat the preceding comma
-        else:
-            k = hi
-            while k < len(out) and out[k] in " \t":
-                k += 1
-            if k < len(out) and out[k] == ",":
-                hi = k + 1  # eat the following comma
-        out = out[:lo] + out[hi:]
+        out = excise_span(out, start, end)
         removed.append((class_name, kwarg))
 
     removed.reverse()  # report in source order
