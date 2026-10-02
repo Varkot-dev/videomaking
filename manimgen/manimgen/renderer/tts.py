@@ -26,12 +26,11 @@ import logging
 import os
 import subprocess
 import time
-import warnings
 from dataclasses import dataclass
 
 import edge_tts
-import yaml
 
+from manimgen import config
 from manimgen.utils import safe_probe_duration
 
 logger = logging.getLogger(__name__)
@@ -42,21 +41,8 @@ logger = logging.getLogger(__name__)
 
 
 def _load_tts_config() -> dict:
-    config_path = os.path.join(os.path.dirname(__file__), "..", "..", "config.yaml")
-    try:
-        with open(config_path, encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
-        return cfg.get("tts", {})
-    except Exception as e:
-        # Runs at import time before logging is configured. A malformed config
-        # silently falls back to default voice/speed — surface it via warn().
-        warnings.warn(
-            f"Failed to load TTS config {config_path} ({e}) — "
-            f"using default voice/speed settings",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-        return {}
+    """tts settings from the shared config loader (manimgen.config)."""
+    return config.section("tts")
 
 
 _TTS_CFG = _load_tts_config()

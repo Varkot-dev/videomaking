@@ -8,9 +8,7 @@ import sys
 import time
 from collections.abc import Callable
 
-import yaml
-
-from manimgen import paths
+from manimgen import config, paths
 from manimgen.generator.scene_generator import ScenePrecheckError, generate_scenes
 from manimgen.input.parser import parse_input
 from manimgen.planner.lesson_planner import plan_lesson, plan_lesson_from_pdf
@@ -35,20 +33,8 @@ _PLAN_CACHE = paths.plan_cache()
 
 
 def _load_config() -> dict:
-    config_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
-    try:
-        with open(config_path, encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-    except Exception as e:
-        # A malformed/unreadable config.yaml silently disables TTS and can
-        # route output to default dirs — make the failure visible.
-        logger.warning(
-            "[manimgen] Failed to load config %s (%s) — using empty config "
-            "(TTS may be disabled, defaults applied)",
-            config_path,
-            e,
-        )
-        return {}
+    """The merged settings from the shared loader; a bad config raises ConfigError."""
+    return config.load()
 
 
 def _tts_enabled(cfg: dict) -> bool:
@@ -1145,6 +1131,11 @@ def main():
 
     cfg = _load_config()
     tts_on = _tts_enabled(cfg)
+    logger.info(
+        "[manimgen] Config: %s | plan and output folders: %s",
+        config.config_path(),
+        os.path.dirname(paths.plan_cache()),
+    )
 
     # Reset per-run mismatch log so a new run doesn't accumulate stale entries.
     clear_mismatch_log()

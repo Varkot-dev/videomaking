@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import manimgen.config as config_mod
 import manimgen.llm as llm_mod
 from manimgen.llm import chat
 
@@ -110,7 +111,8 @@ class TestRoleRouting:
             "llm:\n  models:\n    Director: opus\n    critic: ''\n    x: 3\n",
             encoding="utf-8",
         )
-        monkeypatch.setattr(llm_mod, "_CONFIG_PATH", str(cfg))
+        monkeypatch.setenv("MANIMGEN_CONFIG", str(cfg))
+        config_mod.reload()
         assert llm_mod._load_llm_config()["models"] == {"director": "opus", "x": "3"}
 
     def test_chat_without_role_passes_helper_args_unchanged(self):

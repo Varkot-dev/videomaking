@@ -1,85 +1,30 @@
-# Central output path resolver — reads from config.yaml, falls back to defaults.
+# Central output path resolver. Settings come from manimgen.config; output
+# folders are absolute, anchored at the folder holding config.yaml.
 #
 # All pipeline modules import from here instead of hardcoding strings.
 # Override any path by editing the output: block in config.yaml.
 
 import os
-import warnings
 
-import yaml
+from manimgen import config
 
-_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
-
-_DEFAULTS = {
-    "scenes": "manimgen/output/scenes",
-    "videos": "manimgen/output/videos",
-    "logs": "manimgen/output/logs",
-    "audio": "manimgen/output/audio",
-    "muxed": "manimgen/output/muxed",
-    "exports": "manimgen/output/videos/exports",
-    "plan": "manimgen/output/plan.json",
-}
-
-_RENDER_DEFAULTS = {
-    "quality": "hd",
-    "resolution": "1920x1080",
-    "fps": 60,
-    "max_retries": 1,
-    # Render time budgets in seconds. Not changed until measured on the target
-    # PC (scripts/render_smoke.py); only made configurable.
-    "render_timeout_2d": 240,
-    "render_timeout_3d": 360,
-    "render_timeout_fallback": 180,
-}
+_RENDER_DEFAULTS = config.DEFAULTS["rendering"]
 
 
 def _load() -> tuple[dict, dict]:
-    try:
-        with open(_CONFIG_PATH, encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
-        out = cfg.get("output", {})
-        rend = cfg.get("rendering", {})
-        paths = {
-            "scenes": out.get("scenes_dir", _DEFAULTS["scenes"]),
-            "videos": out.get("videos_dir", _DEFAULTS["videos"]),
-            "logs": out.get("logs_dir", _DEFAULTS["logs"]),
-            "audio": out.get("audio_dir", _DEFAULTS["audio"]),
-            "muxed": out.get("muxed_dir", _DEFAULTS["muxed"]),
-            "exports": out.get("exports_dir", _DEFAULTS["exports"]),
-            "plan": out.get("plan_cache", _DEFAULTS["plan"]),
-        }
-        rendering = {
-            "quality": rend.get("quality", _RENDER_DEFAULTS["quality"]),
-            "resolution": rend.get("resolution", _RENDER_DEFAULTS["resolution"]),
-            "fps": int(rend.get("fps", _RENDER_DEFAULTS["fps"])),
-            "max_retries": int(
-                rend.get("max_retries", _RENDER_DEFAULTS["max_retries"])
-            ),
-            "render_timeout_2d": float(
-                rend.get("render_timeout_2d", _RENDER_DEFAULTS["render_timeout_2d"])
-            ),
-            "render_timeout_3d": float(
-                rend.get("render_timeout_3d", _RENDER_DEFAULTS["render_timeout_3d"])
-            ),
-            "render_timeout_fallback": float(
-                rend.get(
-                    "render_timeout_fallback",
-                    _RENDER_DEFAULTS["render_timeout_fallback"],
-                )
-            ),
-        }
-        return paths, rendering
-    except Exception as e:
-        # Runs at import time before logging is configured, so warn() instead
-        # of logging. A malformed config silently routing to default output
-        # dirs is exactly the failure this surfaces.
-        warnings.warn(
-            f"Failed to load config {_CONFIG_PATH} ({e}) — "
-            f"falling back to default output paths and rendering settings",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-        return dict(_DEFAULTS), dict(_RENDER_DEFAULTS)
+    """Output folders (absolute, anchored at config.yaml) and render settings."""
+    cfg = config.load()
+    out = cfg["output"]
+    paths = {
+        "scenes": out["scenes_dir"],
+        "videos": out["videos_dir"],
+        "logs": out["logs_dir"],
+        "audio": out["audio_dir"],
+        "muxed": out["muxed_dir"],
+        "exports": out["exports_dir"],
+        "plan": out["plan_cache"],
+    }
+    return paths, dict(cfg["rendering"])
 
 
 _PATHS, _RENDERING = _load()

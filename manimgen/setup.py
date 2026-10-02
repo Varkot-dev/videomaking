@@ -47,8 +47,9 @@ setup(
     # Prompts and the editor page are read from next to the modules at runtime
     # (os.path.dirname(__file__)), so they must ship inside the package. They are
     # also listed in MANIFEST.in so an sdist carries them. config.yaml sits one
-    # level above the package and is read via "../config.yaml", so it is only
-    # available from a source checkout (editable install), not a wheel.
+    # level above the package and is located by manimgen/config.py, so it is only
+    # available from a source checkout (editable install), not a wheel; a wheel
+    # install fails with a clear message instead of using defaults.
     package_data={
         "manimgen.planner": ["prompts/*.md"],
         "manimgen.generator": ["prompts/*.md"],

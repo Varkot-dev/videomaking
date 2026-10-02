@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import manimgen.config as config_mod
 import manimgen.llm as llm_mod
 from manimgen.llm import (
     _REQUEST_RETRY_ATTEMPTS,
@@ -910,7 +911,9 @@ class TestOllamaHygiene:
     def test_num_ctx_config_default_and_override(self, tmp_path, monkeypatch):
         cfg = tmp_path / "config.yaml"
         cfg.write_text("llm:\n  ollama_num_ctx: 16384\n", encoding="utf-8")
-        monkeypatch.setattr(llm_mod, "_CONFIG_PATH", cfg)
+        monkeypatch.setenv("MANIMGEN_CONFIG", str(cfg))
+        config_mod.reload()
         assert llm_mod._load_llm_config()["ollama_num_ctx"] == 16384
         cfg.write_text("llm: {}\n", encoding="utf-8")
+        config_mod.reload()
         assert llm_mod._load_llm_config()["ollama_num_ctx"] == 32768

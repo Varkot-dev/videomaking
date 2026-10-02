@@ -49,6 +49,8 @@ llm:
   ollama_base_url: "http://localhost:11434"
   ollama_num_ctx: 32768   # context window sent to Ollama (its default truncates the Director prompt)
 
+# Relative paths below resolve against the folder holding this file, not the
+# working directory. MANIMGEN_CONFIG=<path> points manimgen at another config file.
 output:
   scenes_dir: manimgen/output/scenes
   videos_dir: manimgen/output/videos

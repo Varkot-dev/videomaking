@@ -43,14 +43,14 @@ import time
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-import yaml
 from dotenv import load_dotenv
+
+from manimgen import config
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
 
 # Network resilience defaults. Both providers hang indefinitely on a flaky
 # TLS handshake without explicit timeouts.
@@ -77,76 +77,26 @@ _CLI_FATAL_MARKERS = (
     "credit balance",
 )
 
-_DEFAULTS = {
-    "llm_provider": "claude_cli",
-    "gemini_model": "gemini-2.5-flash",
-    "anthropic_model": "claude-sonnet-5-5",
-    # Scene files from the Director prompt routinely exceed 4096 tokens, which
-    # truncated them mid-file. 16000 stays under the SDK's non-streaming limit.
-    "anthropic_max_tokens": 16000,
-    "claude_cli_model": "sonnet",
-    "claude_cli_path": "claude",
-    # Per-role model overrides (role -> alias or model ID). Empty: every role
-    # uses the provider default above.
-    "models": {},
-    "ollama_model": "llama3.1",
-    "ollama_base_url": "http://localhost:11434",
-    # Ollama's default context window is smaller than the Director prompt, so
-    # without an explicit num_ctx the prompt is silently truncated.
-    "ollama_num_ctx": 32768,
-}
-
-
-def _parse_role_models(raw) -> dict[str, str]:
-    """llm.models from config.yaml as {role: model}; anything unusable is dropped."""
-    if not isinstance(raw, dict):
-        return {}
-    models = {}
-    for role, model in raw.items():
-        model = str(model).strip() if model is not None else ""
-        if model:
-            models[str(role).strip().lower()] = model
-    return models
-
 
 def _load_llm_config() -> dict:
-    """Load LLM config from config.yaml, falling back to defaults."""
-    try:
-        with open(_CONFIG_PATH, encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
-        llm_cfg = cfg.get("llm", {})
-        return {
-            "llm_provider": str(
-                cfg.get("llm_provider", _DEFAULTS["llm_provider"])
-            ).lower(),
-            "gemini_model": llm_cfg.get("gemini_model", _DEFAULTS["gemini_model"]),
-            "anthropic_model": llm_cfg.get(
-                "anthropic_model", _DEFAULTS["anthropic_model"]
-            ),
-            "anthropic_max_tokens": int(
-                llm_cfg.get("max_tokens", _DEFAULTS["anthropic_max_tokens"])
-            ),
-            "claude_cli_model": str(
-                llm_cfg.get("claude_cli_model", _DEFAULTS["claude_cli_model"])
-            ),
-            "claude_cli_path": str(
-                llm_cfg.get("claude_cli_path", _DEFAULTS["claude_cli_path"])
-            ),
-            "models": _parse_role_models(llm_cfg.get("models")),
-            "ollama_model": llm_cfg.get("ollama_model", _DEFAULTS["ollama_model"]),
-            "ollama_base_url": str(
-                llm_cfg.get("ollama_base_url", _DEFAULTS["ollama_base_url"])
-            ).rstrip("/"),
-            "ollama_num_ctx": int(
-                llm_cfg.get("ollama_num_ctx", _DEFAULTS["ollama_num_ctx"])
-            ),
-        }
-    except (OSError, yaml.YAMLError) as exc:
-        logger.warning("[llm] Could not read config.yaml (%s) — using defaults", exc)
-        return dict(_DEFAULTS)
+    """LLM settings from the shared config loader (manimgen.config)."""
+    cfg = config.load()
+    llm_cfg = cfg["llm"]
+    return {
+        "llm_provider": cfg["llm_provider"],
+        "gemini_model": llm_cfg["gemini_model"],
+        "anthropic_model": llm_cfg["anthropic_model"],
+        "anthropic_max_tokens": llm_cfg["max_tokens"],
+        "claude_cli_model": llm_cfg["claude_cli_model"],
+        "claude_cli_path": llm_cfg["claude_cli_path"],
+        "models": dict(llm_cfg["models"]),
+        "ollama_model": llm_cfg["ollama_model"],
+        "ollama_base_url": llm_cfg["ollama_base_url"],
+        "ollama_num_ctx": llm_cfg["ollama_num_ctx"],
+    }
 
 
-# Parsed once at import time, mirroring paths._PATHS and tts._TTS_CFG. The
+# Parsed once at import time, mirroring paths and tts, all through manimgen.config. The
 # previous behaviour re-read and re-parsed config.yaml on every chat() call
 # (twice per call: once in _resolve_provider, once in the provider helper).
 _LLM_CONFIG = _load_llm_config()
