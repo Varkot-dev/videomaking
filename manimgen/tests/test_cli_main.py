@@ -1,4 +1,4 @@
-"""Console-entry-point tests for cli.main(): logging (#63).
+"""Console-entry-point tests for cli.main(): logging (#63) and --resume (#64).
 
 main() is the function the installed `manimgen` console script calls
 (setup.py entry_points), so these tests resolve it from that entry-point string
@@ -8,6 +8,7 @@ assemble_video (ffmpeg). Zero LLM, TTS or subprocess calls.
 """
 
 import importlib
+import json
 import logging
 import os
 import re
@@ -83,6 +84,12 @@ def _run(monkeypatch, *argv):
     _console_main()()
 
 
+def _write_plan(env, plan):
+    os.makedirs(os.path.dirname(env["plan_path"]), exist_ok=True)
+    with open(env["plan_path"], "w", encoding="utf-8") as f:
+        json.dump(plan, f)
+
+
 # --- #63: logging and the final path ---------------------------------------
 
 
@@ -130,3 +137,100 @@ class TestLogging:
             _run(monkeypatch, "bubble sort")
         assert e.value.code == 1
         assert "No video was produced" in capsys.readouterr().err
+
+
+# --- #64: --resume ----------------------------------------------------------
+
+
+class TestResume:
+    def test_resume_alone_with_cache_works(self, env, monkeypatch, capsys):
+        _write_plan(env, _plan(topic_hash="abcd1234"))
+        _run(monkeypatch, "--resume")
+        assert env["calls"] == {"plan_lesson": 0, "plan_pdf": 0}
+        assert "Done: " in capsys.readouterr().out
+
+    def test_resume_alone_without_cache_refuses(self, env, monkeypatch, capsys):
+        with pytest.raises(SystemExit) as e:
+            _run(monkeypatch, "--resume")
+        assert e.value.code == 1
+        assert env["plan_path"] in capsys.readouterr().err
+        assert env["calls"] == {"plan_lesson": 0, "plan_pdf": 0}
+
+    def test_topic_with_resume_matching_hash_works(self, env, monkeypatch):
+        h = cli._topic_hash("bubble sort")
+        _write_plan(env, _plan(topic_hash=h))
+        seen = {}
+
+        def fake_run_section(s, i, t, th, **k):
+            seen["hash"] = th
+            return ["c.mp4"]
+
+        monkeypatch.setattr(cli, "_run_section", fake_run_section)
+        _run(monkeypatch, "bubble sort", "--resume")
+        assert seen["hash"] == h
+        assert env["calls"] == {"plan_lesson": 0, "plan_pdf": 0}
+
+    def test_topic_with_resume_mismatch_refuses(self, env, monkeypatch, capsys):
+        _write_plan(env, _plan("Old Title", topic_hash=cli._topic_hash("other")))
+        with pytest.raises(SystemExit) as e:
+            _run(monkeypatch, "bubble sort", "--resume")
+        assert e.value.code == 1
+        err = capsys.readouterr().err
+        assert "Old Title" in err and "bubble sort" in err
+        assert env["calls"] == {"plan_lesson": 0, "plan_pdf": 0}
+
+    def test_topic_with_resume_missing_plan_refuses(self, env, monkeypatch):
+        with pytest.raises(SystemExit) as e:
+            _run(monkeypatch, "bubble sort", "--resume")
+        assert e.value.code == 1
+        assert env["calls"] == {"plan_lesson": 0, "plan_pdf": 0}
+
+    def test_pdf_with_resume_mismatch_refuses(self, env, monkeypatch):
+        _write_plan(env, _plan(topic_hash=cli._topic_hash("bubble sort")))
+        with pytest.raises(SystemExit) as e:
+            _run(monkeypatch, "--pdf", "notes.pdf", "--resume")
+        assert e.value.code == 1
+        assert env["calls"] == {"plan_lesson": 0, "plan_pdf": 0}
+
+    def test_pdf_with_resume_matching_hash_works(self, env, monkeypatch):
+        _write_plan(env, _plan(topic_hash=cli._topic_hash(os.path.abspath("n.pdf"))))
+        _run(monkeypatch, "--pdf", "n.pdf", "--resume")
+        assert env["calls"] == {"plan_lesson": 0, "plan_pdf": 0}
+
+    def test_topic_with_resume_plan_without_hash_refuses(self, env, monkeypatch):
+        _write_plan(env, _plan())
+        with pytest.raises(SystemExit) as e:
+            _run(monkeypatch, "bubble sort", "--resume")
+        assert e.value.code == 1
+
+    def test_corrupt_plan_refuses(self, env, monkeypatch, capsys):
+        os.makedirs(os.path.dirname(env["plan_path"]))
+        with open(env["plan_path"], "w", encoding="utf-8") as f:
+            f.write("{not json")
+        with pytest.raises(SystemExit) as e:
+            _run(monkeypatch, "--resume")
+        assert e.value.code == 1
+        assert "corrupt" in capsys.readouterr().err.lower()
+
+    def test_plan_without_sections_refuses(self, env, monkeypatch):
+        _write_plan(env, {"title": "x"})
+        with pytest.raises(SystemExit) as e:
+            _run(monkeypatch, "--resume")
+        assert e.value.code == 1
+
+    def test_no_input_at_all_is_a_usage_error(self, env, monkeypatch):
+        with pytest.raises(SystemExit) as e:
+            _run(monkeypatch)
+        assert e.value.code == 2
+
+    def test_topic_and_pdf_still_exclusive(self, env, monkeypatch):
+        with pytest.raises(SystemExit) as e:
+            _run(monkeypatch, "t", "--pdf", "a.pdf")
+        assert e.value.code == 2
+
+    def test_fresh_plan_saved_atomically(self, env, monkeypatch):
+        _run(monkeypatch, "bubble sort")
+        with open(env["plan_path"], encoding="utf-8") as f:
+            saved = json.load(f)
+        assert saved["_topic_hash"] == cli._topic_hash("bubble sort")
+        assert os.listdir(os.path.dirname(env["plan_path"])) == ["plan.json"]
