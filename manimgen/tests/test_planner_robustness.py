@@ -121,3 +121,191 @@ class TestPlanJsonRobustness:
         assert plan_lesson_from_pdf("n.pdf")["title"] == "T"
         assert mock_chat.call_count == 2
         assert mock_chat.call_args_list[1].kwargs["images"] == ["img"]
+
+
+# ── R22 ──────────────────────────────────────────────────────────────────────
+
+_NARR = "Imagine a sorted list of numbers. [CUE] Now we search it quickly. [CUE] Done in few steps."
+
+
+def _good_plan(n=2):
+    return {
+        "title": "T",
+        "sections": [
+            {
+                "id": f"section_{i:02d}",
+                "title": f"S{i}",
+                "narration": _NARR,
+                "cues": [
+                    {"index": 0, "visual": "Technique: stagger_reveal. Boxes appear."},
+                    {"index": 1, "visual": "Technique: sweep_highlight. A scan."},
+                    {"index": 2, "visual": "Technique: fade_reveal. Clear all."},
+                ],
+            }
+            for i in range(1, n + 1)
+        ],
+    }
+
+
+def _run_with_critic(critic_reply):
+    """Run plan_lesson with a valid planner reply and the given critic reply."""
+    replies = [json.dumps(_good_plan()), critic_reply]
+    with (
+        patch(f"{PL}.research_topic", return_value={}),
+        patch(f"{PL}.chat", side_effect=replies) as mock_chat,
+    ):
+        plan = plan_lesson("x")
+    return plan, mock_chat
+
+
+def _mutated(fn):
+    plan = _good_plan()
+    fn(plan)
+    return json.dumps(plan)
+
+
+def _drop_section(p):
+    del p["sections"][1]
+
+
+def _rename_id(p):
+    p["sections"][0]["id"] = "intro"
+
+
+def _shorten(p):
+    p["sections"][0]["narration"] = "Short. [CUE] Tiny. [CUE] End."
+
+
+def _unknown_technique(p):
+    p["sections"][0]["cues"][0]["visual"] = "Technique: axes_build. Axes appear."
+
+
+def _drop_a_cue(p):
+    del p["sections"][0]["cues"][2]
+
+
+def _drop_all_cues(p):
+    del p["sections"][0]["cues"]
+
+
+class TestCriticValidation:
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            "{}",
+            json.dumps({"error": "I cannot help with that"}),
+            json.dumps({"title": "x"}),
+            json.dumps({"title": "x", "sections": []}),
+            json.dumps({"title": "x", "sections": "none"}),
+            json.dumps([1, 2]),
+            "not json at all",
+            _mutated(_drop_section),
+            _mutated(_rename_id),
+            _mutated(_shorten),
+            _mutated(_unknown_technique),
+            _mutated(_drop_a_cue),
+            _mutated(_drop_all_cues),
+        ],
+        ids=[
+            "empty-object",
+            "error-object",
+            "no-sections-key",
+            "empty-sections",
+            "sections-not-list",
+            "array",
+            "prose",
+            "fewer-sections",
+            "changed-id",
+            "narration-gutted",
+            "unknown-technique",
+            "cue-count-vs-markers",
+            "cues-dropped",
+        ],
+    )
+    def test_bad_critic_reply_keeps_original(self, reply, caplog):
+        with caplog.at_level(logging.WARNING, logger=PL):
+            plan, mock_chat = _run_with_critic(reply)
+        assert [s["id"] for s in plan["sections"]] == ["section_01", "section_02"]
+        assert plan["sections"][0]["narration"].startswith("Imagine a sorted list")
+        assert mock_chat.call_count == 2  # plan + critic, no refill needed
+        assert any("critic" in r.getMessage().lower() for r in caplog.records)
+
+    def test_valid_improvement_is_accepted(self):
+        def improve(p):
+            p["title"] = "Better title"
+            p["sections"][0]["cues"][0]["visual"] = (
+                "Technique: stagger_reveal. Ten grey boxes appear one by one."
+            )
+            p["sections"][0]["narration"] = _NARR + " Binary search halves the range."
+
+        plan, _ = _run_with_critic(_mutated(improve))
+        assert plan["title"] == "Better title"
+        assert "Ten grey boxes" in plan["sections"][0]["cues"][0]["visual"]
+
+    def test_critic_may_fix_a_cue_count_the_planner_got_wrong(self):
+        bad = _good_plan()
+        del bad["sections"][0]["cues"][2]
+        replies = [json.dumps(bad), json.dumps(_good_plan())]
+        with (
+            patch(f"{PL}.research_topic", return_value={}),
+            patch(f"{PL}.chat", side_effect=replies) as mock_chat,
+        ):
+            plan = plan_lesson("x")
+        assert len(plan["sections"][0]["cues"]) == 3
+        assert mock_chat.call_count == 2
+
+    def test_planner_unknown_technique_is_not_blamed_on_critic(self):
+        orig = _good_plan()
+        orig["sections"][0]["cues"][0]["visual"] = "Technique: made_up. x"
+        improved = json.loads(json.dumps(orig))
+        improved["title"] = "Better"
+        with (
+            patch(f"{PL}.research_topic", return_value={}),
+            patch(f"{PL}.chat", side_effect=[json.dumps(orig), json.dumps(improved)]),
+        ):
+            assert plan_lesson("x")["title"] == "Better"
+
+    def test_critic_prompt_lists_only_menu_techniques(self):
+        from manimgen.planner.lesson_planner import (
+            _load_critic_system_prompt,
+            _technique_menu,
+        )
+
+        menu = _technique_menu()
+        assert {"stagger_reveal", "camera_flythrough", "3d_surface"} <= menu
+        prompt = _load_critic_system_prompt()
+        for name in menu:
+            assert name in prompt
+        for stale in ("axes_build", "tex_reveal", "graph_trace", "parametric_surface"):
+            assert stale not in prompt
+        assert "{{" not in prompt
+
+
+class TestPlanEntryGuard:
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "{}",
+            json.dumps({"title": "x"}),
+            json.dumps({"sections": []}),
+            json.dumps({"sections": ["a"]}),
+            json.dumps({"sections": [{"id": "s1", "title": "t"}]}),
+            json.dumps({"sections": [{"id": "s1", "narration": "   "}]}),
+        ],
+    )
+    def test_bad_plan_reasks_once_then_clear_error(self, bad):
+        with (
+            patch(f"{PL}.research_topic", return_value={}),
+            patch(f"{PL}.chat", side_effect=[bad, bad]) as mock_chat,
+        ):
+            with pytest.raises(ValueError, match="sections"):
+                plan_lesson("x")
+        assert mock_chat.call_count == 2
+
+    def test_bad_then_good_recovers(self):
+        with (
+            patch(f"{PL}._self_correct", side_effect=lambda p, *a, **k: p),
+            patch(f"{PL}.research_topic", return_value={}),
+            patch(f"{PL}.chat", side_effect=["{}", json.dumps(_good_plan())]),
+        ):
+            assert len(plan_lesson("x")["sections"]) == 2
