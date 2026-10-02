@@ -3,3 +3,4 @@ recursive-include manimgen/planner/prompts *.md
 recursive-include manimgen/generator/prompts *.md
 recursive-include manimgen/validator/prompts *.md
 recursive-include manimgen/editor/templates *.html
+recursive-include manimgen/examples *.py

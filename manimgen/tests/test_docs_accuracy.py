@@ -323,7 +323,7 @@ def test_readme_example_count_matches_examples_dir() -> None:
     README claimed "5 hand-written ManimGL scenes" against an `examples/`
     directory holding 32.
     """
-    actual = len(list((REPO_ROOT / "examples").glob("*.py")))
+    actual = len(list((REPO_ROOT / "manimgen" / "examples").glob("*.py")))
     text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
 
     stated = re.findall(

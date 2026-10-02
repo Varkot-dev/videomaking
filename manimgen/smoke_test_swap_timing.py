@@ -12,7 +12,7 @@ Three things changed. This test verifies each one directly:
      in addition to the existing 0.5s warning. Small mismatches must not trigger it.
 
   3. array_swap example scene renders without crashing
-     examples/array_swap_scene.py uses the correct parallel-list pattern.
+     manimgen/examples/array_swap_scene.py uses the correct parallel-list pattern.
      manimgl must exit 0. The rendered video must have a non-trivial duration
      (proves the animation actually ran, not just a black frame).
 
@@ -160,8 +160,8 @@ print("=" * 60)
 print("CHECK 3: array_swap_scene.py renders without crashing")
 print("=" * 60)
 
-scene_path = os.path.join(os.path.dirname(__file__), "examples", "array_swap_scene.py")
-check("examples/array_swap_scene.py exists", os.path.exists(scene_path), scene_path)
+scene_path = os.path.join(os.path.dirname(__file__), "manimgen", "examples", "array_swap_scene.py")
+check("manimgen/examples/array_swap_scene.py exists", os.path.exists(scene_path), scene_path)
 
 if os.path.exists(scene_path):
     result = subprocess.run(

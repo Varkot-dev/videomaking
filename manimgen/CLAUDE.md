@@ -68,6 +68,7 @@ manimgen/
 │   ├── input/
 │   │   ├── parser.py            # normalize topic string
 │   │   └── pdf_parser.py        # extract text + render pages from PDF
+│   ├── techniques.py            # the one technique registry (planner, critic, 3D promotion, example tags)
 │   ├── planner/
 │   │   ├── lesson_planner.py    # research_topic() + plan_lesson() → storyboard JSON
 │   │   ├── cue_parser.py        # parse [CUE] markers → cue_word_indices
@@ -92,12 +93,12 @@ manimgen/
 │   │   ├── cutter.py            # cut rendered section .mp4 into per-cue clips (parallel FFmpeg)
 │   │   ├── muxer.py             # audio+video mux (pad-only, no speed warp)
 │   │   └── assembler.py         # normalize 1920x1080@60fps, xfade between sections
+│   ├── examples/                # hand-written verified ManimGL scenes (Director few-shot reference),
+│   │                            # shipped as package data. Each scene has `techniques: <name>, <name>`
+│   │                            # as first line of its class docstring (names from techniques.py)
 │   └── editor/
 │       ├── server.py            # Flask UI for clip review, reorder, trim, export
 │       └── templates/editor.html
-├── examples/                    # hand-written verified ManimGL scenes (Director few-shot reference)
-│                                # Each scene has `techniques: <name>, <name>` as first line of class
-│                                # docstring — scene_generator._index_examples() indexes them at runtime
 ├── tests/                       # pytest suite (run `python3 -m pytest -q`)
 ├── config.yaml                  # LLM provider, model names, TTS config, render quality
 ├── requirements.txt             # runtime deps (setup.py reads it for install_requires)
@@ -156,7 +157,7 @@ For each section:
 **Hardcode (no API calls) when:**
 - Testing ManimGL rendering behaviour — camera, surfaces, animations, depth, opacity
 - Verifying a new 3D API works before adding it to the pipeline
-- Writing example scenes for the Director's few-shot reference (`examples/`)
+- Writing example scenes for the Director's few-shot reference (`manimgen/examples/`)
 
 **Use the LLM when:**
 - Testing Director *output quality* — does it generate visually correct code for a given storyboard?
@@ -227,7 +228,7 @@ Model names and `max_tokens` are configured under `llm:` in `config.yaml`, never
 - `planner/prompts/researcher_system.md`: Panel of Experts prompt — simulates professor, pedagogy expert, and explainer creator. Returns rich JSON brief with historical context, textbook vs intuition, multiple perspectives, misconceptions, visual opportunities.
 - `planner/prompts/planner_system.md`: outputs storyboard with `cues[{index, visual}]`. Each `visual` gives exact ManimGL-implementable descriptions.
 - `generator/prompts/director_system.md`: ManimGL API reference, layout zone rules, banned patterns, technique table.
-- `examples/`: hand-written verified ManimGL scenes. Each has a `techniques:` tag in its docstring — `scene_generator.py` reads this tag to select relevant examples per section automatically.
+- `manimgen/examples/`: hand-written verified ManimGL scenes. Each has a `techniques:` tag in its docstring — `scene_generator.py` reads this tag to select relevant examples per section automatically.
 
 ### 2. Dark background
 All `manimgl` subprocess calls use `-c "#1C1C1C"`. The flag is `-c`, NOT `--background_color`.
@@ -296,7 +297,7 @@ After every fix, the file is **always reloaded from disk** — previously a bug 
 4. **Edit `manimgen/manimgen/`** — that's the importable package, not the top-level `manimgen/`
 5. **codeguard is the first line of defense** — extend it for any new known-bad pattern before touching prompts
 6. **No duplicate source files** — never create top-level mirrors of source files
-7. **Adding a new example scene:** add to `examples/`, add `techniques: <name>` as first docstring line. No code changes needed.
+7. **Adding a new example scene:** add to `manimgen/examples/`, add `techniques: <name>` as first docstring line (the name must be in `manimgen/techniques.py`; a test enforces it). No other code changes needed.
 8. **Core design principles** — no hardcoded mappings, no duplicate sources of truth, no speculative abstractions. (These were previously cited as an external `MASTER GUIDELINES.md`; no such file exists in this repo, so they are stated here directly.)
 9. **Docs must match code.** `tests/test_docs_accuracy.py` mechanically checks that every relative path the docs cite exists, that no doc hardcodes a test count, and that no tracked doc leaks a personal home-directory absolute path. If it fails, fix the doc — never weaken the test.
 

@@ -54,6 +54,8 @@ setup(
         "manimgen.generator": ["prompts/*.md"],
         "manimgen.validator": ["prompts/*.md"],
         "manimgen.editor": ["templates/*.html"],
+        # Few-shot scenes the Director reads at runtime (scene_generator._examples_dir).
+        "manimgen": ["examples/*.py"],
     },
     extras_require={
         # The -r line is skipped, so this is just the dev tooling on top.

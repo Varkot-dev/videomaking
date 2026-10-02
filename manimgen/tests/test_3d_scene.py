@@ -14,7 +14,7 @@ import re
 import unittest
 from unittest.mock import patch
 
-EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
+EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "manimgen", "examples")
 SCENE_FILE = os.path.join(EXAMPLES_DIR, "parametric_surface_scene.py")
 
 

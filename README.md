@@ -187,7 +187,7 @@ videomaking/                      # git root (this README)
     │   └── editor/
     │       ├── server.py         # Flask clip editor server
     │       └── templates/editor.html # browser-based trim/reorder/export UI
-    ├── examples/                 # hand-written verified ManimGL scenes (Director few-shot)
+    ├── manimgen/examples/        # hand-written verified ManimGL scenes (Director few-shot)
     │                             # Each has `techniques: <name>` in class docstring
     ├── tests/                    # unit + integration tests, zero LLM or subprocess calls
     ├── docs/

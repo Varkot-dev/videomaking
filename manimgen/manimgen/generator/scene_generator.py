@@ -8,9 +8,11 @@ The generated scene contains self.wait() pauses at each cue boundary so the full
 renders as a single continuous mp4. The assembler/muxer then cuts it at cue timestamps.
 """
 
+import logging
 import math
 import os
 import re
+from pathlib import Path
 
 from manimgen import paths, techniques
 from manimgen.llm import chat
@@ -22,6 +24,7 @@ from manimgen.utils import (
 )
 from manimgen.validator.codeguard import precheck_and_autofix, precheck_and_autofix_file
 
+logger = logging.getLogger(__name__)
 
 class ScenePrecheckError(ValueError):
     """The generated scene was written to disk but failed codeguard's precheck.
@@ -73,6 +76,11 @@ def _load_director_prompt() -> str:
         return f.read()
 
 
+def _examples_dir() -> Path:
+    """The few-shot examples folder, shipped inside the package."""
+    return Path(__file__).resolve().parent.parent / "examples"
+
+
 def _index_examples() -> dict[str, list[str]]:
     """
     Build technique → [filepath, ...] index by reading the `techniques:` tag
@@ -82,49 +90,63 @@ def _index_examples() -> dict[str, list[str]]:
         techniques: technique_a, technique_b
     as the first line inside the class docstring.
     """
-    here = os.path.dirname(__file__)
-    examples_dir = os.path.normpath(os.path.join(here, "..", "..", "examples"))
+    examples_dir = _examples_dir()
     index: dict[str, list[str]] = {}
-    if not os.path.isdir(examples_dir):
+    if not examples_dir.is_dir():
+        logger.warning(
+            "examples folder not found at %s: the Director gets no few-shot examples",
+            examples_dir,
+        )
         return index
 
     tag_re = re.compile(r"techniques:\s*(.+)", re.IGNORECASE)
-    for fname in sorted(os.listdir(examples_dir)):
-        if not fname.endswith(".py"):
-            continue
-        path = os.path.join(examples_dir, fname)
+    for path in sorted(examples_dir.glob("*.py")):
         with open(path, encoding="utf-8") as f:
             head = f.read(512)  # tag always near the top
         m = tag_re.search(head)
         if not m:
             continue
         for technique in [t.strip() for t in m.group(1).split(",")]:
-            index.setdefault(technique, []).append(path)
+            index.setdefault(technique, []).append(str(path))
 
     return index
 
 
 def _select_examples(section: dict, index: dict[str, list[str]]) -> list[str]:
-    """Return up to _MAX_EXAMPLES full example file paths relevant to this section."""
-    # Always include these two as baseline context
-    here = os.path.dirname(__file__)
-    examples_dir = os.path.normpath(os.path.join(here, "..", "..", "examples"))
-    baseline = [
-        os.path.join(examples_dir, "graph_scene.py"),
-        os.path.join(examples_dir, "stagger_build_scene.py"),
-    ]
-    selected: list[str] = [p for p in baseline if os.path.isfile(p)]
+    """Return up to _MAX_EXAMPLES example paths, covering requested techniques first.
 
-    # Add technique-specific examples from cue visual fields
-    for cue in section.get("cues", []):
-        visual = cue.get("visual", "").lower()
-        for technique, paths_list in index.items():
-            if technique in visual:
-                for p in paths_list:
-                    if p not in selected:
-                        selected.append(p)
+    Greedy cover: repeatedly take the example that matches the most techniques
+    the section's cues still lack an example for (ties go to the technique that
+    appears first in the cues, then file name). The two baseline scenes only
+    fill slots left over, so late cues are never squeezed out by cue order.
+    """
+    visuals = " ".join(c.get("visual", "").lower() for c in section.get("cues", []))
+    wanted = sorted(
+        (t for t in index if t in visuals), key=lambda t: (visuals.index(t), t)
+    )
+    selected: list[str] = []
+    uncovered = list(wanted)
+    while uncovered and len(selected) < _MAX_EXAMPLES:
+        candidates = {p for t in uncovered for p in index[t] if p not in selected}
+        if not candidates:
+            break
 
-    return selected[:_MAX_EXAMPLES]
+        def gain(p: str) -> tuple[int, int, str]:
+            hits = [i for i, t in enumerate(uncovered) if p in index[t]]
+            return (-len(hits), hits[0], p)
+
+        best = min(candidates, key=gain)
+        selected.append(best)
+        uncovered = [t for t in uncovered if best not in index[t]]
+
+    examples_dir = _examples_dir()
+    for name in ("graph_scene.py", "stagger_build_scene.py"):
+        path = str(examples_dir / name)
+        if len(selected) < _MAX_EXAMPLES and path not in selected:
+            if os.path.isfile(path):
+                selected.append(path)
+
+    return selected
 
 
 def _load_examples_text(section: dict) -> str:

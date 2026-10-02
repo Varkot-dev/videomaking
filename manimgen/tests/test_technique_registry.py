@@ -10,9 +10,7 @@ from manimgen.generator import scene_generator as sg
 from manimgen.planner import lesson_planner as lp
 
 PKG = Path(__file__).resolve().parent.parent / "manimgen"
-EXAMPLES = (
-    (PKG / "examples") if (PKG / "examples").is_dir() else PKG.parent / "examples"
-)
+EXAMPLES = PKG / "examples"
 _ROW = re.compile(r"^\|\s*`([a-z0-9_]+)`\s*\|", re.MULTILINE)
 _TAG = re.compile(r"techniques:\s*(.+)", re.IGNORECASE)
 

@@ -13,7 +13,7 @@ import ast
 import os
 import unittest
 
-EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
+EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "manimgen", "examples")
 
 NEW_EXAMPLES = [
     "camera_zoom_scene.py",

@@ -268,7 +268,7 @@ class TestArraySwapExamplePassesPrecheck:
 
     def test_example_has_no_vgroup_errors(self):
         here = os.path.dirname(__file__)
-        path = os.path.join(here, "..", "examples", "array_swap_scene.py")
+        path = os.path.join(here, "..", "manimgen", "examples", "array_swap_scene.py")
         if not os.path.isfile(path):
             pytest.skip("examples/array_swap_scene.py not found")
         with open(path, encoding="utf-8") as f:
