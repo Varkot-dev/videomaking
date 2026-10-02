@@ -273,7 +273,7 @@ After every fix, the file is **always reloaded from disk** — previously a bug 
 
 ### 6. Visual validation (two-tier)
 - **Tier 1 (frame_checker.py):** zero-cost PIL-based — detects black frames, frozen frames, edge clipping.
-- **Tier 2 (layout_checker.py):** LLM vision — multi-frame sampling at 25%/50%/75% of duration, returns structured `ISSUE | CAUSE | FIX` feedback that gets fed back into the retry loop.
+- **Tier 2 (layout_checker.py):** LLM vision — multi-frame sampling at 25%/50%/75% of duration, returns structured `ISSUE | CAUSE | FIX` feedback (only `ISSUE:` lines count; any other non-OK reply is UNVERIFIED). It runs in `retry_scene`, NOT on the first pass: `validate_render` skips it unless `MANIMGEN_FIRST_PASS_LAYOUT=1`, because its verdict was never enforced there.
 
 ### 7. TTS voice
 - Engine: `edge-tts` (free, local)
@@ -441,7 +441,7 @@ Most visible quality issue. Cues often have 1–8 seconds of frozen still at the
 `timing_verifier` is wired in via `retry.apply_timing_gate` (verify → auto-fix → re-verify). It runs: (a) once on initial code before the first render in `cli.py`; (b) on initial code in `retry_scene`; (c) after every error fix and visual fix. The previous duplicated ad-hoc copy in `cli.py` was removed in favor of the shared gate. Unresolvable warnings block the first render and force the retry path.
 
 ### 3. ✅ RESOLVED — frame_checker.py wiring
-Confirmed wired in `validator/retry.py` — `check_frames()` runs after every successful render. Hard failures (black/frozen frames confirmed by timing oracle) block muxing and force retry. Soft failures (layout issues) are injected into the next LLM fix prompt.
+Confirmed wired in `validator/retry.py` — `check_frames()` runs after every successful render. Hard failures (black/frozen frames confirmed by timing oracle) block muxing and force retry. Soft failures (layout issues, only when `MANIMGEN_FIRST_PASS_LAYOUT=1`) are advisory on the first pass; `retry_scene` feeds layout issues into its LLM fix prompt.
 
 ### 4. LOW — `.hypothesis/` and `.DS_Store` committed
 Should be in `.gitignore`. Clutters diffs.

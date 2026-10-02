@@ -9,6 +9,7 @@ Returns structured feedback (ISSUE/CAUSE/FIX lines) that the retry loop acts on.
 import base64
 import logging
 import os
+import re
 import subprocess
 import tempfile
 
@@ -16,6 +17,39 @@ from manimgen.llm import chat
 from manimgen.utils import load_reference_frames, probe_video_duration
 
 logger = logging.getLogger(__name__)
+
+# The first-pass vision check (validate_render) is OFF by default: its verdict
+# was never enforced, so it cost one vision call per section for nothing.
+# Set this to a truthy value to re-enable it once the judge has been measured.
+FIRST_PASS_ENV_VAR = "MANIMGEN_FIRST_PASS_LAYOUT"
+_FALSEY = frozenset({"", "0", "false", "off", "no"})
+
+
+def first_pass_layout_enabled() -> bool:
+    """True when MANIMGEN_FIRST_PASS_LAYOUT opts in to the first-pass vision check."""
+    return os.environ.get(FIRST_PASS_ENV_VAR, "").strip().lower() not in _FALSEY
+
+
+_ISSUE_LINE = re.compile(r"^[\s>*\-\u2022\d.)]*\**\s*ISSUE\s*:", re.IGNORECASE)
+_OK_REPLY = re.compile(r"^[\s*_`>#\-]*OK\b", re.IGNORECASE)
+
+
+def parse_layout_verdict(response: str) -> tuple[str, str]:
+    """Classify a layout reply as ``("ok", "")``, ``("issues", text)`` or ``("unverified", "")``.
+
+    Only lines that carry an ``ISSUE:`` marker count as defects. A reply that
+    starts with OK (any case, markdown or trailing punctuation) and has no
+    ISSUE line is clean. Anything else (prose with no ISSUE line, "No defects
+    found") cannot be trusted either way, so it is unverified rather than a
+    blind defect.
+    """
+    lines = [ln.strip() for ln in response.strip().splitlines()]
+    issues = [ln for ln in lines if _ISSUE_LINE.match(ln)]
+    if issues:
+        return "issues", "\n".join(issues)
+    if _OK_REPLY.match(response.strip()):
+        return "ok", ""
+    return "unverified", ""
 
 
 def _load_layout_system_prompt() -> str:
@@ -107,7 +141,8 @@ def check_layout(video_path: str) -> dict:
         {
             "ok": bool,       True if no issues found
             "issues": str,    structured ISSUE/CAUSE/FIX lines, or "" if ok
-            "skipped": bool,  True if check could not run
+            "skipped": bool,  True if check could not run or the reply was
+                              unparseable (treated as UNVERIFIED by callers)
         }
     """
     if not os.path.exists(video_path):
@@ -125,16 +160,24 @@ def check_layout(video_path: str) -> dict:
     logger.debug("[layout_checker] Checking %d frames from %s", len(frames), video_path)
 
     ref_frames = load_reference_frames()
+    if ref_frames:
+        user = (
+            f"The FIRST {len(ref_frames)} images are style references only. "
+            f"The REMAINING {len(frames)} images are candidate frames sampled "
+            "across the video timeline.\n\n"
+            "Review the candidate frames for defects. Use the references only to "
+            "judge what clean looks like; do not report style differences."
+        )
+    else:
+        user = (
+            f"The {len(frames)} images are candidate frames sampled across the "
+            "video timeline.\n\nReview them for defects."
+        )
 
     try:
         response = chat(
             system=_load_layout_system_prompt(),
-            user=(
-                f"The FIRST {len(ref_frames)} images are Gold Standard reference frames of the aesthetic you must enforce.\n"
-                f"The REMAINING {len(frames)} images are candidate frames sampled across the video timeline.\n\n"
-                "Review the candidate frames. Compare their layout, typography, negative space, and proportions against the Gold Standard references. "
-                "If the candidates look cramped, misaligned, or amateurish compared to the references, reject them."
-            ),
+            user=user,
             images=ref_frames + frames,
         )
     except Exception as exc:
@@ -147,8 +190,19 @@ def check_layout(video_path: str) -> dict:
         logger.warning("[layout_checker] LLM returned empty response — skipping")
         return {"ok": True, "issues": "", "skipped": True, "frames": []}
 
-    clean = response.strip()
-    if clean.upper() == "OK":
+    verdict, issues = parse_layout_verdict(response)
+    if verdict == "ok":
         return {"ok": True, "issues": "", "skipped": False, "frames": frames}
+    if verdict == "unverified":
+        logger.warning(
+            "[layout_checker] Unparseable reply (no ISSUE lines, not OK) — unverified"
+        )
+        return {
+            "ok": True,
+            "issues": "",
+            "skipped": True,
+            "unverified": True,
+            "frames": [],
+        }
 
-    return {"ok": False, "issues": clean, "skipped": False, "frames": frames}
+    return {"ok": False, "issues": issues, "skipped": False, "frames": frames}
