@@ -11,7 +11,6 @@ produced but a section is a fallback card, dropped, silent or errored.
 
 import json
 import os
-import subprocess
 import sys
 
 import pytest
@@ -65,8 +64,9 @@ def _fail_render_for(fakes, monkeypatch, class_name):
     """The Director render of one section fails, as do the real retry loop's
     manimgl renders and LLM fix; only the deterministic fallback card renders.
 
-    retry, fallback and runner share the one subprocess module, so a single
-    fake manimgl dispatches on the scene class in the command line.
+    retry, fallback and runner all render through procutil.run_tree (the one
+    manimgl entry point), so a single fake dispatches on the scene class in the
+    command line.
     """
     real = fakes._run_scene
 
@@ -77,7 +77,7 @@ def _fail_render_for(fakes, monkeypatch, class_name):
 
     def manimgl(cmd, *a, **k):
         ok = any(str(part).endswith("FallbackScene") for part in cmd)
-        return subprocess.CompletedProcess(cmd, 0 if ok else 1, "", "boom")
+        return (0 if ok else 1), "", ("" if ok else "boom"), False
 
     def find(cls, newer_than=None):
         p = os.path.join(fakes.dirs["videos"], f"{cls}.mp4")
@@ -87,7 +87,7 @@ def _fail_render_for(fakes, monkeypatch, class_name):
     monkeypatch.setattr(cli, "run_scene", run_scene)
     monkeypatch.setattr(retry, "_load_retry_system_prompt", lambda: "sys")
     monkeypatch.setattr(retry, "chat", lambda **k: "not python at all (")
-    monkeypatch.setattr(subprocess, "run", manimgl)
+    monkeypatch.setattr("manimgen.procutil.run_tree", manimgl)
     monkeypatch.setattr(runner, "_find_rendered_video", find)
 
 
