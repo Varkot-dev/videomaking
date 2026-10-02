@@ -150,7 +150,7 @@ class TestTimestampPersistence:
         json_path = str(tmp_path / "timestamps.json")
         save_timestamps(SAMPLE_TIMESTAMPS[:2], json_path)
 
-        with open(json_path) as f:
+        with open(json_path, encoding="utf-8") as f:
             data = json.load(f)
 
         assert isinstance(data, list)

@@ -171,7 +171,7 @@ class TestConfigLoadLogging:
         pkg_dir = tmp_path / "manimgen"
         pkg_dir.mkdir()
         bad = tmp_path / "config.yaml"
-        bad.write_text("this: : : not valid yaml\n  - broken")
+        bad.write_text("this: : : not valid yaml\n  - broken", encoding="utf-8")
         # _load_config reads ../config.yaml relative to its own __file__ dir,
         # so point dirname at the temp package dir.
         monkeypatch.setattr(cli.os.path, "dirname", lambda _: str(pkg_dir))

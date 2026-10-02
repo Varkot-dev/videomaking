@@ -36,7 +36,7 @@ class TestRenderIsFresh:
         video = tmp_path / "Section01Scene.mp4"
         video.write_bytes(b"fake video")
         sidecar = tmp_path / "Section01Scene.mp4.hash"
-        sidecar.write_text("oldtopic")
+        sidecar.write_text("oldtopic", encoding="utf-8")
         assert not _render_is_fresh(str(video), "newtopic")
 
     def test_true_when_hash_matches(self, tmp_path):
@@ -77,7 +77,7 @@ class TestCachedSceneBlockingFreezes:
         scenes_dir.mkdir()
         monkeypatch.setattr(cli.paths, "scenes_dir", lambda: str(scenes_dir))
         section = {"id": "section_01"}
-        (scenes_dir / "section_01.py").write_text(textwrap.dedent(body))
+        (scenes_dir / "section_01.py").write_text(textwrap.dedent(body), encoding="utf-8")
         return section
 
     def test_real_freeze_in_cached_scene_is_detected(self, tmp_path, monkeypatch):

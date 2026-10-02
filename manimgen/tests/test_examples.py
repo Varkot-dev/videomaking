@@ -38,7 +38,7 @@ BANNED_APIS = [
 
 def _read(filename):
     path = os.path.join(EXAMPLES_DIR, filename)
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return f.read()
 
 

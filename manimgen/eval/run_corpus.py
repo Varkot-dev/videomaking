@@ -192,9 +192,9 @@ def load_corpus(corpus_dir: str) -> list[dict[str, Any]]:
         scene = sidecar[:-5] + ".py"
         if not os.path.exists(scene):
             raise FileNotFoundError(f"sidecar {sidecar} has no matching .py scene")
-        with open(sidecar) as f:
+        with open(sidecar, encoding="utf-8") as f:
             meta = json.load(f)
-        with open(scene) as f:
+        with open(scene, encoding="utf-8") as f:
             meta["code"] = f.read()
         cases.append(meta)
     if not cases:
@@ -414,10 +414,10 @@ def main(argv: list[str] | None = None) -> int:
 
     os.makedirs(args.out, exist_ok=True)
     payload = {"summary": summary, "cases": results}
-    with open(os.path.join(args.out, "codeguard.json"), "w") as f:
+    with open(os.path.join(args.out, "codeguard.json"), "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
         f.write("\n")
-    with open(os.path.join(args.out, "codeguard.md"), "w") as f:
+    with open(os.path.join(args.out, "codeguard.md"), "w", encoding="utf-8") as f:
         f.write(_md(summary, results))
 
     if not args.quiet:

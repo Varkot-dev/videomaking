@@ -109,7 +109,7 @@ class TestShadowModeIsNonBlocking:
     def test_precheck_file_ok_despite_flagged_symbol(self, monkeypatch, tmp_path):
         _fake_symbols(monkeypatch, {"Scene", "ShowCreation"})
         scene = tmp_path / "section_01.py"
-        scene.write_text(_SCENE_WITH_UNKNOWN)
+        scene.write_text(_SCENE_WITH_UNKNOWN, encoding="utf-8")
         result = precheck_and_autofix_file(str(scene))
         # No denylist/validate error here, so precheck stays ok — the allowlist
         # shadow check did NOT contribute a blocking error or layout warning.

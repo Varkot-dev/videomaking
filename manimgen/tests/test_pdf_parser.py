@@ -175,7 +175,7 @@ class TestParsePdfStructure:
         from manimgen.input.pdf_parser import parse_pdf
 
         path = tempfile.mktemp(suffix=".txt")
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write("not a pdf")
         with pytest.raises(ValueError, match="Expected a .pdf"):
             parse_pdf(path)

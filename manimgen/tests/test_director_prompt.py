@@ -42,7 +42,7 @@ REQUIRED_API_SNIPPETS = [
 
 
 def _read_prompt():
-    with open(PROMPT_PATH) as f:
+    with open(PROMPT_PATH, encoding="utf-8") as f:
         return f.read()
 
 

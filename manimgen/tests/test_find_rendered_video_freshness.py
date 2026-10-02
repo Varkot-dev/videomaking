@@ -154,7 +154,7 @@ def test_run_scene_threads_a_freshness_floor(tmp_path, monkeypatch):
     import manimgen.validator.runner as runner
 
     scene = tmp_path / "s.py"
-    scene.write_text("class MyScene:\n    pass\n")
+    scene.write_text("class MyScene:\n    pass\n", encoding="utf-8")
 
     monkeypatch.setattr(runner, "validate_scene_inputs", lambda p: {"ok": True, "errors": [], "warnings": []})
     monkeypatch.setattr(
@@ -195,7 +195,7 @@ def test_retry_run_and_capture_threads_a_freshness_floor(tmp_path, monkeypatch):
     import manimgen.validator.retry as retry
 
     scene = tmp_path / "s.py"
-    scene.write_text("class MyScene:\n    pass\n")
+    scene.write_text("class MyScene:\n    pass\n", encoding="utf-8")
 
     monkeypatch.setattr(
         retry, "precheck_and_autofix_file", lambda p: {"ok": True, "stderr": ""}

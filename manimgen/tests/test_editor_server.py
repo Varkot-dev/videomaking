@@ -145,7 +145,7 @@ def test_safe_title_sanitization(client, mocker, raw_title, expected, tmp_path):
     """
     # Create one real source clip so the trim/concat path runs.
     src = tmp_path / "clip.mp4"
-    src.write_text("video")
+    src.write_text("video", encoding="utf-8")
 
     captured = {}
 
@@ -156,7 +156,7 @@ def test_safe_title_sanitization(client, mocker, raw_title, expected, tmp_path):
             if out.endswith(".mp4"):
                 # touch outputs so finally-cleanup and concat see files
                 Path(out).parent.mkdir(parents=True, exist_ok=True)
-                Path(out).write_text("out")
+                Path(out).write_text("out", encoding="utf-8")
                 if "concat" in cmd:
                     captured["concat_out"] = out
         return mocker.MagicMock(returncode=0, stdout="", stderr="")
@@ -182,7 +182,7 @@ def test_safe_title_sanitization(client, mocker, raw_title, expected, tmp_path):
 
 _EDITOR_HTML = (
     Path(server.__file__).parent / "templates" / "editor.html"
-).read_text()
+).read_text(encoding="utf-8")
 
 
 @pytest.mark.security

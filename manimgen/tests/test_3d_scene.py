@@ -21,7 +21,7 @@ SCENE_FILE = os.path.join(EXAMPLES_DIR, "parametric_surface_scene.py")
 class TestParametricSurfaceExampleTag(unittest.TestCase):
 
     def _read(self):
-        with open(SCENE_FILE) as f:
+        with open(SCENE_FILE, encoding="utf-8") as f:
             return f.read()
 
     def test_file_exists(self):
@@ -200,7 +200,7 @@ class TestThreeDSceneSubstitution(unittest.TestCase):
                 )
 
             self.assertTrue(os.path.isfile(scene_path))
-            with open(scene_path) as f:
+            with open(scene_path, encoding="utf-8") as f:
                 saved = f.read()
             self.assertIn("ThreeDScene", saved)
 
