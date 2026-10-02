@@ -4,6 +4,7 @@ import logging
 import os
 import re
 
+from manimgen import techniques
 from manimgen.llm import chat
 from manimgen.planner.cue_parser import parse_cues
 from manimgen.utils import sanitize_section_id
@@ -18,7 +19,6 @@ _MAX_SECTIONS_PDF = 8
 _SELF_CORRECT_LIMIT = 1  # number of critic passes per plan
 
 
-_TECHNIQUE_ROW = re.compile(r"^\|\s*`([a-z0-9_]+)`\s*\|", re.MULTILINE)
 _TECHNIQUE_NAME = re.compile(r"^\s*Technique:\s*`?([A-Za-z0-9_]+)")
 
 # A critic rewrite whose narration shrinks below this fraction of the original
@@ -27,12 +27,8 @@ _CRITIC_MIN_NARRATION_RATIO = 0.6
 
 
 def _technique_menu() -> frozenset[str]:
-    """Technique names the planner may use, read from the planner prompt's menu."""
-    here = os.path.dirname(__file__)
-    with open(
-        os.path.join(here, "prompts", "planner_system.md"), encoding="utf-8"
-    ) as f:
-        return frozenset(_TECHNIQUE_ROW.findall(f.read()))
+    """Technique names the planner may use (the shared registry)."""
+    return techniques.TECHNIQUE_NAMES
 
 
 def _load_critic_system_prompt() -> str:
