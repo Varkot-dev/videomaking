@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 
 from manimgen.llm import chat
-from manimgen.utils import load_reference_frames, probe_video_duration
+from manimgen.utils import is_usage_stop, load_reference_frames, probe_video_duration
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +182,9 @@ def check_layout(video_path: str) -> dict:
             role="layout_check",
         )
     except Exception as exc:
+        # A usage limit is not a skipped check: the run must stop (#72).
+        if is_usage_stop(exc):
+            raise
         logger.warning("[layout_checker] LLM call failed: %s", exc)
         return {"ok": True, "issues": "", "skipped": True, "frames": []}
 

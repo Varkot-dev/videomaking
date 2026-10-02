@@ -24,7 +24,7 @@ from manimgen.types import (
     SectionOutcome,
     SectionStatus,
 )
-from manimgen.utils import safe_section_id
+from manimgen.utils import is_usage_stop, safe_section_id
 from manimgen.validator.fallback import fallback_scene
 from manimgen.validator.retry import retry_scene
 from manimgen.validator.runner import _find_rendered_video, run_scene
@@ -779,18 +779,25 @@ def _run_section(
 
     # --- Cut + mux per cue ---
     if segments and audio_slices:
-        clips = _cut_and_mux(
-            section,
-            idx,
-            render.path,
-            segments,
-            audio_slices,
-            cue_durations,
-            log,
-            key,
-            render.status,
-            render.reason,
-        )
+        try:
+            clips = _cut_and_mux(
+                section,
+                idx,
+                render.path,
+                segments,
+                audio_slices,
+                cue_durations,
+                log,
+                key,
+                render.status,
+                render.reason,
+            )
+        except Exception as e:
+            # cut_video_at_cues re-raises the first failed ffmpeg cut (#72).
+            log.error("[manimgen] Section %d: cutting into cues failed: %s", idx, e)
+            return SectionOutcome(
+                SectionStatus.DROPPED, [], f"cutting into cues failed: {_error_text(e)}"
+            )
         if not clips:
             return SectionOutcome(
                 SectionStatus.DROPPED,
@@ -855,6 +862,7 @@ def _configure_logging() -> None:
 EXIT_OK = 0  # every section is ok (or accepted with defects, listed in the summary)
 EXIT_FAILED = 1  # refused to run, or no video was produced
 EXIT_DEGRADED = 3  # a video was produced, but a section is degraded
+EXIT_USAGE_LIMIT = 4  # stopped cleanly on a usage limit; resume after the reset
 
 _MANIFEST_NAME = "run_manifest.json"
 
@@ -958,6 +966,55 @@ def _finish_run(
         print(f"[manimgen] Manifest: {manifest_path}")
     for step in steps:
         print(f"[manimgen] Next: {step}")
+
+
+def _plan_reset_hint() -> str:
+    """' (around <time> local time)' when llm.py has seen the plan's reset."""
+    from manimgen import llm
+
+    now = time.time()
+    windows = [w for w in getattr(llm, "_plan_windows", {}).values() if w[1] > now]
+    if not windows:
+        return ""
+    _, resets_at = max(windows)  # the fullest window is the one that blocks
+    return time.strftime(
+        " (around %Y-%m-%d %H:%M local time)", time.localtime(resets_at)
+    )
+
+
+def _stop_for_usage_limit(
+    exc: BaseException,
+    title: str,
+    content_hash: str,
+    records: list[dict],
+    started: float,
+    resumable: bool,
+):
+    """Stop the run cleanly on a usage limit: manifest, summary, exit 4 (#72).
+
+    Nothing is assembled; sections that finished stay cached for --resume.
+    """
+    logger.debug("[manimgen] Usage-limit stop", exc_info=exc)
+    wait = (
+        f"Wait until the limit resets{_plan_reset_hint()} (or change the "
+        "setting named above), then "
+    )
+    if resumable:
+        step = wait + "run: manimgen --resume. Finished sections are reused."
+    else:
+        step = wait + "rerun the same command (no plan was saved yet)."
+    _finish_run(
+        title,
+        content_hash,
+        records,
+        None,
+        EXIT_USAGE_LIMIT,
+        "usage_limit",
+        started,
+        stop_reason=" ".join(str(exc).split()),
+        next_steps=[step],
+    )
+    raise SystemExit(EXIT_USAGE_LIMIT)
 
 
 def _die(message: str):
@@ -1066,17 +1123,23 @@ def main():
             logger.warning(
                 "[manimgen] Cached plan has no _topic_hash — all renders will be treated as stale"
             )
-    elif args.pdf:
-        logger.info("[manimgen] PDF input: %s", args.pdf)
-        current_topic_hash = _file_hash(args.pdf)
-        lesson_plan = plan_lesson_from_pdf(args.pdf)
-        lesson_plan["_topic_hash"] = current_topic_hash
-        _save_plan(lesson_plan)
     else:
-        logger.info("[manimgen] Input: %s", args.topic)
-        topic = parse_input(args.topic)
-        current_topic_hash = _topic_hash(topic)
-        lesson_plan = plan_lesson(topic)
+        try:
+            if args.pdf:
+                logger.info("[manimgen] PDF input: %s", args.pdf)
+                current_topic_hash = _file_hash(args.pdf)
+                lesson_plan = plan_lesson_from_pdf(args.pdf)
+            else:
+                logger.info("[manimgen] Input: %s", args.topic)
+                topic = parse_input(args.topic)
+                current_topic_hash = _topic_hash(topic)
+                lesson_plan = plan_lesson(topic)
+        except Exception as e:
+            if not is_usage_stop(e):
+                raise
+            _stop_for_usage_limit(
+                e, args.pdf or args.topic, "", [], started, resumable=False
+            )
         lesson_plan["_topic_hash"] = current_topic_hash
         _save_plan(lesson_plan)
 
@@ -1125,6 +1188,7 @@ def main():
     logger.info("[manimgen] Overview: %s", overview["pacing_notes"])
 
     # --- Phase 2: codegen + render for all sections ---
+    title = lesson_plan["title"]
     rendered_videos: list[str] = []
     records: list[dict] = []
     for idx, section in enumerate(lesson_plan["sections"], start=1):
@@ -1136,20 +1200,36 @@ def main():
         else:
             section_audio = None
         section_started = time.time()
-        outcome = _run_section(
-            section,
-            idx,
-            tts_on,
-            content_hash,
-            section_audio=section_audio,
-            overview=overview,
-        )
+        try:
+            outcome = _run_section(
+                section,
+                idx,
+                tts_on,
+                content_hash,
+                section_audio=section_audio,
+                overview=overview,
+            )
+        except Exception as e:
+            outcome = SectionOutcome(SectionStatus.ERRORED, [], _error_text(e))
+            if is_usage_stop(e):
+                records.append(_section_record(idx, section, outcome, 0.0))
+                not_run = SectionOutcome(SectionStatus.NOT_RUN)
+                records.extend(
+                    _section_record(i, s, not_run, 0.0)
+                    for i, s in enumerate(lesson_plan["sections"], start=1)
+                    if i > idx
+                )
+                _stop_for_usage_limit(
+                    e, title, content_hash, records, started, resumable=True
+                )
+            # One failed section must not cost the others (#72): report it,
+            # keep the traceback in the run log, and go on.
+            logger.error("[manimgen] Section %d (%s) failed: %s", idx, section_id, e)
+            logger.debug("[manimgen] Section %d traceback", idx, exc_info=True)
         rendered_videos.extend(outcome.clips)
         records.append(
             _section_record(idx, section, outcome, time.time() - section_started)
         )
-
-    title = lesson_plan["title"]
 
     def no_video(message: str):
         _finish_run(

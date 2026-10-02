@@ -465,6 +465,16 @@ The exit code tells a script what happened without reading the log:
 | `1` | Refused to run (for example a `--resume` mismatch) or no video was produced |
 | `2` | Bad command line arguments |
 | `3` | A video was produced, but a section is `fallback`, `dropped`, `silent` or `errored` |
+| `4` | Stopped cleanly on a usage limit (Claude plan allowance, overage guard or paid-API guard); nothing was assembled |
+
+An error in one section (a failed LLM call, a failed ffmpeg cut) no longer ends
+the run: that section is reported as `errored` or `dropped`, the other sections
+are assembled into a partial video, and the exit code is 3. A usage limit is
+different, because every later call would fail too: the run stops before the
+next section, prints the reset time when it is known, and exits 4. Finished
+sections stay cached, so once the limit resets `manimgen --resume` builds only
+what is missing (when planning itself hit the limit there is no plan yet, so
+rerun the same command instead).
 
 A cached section keeps the status it was built with, so a fallback card reused
 by `--resume` is still reported as `fallback`.
