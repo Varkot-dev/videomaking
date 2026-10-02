@@ -204,6 +204,29 @@ def _topic_hash(topic_or_pdf: str) -> str:
     return hashlib.sha256(topic_or_pdf.encode()).hexdigest()[:8]
 
 
+def _content_hash(topic_hash: str, cfg: dict) -> str:
+    """Run hash: the input plus everything that changes the files produced.
+
+    Voice and speed change the narration without changing the plan (#66). The
+    render quality, resolution and fps change the rendered clips: without them a
+    480p draft would be reused as the finished video after switching to full
+    quality, which defeats the draft-then-final workflow.
+    """
+    tts_cfg = cfg.get("tts") or {}
+    return _topic_hash(
+        json.dumps(
+            [
+                topic_hash,
+                tts_cfg.get("voice"),
+                tts_cfg.get("speed"),
+                paths.render_quality_flag(),
+                paths.render_resolution(),
+                paths.render_fps(),
+            ]
+        )
+    )
+
+
 def _file_hash(path: str) -> str:
     """Stable 8-char hash of a file's bytes (a PDF edited in place must differ)."""
     h = hashlib.sha256()
@@ -1191,12 +1214,7 @@ def main():
     logger.info("[manimgen] Planned %d sections", len(lesson_plan["sections"]))
     logger.info("[manimgen] TTS: %s", "enabled" if tts_on else "disabled")
 
-    # Voice and speed change the narration without changing the plan, so they
-    # are part of every section's content key (#66).
-    tts_cfg = cfg.get("tts") or {}
-    content_hash = _topic_hash(
-        json.dumps([current_topic_hash, tts_cfg.get("voice"), tts_cfg.get("speed")])
-    )
+    content_hash = _content_hash(current_topic_hash, cfg)
 
     # --- Global audio phase: run all TTS before any codegen ---
     all_section_audio: dict[str, dict] = {}

@@ -76,6 +76,7 @@ class _Fakes:
         self.assembled: list[str] = []
         self.codegen_calls = 0
         self.mux_calls = 0
+        self.render_calls = 0
         self.slice_calls = 0
 
         mp = monkeypatch
@@ -131,6 +132,7 @@ class _Fakes:
         return code, class_name, scene_path
 
     def _run_scene(self, scene_path, class_name):
+        self.render_calls += 1
         out = os.path.join(self.dirs["videos"], f"{class_name}.mp4")
         _write(out, "render<" + _read(scene_path).splitlines()[0] + ">")
         return True, out
@@ -343,3 +345,39 @@ class TestEditorListing:
             "section_01_cue01.mp4",
             "section_02_cue00.mp4",
         ]
+
+
+class TestRenderQualityIsPartOfTheKey:
+    """A 480p draft must never be reused as the finished full-quality video."""
+
+    def test_quality_changes_the_run_hash(self, monkeypatch):
+        monkeypatch.setitem(cli.paths._RENDERING, "quality", "hd")
+        full = cli._content_hash("abc12345", {})
+        monkeypatch.setitem(cli.paths._RENDERING, "quality", "l")
+        draft = cli._content_hash("abc12345", {})
+        assert full != draft
+
+    def test_resolution_and_fps_change_the_run_hash(self, monkeypatch):
+        base = cli._content_hash("abc12345", {})
+        monkeypatch.setitem(cli.paths._RENDERING, "fps", 24)
+        assert cli._content_hash("abc12345", {}) != base
+
+    def test_same_settings_give_the_same_hash(self):
+        assert cli._content_hash("abc12345", {}) == cli._content_hash("abc12345", {})
+
+    def test_draft_render_is_rebuilt_at_full_quality(self, fakes, monkeypatch):
+        monkeypatch.setitem(cli.paths._RENDERING, "quality", "l")
+        fakes.run(monkeypatch, GD, "gradient descent")
+        renders_after_draft = fakes.render_calls
+        monkeypatch.setitem(cli.paths._RENDERING, "quality", "hd")
+        fakes.run(monkeypatch, GD, "gradient descent")
+        assert fakes.render_calls > renders_after_draft, (
+            "the full-quality run reused the draft render"
+        )
+
+    def test_same_quality_still_reuses(self, fakes, monkeypatch):
+        monkeypatch.setitem(cli.paths._RENDERING, "quality", "l")
+        fakes.run(monkeypatch, GD, "gradient descent")
+        before = fakes.render_calls
+        fakes.run(monkeypatch, GD, "gradient descent")
+        assert fakes.render_calls == before

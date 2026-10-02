@@ -180,7 +180,7 @@ class TestResume:
         _run(monkeypatch, "bubble sort", "--resume")
         # _run_section gets the run hash: the plan hash plus the narration voice
         # and speed (#66); the stubbed config has no tts section.
-        assert seen["hash"] == cli._topic_hash(json.dumps([h, None, None]))
+        assert seen["hash"] == cli._content_hash(h, {})
         assert env["calls"] == {"plan_lesson": 0, "plan_pdf": 0}
 
     def test_topic_with_resume_mismatch_refuses(self, env, monkeypatch, capsys):
