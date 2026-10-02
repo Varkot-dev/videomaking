@@ -38,7 +38,9 @@ import signal
 import socket
 import subprocess
 import tempfile
+import threading
 import time
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import yaml
@@ -201,6 +203,7 @@ def chat(
     user: str,
     images: list[str] | None = None,
     json_mode: bool = False,
+    role: str | None = None,
 ) -> str:
     """
     Call the active LLM provider.
@@ -216,6 +219,8 @@ def chat(
                 generation, which returns Python. Gemini enforces it natively;
                 the other providers rely on the prompt and have any markdown
                 code fence around the JSON stripped.
+        role:   What the call is for (researcher, planner, critic, director,
+                ...). Labels the call in the usage ledger.
     """
     provider = _resolve_provider()
 
@@ -226,17 +231,35 @@ def chat(
             f"set {_ALLOW_PAID_ENV}=1 to allow paid calls."
         )
 
-    if provider == "gemini":
-        return _gemini(system, user, images or [], json_mode=json_mode)
-    elif provider == "anthropic":
-        text = _anthropic(system, user, images or [])
-    elif provider == "claude_cli":
-        text = _claude_cli(system, user, images or [])
-    elif provider == "ollama":
-        text = _ollama(system, user, images or [])
-    else:
+    if provider not in ("gemini", "anthropic", "claude_cli", "ollama"):
         raise ValueError(f"Unknown LLM_PROVIDER: {provider}")
-    return _strip_json_fence(text) if json_mode else text
+
+    _tls.meta = {}
+    before = dict(_plan_windows)
+    started = time.monotonic()
+    error: str | None = None
+    try:
+        if provider == "gemini":
+            return _gemini(system, user, images or [], json_mode=json_mode)
+        if provider == "anthropic":
+            text = _anthropic(system, user, images or [])
+        elif provider == "claude_cli":
+            text = _claude_cli(system, user, images or [])
+        else:
+            text = _ollama(system, user, images or [])
+        return _strip_json_fence(text) if json_mode else text
+    except BaseException as exc:
+        error = f"{type(exc).__name__}: {exc}"[:500]
+        raise
+    finally:
+        _record_call(
+            role=role,
+            provider=provider,
+            model=_default_model(provider),
+            duration_s=time.monotonic() - started,
+            before=before,
+            error=error,
+        )
 
 
 def _strip_json_fence(text: str) -> str:
@@ -596,6 +619,7 @@ def _claude_cli(system: str, user: str, images: list[str]) -> str:
             _ensure_subscription_auth(stdout)
             _check_plan_limits(stdout)
             result = _parse_claude_cli_result(stdout)
+            _tls.meta = _cli_meta(result, attempt)
             if result is not None and not result.get("is_error"):
                 if result.get("stop_reason") == "max_tokens":
                     logger.warning(
@@ -774,6 +798,221 @@ def _ensure_subscription_auth(stdout: str) -> None:
                     f"run `claude` to log in, or set {_ALLOW_PAID_ENV}=1."
                 )
             return
+
+
+# ---------------------------------------------------------------------------
+# Usage ledger: one JSONL record per chat() call
+# ---------------------------------------------------------------------------
+# Written to <logs_dir>/llm_usage.jsonl so one video's cost can be read back
+# per role. The fields come from undocumented `claude -p` stream-json output
+# (result.usage, result.total_cost_usd, rate_limit_event.unifiedWindows), so
+# every one is parsed defensively and is null when absent. On a subscription
+# `total_cost_usd` is a cost-equivalent at API prices, not money charged.
+_LEDGER_NAME = "llm_usage.jsonl"
+_PLAN_WINDOWS = ("five_hour", "seven_day")
+
+_tls = threading.local()  # per-call data the provider helper hands back to chat()
+_ledger_lock = threading.Lock()
+_records: list[dict] = []  # this process's records, for usage_summary()
+
+
+def _ledger_dir() -> str:
+    from manimgen import paths
+
+    return paths.logs_dir()
+
+
+def _num(value) -> float | int | None:
+    """A real number, or None (bool and numeric strings are not numbers here)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
+def _cli_meta(result: dict | None, attempt: int) -> dict:
+    """Usage numbers from a `claude -p` result event (all optional)."""
+    if not isinstance(result, dict):
+        return {"attempts": attempt}
+    usage = result.get("usage")
+    if not isinstance(usage, dict):
+        usage = {}
+    return {
+        "attempts": attempt,
+        "input_tokens": _num(usage.get("input_tokens")),
+        "output_tokens": _num(usage.get("output_tokens")),
+        "cache_read_tokens": _num(usage.get("cache_read_input_tokens")),
+        "cache_creation_tokens": _num(usage.get("cache_creation_input_tokens")),
+        "cost_usd_equiv": _num(result.get("total_cost_usd")),
+        "num_turns": _num(result.get("num_turns")),
+    }
+
+
+def _record_call(
+    *,
+    role: str | None,
+    provider: str,
+    model: str,
+    duration_s: float,
+    before: dict,
+    error: str | None,
+) -> None:
+    """Append this call to the ledger. Never raises: metrics must not fail a call."""
+    try:
+        meta = getattr(_tls, "meta", None) or {}
+        rec: dict = {
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "role": role,
+            "provider": provider,
+            "model": model,
+            "duration_s": round(duration_s, 3),
+            "ok": error is None,
+            "error": error,
+        }
+        for key in (
+            "attempts",
+            "input_tokens",
+            "output_tokens",
+            "cache_read_tokens",
+            "cache_creation_tokens",
+            "cost_usd_equiv",
+            "num_turns",
+        ):
+            rec[key] = meta.get(key)
+        for name in _PLAN_WINDOWS:
+            prev = before.get(name)
+            now = _plan_windows.get(name) if provider == "claude_cli" else None
+            rec[f"{name}_before"] = prev[0] if prev else None
+            rec[f"{name}_after"] = now[0] if now else None
+            rec[f"{name}_resets_at"] = now[1] if now else None
+        with _ledger_lock:
+            _records.append(rec)
+            directory = _ledger_dir()
+            os.makedirs(directory, exist_ok=True)
+            # One write of one line; "a" appends atomically enough for the
+            # single-process pipeline. newline="\n" keeps LF on Windows.
+            with open(
+                os.path.join(directory, _LEDGER_NAME),
+                "a",
+                encoding="utf-8",
+                newline="\n",
+            ) as f:
+                f.write(json.dumps(rec, ensure_ascii=True) + "\n")
+    except Exception as exc:  # noqa: BLE001 - the ledger is best effort
+        logger.warning("[llm] could not write usage ledger: %s", exc)
+
+
+def reset_usage() -> None:
+    """Forget this process's in-memory ledger (the file is left alone)."""
+    with _ledger_lock:
+        _records.clear()
+
+
+def _read_ledger_file(path: str) -> list[dict]:
+    records = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(rec, dict):
+                records.append(rec)
+    return records
+
+
+def usage_summary(path: str | None = None) -> str:
+    """Text summary of the run's LLM calls: per-role totals and plan usage.
+
+    Covers the calls this process made, or the records in the JSONL file at
+    `path`. Call it once at the end of a run and print it; it shows what share
+    of the 5-hour and 7-day plan allowance the run used.
+    """
+    if path is not None:
+        try:
+            records = _read_ledger_file(path)
+        except OSError as exc:
+            return f"LLM usage: could not read {path}: {exc}"
+    else:
+        with _ledger_lock:
+            records = list(_records)
+    if not records:
+        return "LLM usage: no LLM calls recorded."
+
+    def total(items, key):
+        values = [r[key] for r in items if _num(r.get(key)) is not None]
+        return sum(values) if values else None
+
+    def fmt(value, spec="{:,.0f}"):
+        return "-" if value is None else spec.format(value)
+
+    by_role: dict[str, list[dict]] = {}
+    for rec in records:
+        by_role.setdefault(str(rec.get("role") or "(none)"), []).append(rec)
+
+    failed = sum(1 for r in records if not r.get("ok", True))
+    n = len(records)
+    lines = [
+        f"LLM usage: {n} call{'s' if n != 1 else ''}"
+        + (f", {failed} failed" if failed else "")
+        + f", {fmt(total(records, 'duration_s'))}s in calls"
+    ]
+    lines.append(
+        f"  {'role':<14}{'calls':>6}{'in_tok':>10}{'out_tok':>10}"
+        f"{'secs':>8}{'cost_eq_usd':>13}"
+    )
+    for role in sorted(by_role):
+        items = by_role[role]
+        lines.append(
+            f"  {role:<14}{len(items):>6}"
+            f"{fmt(total(items, 'input_tokens')):>10}"
+            f"{fmt(total(items, 'output_tokens')):>10}"
+            f"{fmt(total(items, 'duration_s')):>8}"
+            f"{fmt(total(items, 'cost_usd_equiv'), '{:,.2f}'):>13}"
+        )
+    lines.append(
+        f"  {'total':<14}{n:>6}"
+        f"{fmt(total(records, 'input_tokens')):>10}"
+        f"{fmt(total(records, 'output_tokens')):>10}"
+        f"{fmt(total(records, 'duration_s')):>8}"
+        f"{fmt(total(records, 'cost_usd_equiv'), '{:,.2f}'):>13}"
+    )
+    lines.append(
+        "  (cost_eq_usd is the API-price equivalent, not money charged on a plan)"
+    )
+
+    for name in _PLAN_WINDOWS:
+        label = {"five_hour": "5-hour", "seven_day": "7-day"}[name]
+        seen = [r for r in records if _num(r.get(f"{name}_after")) is not None]
+        if not seen:
+            continue
+        first, last = seen[0], seen[-1]
+        if _num(first.get(f"{name}_before")) is not None:
+            start, note = first[f"{name}_before"], ""
+        else:
+            start, note = first[f"{name}_after"], " (from the first call's reading)"
+        end = last[f"{name}_after"]
+        if first.get(f"{name}_resets_at") != last.get(f"{name}_resets_at"):
+            lines.append(
+                f"  {label} plan allowance: window reset during the run "
+                f"(now {end:.1%}); delta not available"
+            )
+        else:
+            lines.append(
+                f"  {label} plan allowance: {start:.1%} -> {end:.1%} "
+                f"({(end - start) * 100:+.1f} percentage points){note}"
+            )
+    return "\n".join(lines)
+
+
+def _default_model(provider: str) -> str:
+    """The configured model for `provider`, as recorded in the ledger."""
+    key = {
+        "claude_cli": "claude_cli_model",
+        "anthropic": "anthropic_model",
+        "gemini": "gemini_model",
+        "ollama": "ollama_model",
+    }[provider]
+    return str(_LLM_CONFIG[key])
 
 
 def _ollama(system: str, user: str, images: list[str]) -> str:
