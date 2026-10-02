@@ -367,7 +367,14 @@ class TestAssemblerSampleRateContract:
             m.returncode = 0
             return m
 
-        with patch.object(assembler.subprocess, "run", side_effect=fake_run):
+        # _has_audio_stream probes with subprocess.Popen, which the run patch
+        # does not cover; without this patch it ran a real ffprobe on files
+        # that do not exist. False exercises the anullsrc branch (the one
+        # that also issues the ffprobe duration query handled below).
+        with (
+            patch.object(assembler.subprocess, "run", side_effect=fake_run),
+            patch.object(assembler, "_has_audio_stream", return_value=False),
+        ):
             try:
                 assembler._normalise_all(["a.mp4", "b.mp4"], str(tmp_path))
             except Exception:
