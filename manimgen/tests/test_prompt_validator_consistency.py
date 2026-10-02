@@ -164,3 +164,19 @@ def test_director_does_not_claim_images_that_are_not_shipped():
     if not load_reference_frames():
         assert not re.search(r"screenshot|reference frames|provided with actual", text, re.I)
     assert "bottom of this prompt" not in text
+
+
+def test_director_does_not_teach_become_then_showcreation():
+    """Codeguard rewrites self.play(x.become(..)) to .animate.become(..); the prompt must
+    teach that form, not 'call become() first, then ShowCreation' (snaps, then re-draws)."""
+    text = _text(DIRECTOR)
+    assert not re.search(r"become\([^\n]*BEFORE self\.play", text)
+    assert "call become() first" not in text
+    # No code line may be a bare become() statement followed by a ShowCreation of the same name.
+    assert not re.search(
+        r"^\s*(\w+)\.become\([^\n]*\)\s*\n\s*self\.play\(ShowCreation\(\1\)", text, re.M
+    )
+    # The taught form is the one codeguard produces.
+    assert "self.play(scan_rect.animate.become(" in text
+    fixed, applied = codeguard._fix_become_inside_play("self.play(r.become(Square()))\n")
+    assert ".animate.become(" in fixed and applied
