@@ -8,7 +8,13 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
+    # claude/** lets a working branch be tested without opening a PR (a branch
+    # with an open PR runs twice, once per event; the concurrency group below
+    # only de-duplicates runs of the same ref).
+    branches: [main, "claude/**"]
+  # Manual run from the Actions tab or the API (needs no local tooling, so it
+  # works from a machine where you have no admin rights).
+  workflow_dispatch:
 
 # Cancel superseded runs on the same ref to save CI minutes.
 concurrency:
@@ -139,3 +145,90 @@ jobs:
           pip install -e .
       - name: Run the ENTIRE suite on Windows
         run: python -m pytest tests/ -q --strict-markers
+
+  windows-render:
+    name: Windows real render (software OpenGL, exploratory)
+    # EXPLORATORY. Nobody has rendered a manimgen video on Windows yet, and a
+    # hosted runner has no GPU, so this job tries a real render on software
+    # OpenGL. continue-on-error keeps a failure here from turning the whole
+    # workflow red while we learn what works; remove it once this is proven.
+    #
+    # Software OpenGL options considered for a GPU-less Windows runner:
+    #   1. Mesa llvmpipe via pal1000/mesa-dist-win (CHOSEN). Its release .7z
+    #      holds x64\opengl32.dll (+ libgallium_wgl.dll, libglapi.dll on Mesa
+    #      24+). A Mesa opengl32.dll placed NEXT TO python.exe is found before
+    #      C:\Windows\System32\opengl32.dll, so moderngl/glcontext (WGL) and
+    #      manimgl pick up llvmpipe with no admin rights and no install. This is
+    #      also the realistic no-admin recipe for the library PC if its GL
+    #      driver turns out to be unusable.
+    #   2. MSYS2 / choco mesa: gives mingw-built Mesa for MSYS2 programs, not a
+    #      drop-in opengl32.dll for a python.org-style CPython; more moving
+    #      parts, rejected.
+    #   3. Microsoft's "OpenGL Compatibility Pack" / D3D12 mapping layer: only
+    #      OpenGL 3.3 via a Store package, needs a GPU/WARP device and the
+    #      Store; rejected.
+    # UNPROVEN: that the hosted runner lets the GDI pixel-format path of
+    # llvmpipe create a 3.3+ core context for moderngl, that the asset name
+    # pattern below still matches the latest mesa-dist-win release, and that
+    # the DLL set copied is sufficient. The render_smoke OpenGL check prints
+    # the exact reason if any of that is wrong.
+    runs-on: windows-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    env:
+      # get_render_env() forwards only an allowlist of variables to manimgl;
+      # these Mesa variables must be named here to reach the render child.
+      MANIMGEN_RENDER_ENV_EXTRA: GALLIUM_DRIVER,MESA_GL_VERSION_OVERRIDE,MESA_GLSL_VERSION_OVERRIDE
+      GALLIUM_DRIVER: llvmpipe
+      MESA_GL_VERSION_OVERRIDE: "4.5"
+      MESA_GLSL_VERSION_OVERRIDE: "450"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: FFmpeg (ffmpeg + ffprobe)
+        run: choco install ffmpeg -y --no-progress
+      - name: Install dependencies
+        # setuptools<81 (pkg_resources for manimgl) is pinned in requirements.txt.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install -e .
+      - name: Mesa llvmpipe opengl32.dll next to python.exe (software OpenGL)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP "mesa"
+          New-Item -ItemType Directory -Force -Path $work | Out-Null
+          gh release download --repo pal1000/mesa-dist-win --pattern "mesa3d-*-release-msvc.7z" --dir $work
+          if ($LASTEXITCODE -ne 0) { throw "could not download the mesa-dist-win release" }
+          $archive = Get-ChildItem -Path $work -Filter "mesa3d-*-release-msvc.7z" | Select-Object -First 1
+          if (-not $archive) { throw "no mesa3d-*-release-msvc.7z asset found" }
+          Write-Host "Using $($archive.Name)"
+          $extract = Join-Path $work "x"
+          7z x $archive.FullName "-o$extract" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7z extraction failed" }
+          $pyDir = $env:pythonLocation
+          foreach ($name in "opengl32.dll", "libgallium_wgl.dll", "libglapi.dll") {
+            $src = Join-Path $extract "x64\$name"
+            if (Test-Path $src) {
+              Copy-Item $src -Destination $pyDir -Force
+              Write-Host "copied $name -> $pyDir"
+            } else {
+              Write-Host "note: $name not in this Mesa release"
+            }
+          }
+          if (-not (Test-Path (Join-Path $pyDir "opengl32.dll"))) { throw "opengl32.dll was not installed" }
+      - name: Render smoke test (480p only, software OpenGL is slow)
+        # --out keeps the rendered mp4, render.log files and smoke_report.txt in
+        # manimgen/smoke_out so the next step can upload them.
+        run: python scripts/render_smoke.py --quick --out smoke_out
+      - name: Upload render and smoke output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-render-smoke
+          path: manimgen/smoke_out/
+          if-no-files-found: warn
