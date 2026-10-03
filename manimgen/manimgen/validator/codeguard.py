@@ -1799,32 +1799,44 @@ def _fix_y_axis_include_numbers(code: str) -> tuple[str, str | None]:
     return code, None
 
 
-def _shadow_log_unknown_symbols(code: str) -> list[str]:
-    """Report-only (#30): log manimlib symbols the allowlist *would* flag.
+def _check_unknown_symbols(code: str) -> list[str]:
+    """Unknown bare names (#30, #60): precheck errors, or a log line in report mode.
 
-    Pure shadow mode this cycle — it NEVER blocks the render, never adds to
-    ``errors`` or ``layout_warnings``, and never degrades output. The goal is to
-    land the allowlist mechanism + shadow logging so enforcement can be gated on
-    real data later. Fail-open: when ``manimlib`` is unavailable (CI) the check
-    is a no-op. Returns the flagged names (for tests); callers ignore the value.
+    A name that is not defined in the scene, not a builtin and not exported by
+    ManimGL would raise NameError at render time, so it is returned as precheck
+    errors (with real alternatives) and the retry path repairs it before a render
+    is spent. ``MANIMGEN_UNKNOWN_SYMBOLS=report`` is the kill switch: findings are
+    only logged and no error is returned. Fail-open when no symbol table exists.
     """
+    from manimgen.validator import manimlib_symbols as ms
+
+    findings = ms.find_unknown_names(code)
+    if not findings:
+        return []
+    names = [n for n, _ in findings]
+    import logging
+
+    enforce = ms.enforcement_enabled()
+    logging.getLogger(__name__).info(
+        "[codeguard][unknown-symbols] %d unknown symbol(s) (%s): %s",
+        len(names),
+        "blocking, render skipped" if enforce else "report-only, render NOT blocked",
+        ", ".join(names),
+    )
+    # Persist so real runs accumulate evidence (see evidence_log docstring).
+    from manimgen.validator.evidence_log import log_event
+
+    log_event(
+        "unknown_symbols", count=len(names), symbols=sorted(names), enforced=enforce
+    )
+    return ms.format_unknown_symbol_errors(findings) if enforce else []
+
+
+def _shadow_log_unknown_symbols(code: str) -> list[str]:
+    """Names the unknown-symbol check flags, with no logging or enforcement."""
     from manimgen.validator.manimlib_symbols import shadow_check_allowlist
 
-    flagged = shadow_check_allowlist(code)
-    if flagged:
-        import logging
-
-        logging.getLogger(__name__).info(
-            "[codeguard][allowlist-shadow] would flag %d unknown symbol(s) "
-            "(report-only, render NOT blocked): %s",
-            len(flagged),
-            ", ".join(flagged),
-        )
-        # Persist so real runs accumulate evidence (see evidence_log docstring).
-        from manimgen.validator.evidence_log import log_event
-
-        log_event("shadow_unknown_symbols", count=len(flagged), symbols=sorted(flagged))
-    return flagged
+    return shadow_check_allowlist(code)
 
 
 def _shadow_log_invalid_kwargs(code: str) -> list:
@@ -1918,10 +1930,10 @@ def precheck_and_autofix_file(scene_path: str) -> dict[str, Any]:
         with open(scene_path, "w", encoding="utf-8") as f:
             f.write(fixed)
 
-    _shadow_log_unknown_symbols(fixed)
     _shadow_log_invalid_kwargs(fixed)
 
     errors = validate_scene_code(fixed)
+    errors.extend(_check_unknown_symbols(fixed))
     layout_warnings = run_invariant_warnings(fixed)
     layout_warnings.extend(_check_layout_smells(fixed))
     layout_warnings.extend(_check_loop_timing_smells(fixed))
