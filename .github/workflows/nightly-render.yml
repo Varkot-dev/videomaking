@@ -153,3 +153,70 @@ jobs:
           name: windows-render-smoke
           path: manimgen/smoke_out/
           if-no-files-found: warn
+
+  linux-tts:
+    name: Linux real narration (edge-tts, nightly)
+    # The unit tests fake edge-tts, and the dev sandbox cannot reach Microsoft's
+    # speech service, so this is the only place real narration is verified.
+    # GitHub-hosted runners have open internet. scripts/tts_smoke.py calls the
+    # pipeline's own generate_narration, checks the audio with ffprobe, checks
+    # the word timestamps and the [CUE] mapping, and prints the real WordBoundary
+    # tokens for the sentences in tests/test_cue_tokenization.py so that test's
+    # fake can be compared with reality. No LLM calls, no secrets.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: System libs - FFmpeg and the pangocairo build deps manimgl needs
+        run: >
+          sudo apt-get update &&
+          sudo apt-get install -y
+          pkg-config
+          libpango1.0-dev
+          libcairo2-dev
+          ffmpeg
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+      - name: TTS smoke test (real edge-tts)
+        # --out keeps the mp3 files, the timestamps JSON and tts_smoke_report.txt
+        # (which has the real token lists) for the upload step.
+        run: python scripts/tts_smoke.py --out tts_out
+      - name: Upload audio and smoke output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-tts-smoke
+          path: manimgen/tts_out/
+          if-no-files-found: warn
+
+  windows-tts:
+    name: Windows real narration (edge-tts, nightly)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: FFmpeg (ffmpeg + ffprobe)
+        run: choco install ffmpeg -y --no-progress
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+      - name: TTS smoke test (real edge-tts)
+        run: python scripts/tts_smoke.py --out tts_out
+      - name: Upload audio and smoke output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-tts-smoke
+          path: manimgen/tts_out/
+          if-no-files-found: warn

@@ -32,7 +32,10 @@ If `activate` is blocked, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSign
 python scripts\env_doctor.py       # tools, packages and config
 python scripts\check_billing.py    # must print PASS: your subscription, extra usage off
 python scripts\render_smoke.py     # OpenGL, a 480p render and a full-quality render, with timings
+python scripts\tts_smoke.py        # real narration: needs internet access to Microsoft's speech service
 ```
+
+If `tts_smoke.py` prints FAIL, narration is blocked on this network (see step 5 for the silent-draft fallback); send back its output.
 
 Send back the table that `render_smoke.py` prints. Its two render times decide the open
 questions about render time limits and crossfades (issue 75).
