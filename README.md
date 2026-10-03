@@ -66,7 +66,9 @@ Input (topic string or PDF)
 │                                 1920×1080 @ 60fps, H.264   │
 │                                                            │
 │  6. Render validator ────────► frame_checker (PIL, free)   │
-│     (two-tier)                  + layout_checker (LLM      │
+│     (two-tier)                  + text overlap probe (in   │
+│                                 the render, free)          │
+│                                 + layout_checker (LLM      │
 │                                 vision, on failure only)   │
 │                                                            │
 │  7. Retry loop ──────────────► classify error → targeted   │
@@ -180,6 +182,10 @@ videomaking/                      # git root (this README)
     │   │   ├── retry.py          # retry loop: codeguard → timing → error fix → LLM fix
     │   │   ├── fallback.py       # styled bullet-point fallback scene (with TTS)
     │   │   └── env.py            # render environment (cross-platform PATH, LaTeX lookup)
+    │   ├── probes/
+    │   │   ├── overlap_probe.py  # runs inside manimgl: text-over-text detection (free)
+    │   │   ├── overlap_report.py # sets up the render child, reads the probe report
+    │   │   └── bootstrap/sitecustomize.py # loads the probe in the render child
     │   ├── renderer/
     │   │   ├── tts.py            # edge-tts with WordBoundary → per-word timestamps
     │   │   ├── audio_slicer.py   # full audio → N cue-aligned .m4a slices (AAC)
@@ -522,9 +528,38 @@ The suite covers:
 - Section cap enforcement in the planner
 - A/V sync contracts (muxer, slicer, segmenter)
 - Frame defect detection (frame_checker)
+- Text overlap probe geometry and its wiring into the repair loop (an opt-in test renders a real scene when manimgl and a display are available)
 - PDF parser output structure and chunking logic
 - The LLM provider switch, including how `claude -p` is invoked
 - Documentation accuracy (`tests/test_docs_accuracy.py`: cited paths exist, no stale counts)
+
+---
+
+## Text overlap detection
+
+Every render carries a small probe (`manimgen/probes/overlap_probe.py`) that
+runs inside the `manimgl` process, where the position of every object is known.
+At the end of each `play()` and `wait()` it compares the bounding boxes of the
+visible text objects (`Text`, `MarkupText`, `Code`, `Tex`, `TexText`,
+`DecimalNumber`, `Integer`) and reports any two that overlap by at least 20%
+of the smaller one. It costs no LLM call and changes nothing in the scene file;
+`run_manimgl` loads it through a `sitecustomize.py` on the child's
+`PYTHONPATH`, which also works with the Windows `manimgl.exe` launcher.
+
+A finding is a hard visual defect: the section goes through the existing
+visual fix in the retry loop (same budgets, same repeat-defect stop), and if
+the overlap survives the retries the section ships as
+`accepted_with_defects` with the overlap named in the reason.
+
+**See the report:** `<video>.overlaps.json` next to each rendered video.
+**Switch it off:** `MANIMGEN_OVERLAP_PROBE=0`.
+
+**Limits.** Text against text only: text over a shape, or shapes over each
+other, is not checked. It looks at settled states, not mid-animation frames,
+so a garbled `TransformMatchingTex` in progress is recorded in the report as a
+score (`morphs`) but not acted on. The threshold was calibrated on one real run
+and the bundled examples; the false-positive rate on other topics is not yet
+measured.
 
 ---
 

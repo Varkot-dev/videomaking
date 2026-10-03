@@ -87,6 +87,10 @@ manimgen/
 │   │   ├── timing_verifier.py   # loop-aware static timing analysis + auto-fix (wired via retry.apply_timing_gate)
 │   │   ├── env.py               # render environment vars (cross-platform PATH, LaTeX lookup)
 │   │   └── prompts/             # retry_system.md, fallback_system.md, layout_checker_system.md
+│   ├── probes/                  # code that runs INSIDE the manimgl child (see "Visual validation")
+│   │   ├── overlap_probe.py     # text-over-text detector, stdlib only, loaded by path
+│   │   ├── overlap_report.py    # host side: child env (PYTHONPATH, report path), report parsing
+│   │   └── bootstrap/sitecustomize.py  # start-up hook; chains any shadowed sitecustomize
 │   ├── renderer/
 │   │   ├── tts.py               # edge-tts with WordBoundary → per-word timestamps
 │   │   ├── audio_slicer.py      # full audio → N cue-aligned .m4a slices (AAC, sample-accurate)
@@ -276,6 +280,7 @@ After every fix, the file is **always reloaded from disk** — previously a bug 
 
 ### 6. Visual validation (two-tier)
 - **Tier 1 (frame_checker.py):** zero-cost PIL-based — detects black frames, frozen frames, edge clipping.
+- **Tier 1b (probes/overlap_probe.py, #97):** zero-cost text-over-text check run inside the manimgl render. `render_command.run_manimgl` prepends `probes/bootstrap/` to the child's PYTHONPATH (joined with `os.pathsep`) and sets `MANIMGEN_OVERLAP_REPORT`; the bootstrap `sitecustomize.py` installs a `sys.meta_path` hook that wraps `Scene.post_play`/`tear_down` when manimgl imports `manimlib.scene.scene` (the scene file is untouched, so the safety gate is unchanged). After every `play()`/`wait()` it compares bounding boxes of visible text-like mobjects (StringMobject, DecimalNumber, SingleStringTex; not Brace) and reports pairs overlapping >= 20% of the smaller box (ancestor, same-string and < 0.02 unit² overlaps ignored; max 10 findings, 3 per string). Findings land in `RenderResult.overlaps` and `<video>.overlaps.json`, become hard `OVERLAP:` issues in `validate_render` and `retry_scene` (normal visual-fix budget and signature dedup), and survivors make the section `accepted_with_defects`. A probe failure is recorded as `probe_error` and never fails a render. Off switch: `MANIMGEN_OVERLAP_PROBE=0`. Limits: text vs text only (not text vs shapes); stable states only (TransformMatchingTex midpoint garble is scored in the report's `morphs` list but not acted on); calibration record and the two real offending scenes in `tests/fixtures/overlap/`; false-positive rate on other topics unmeasured; for an `always_redraw` text the reported string can be stale (`become()` does not copy it), the geometry is current.
 - **Tier 2 (layout_checker.py):** LLM vision — multi-frame sampling at 25%/50%/75% of duration, returns structured `ISSUE | CAUSE | FIX` feedback (only `ISSUE:` lines count; any other non-OK reply is UNVERIFIED). It runs in `retry_scene`, NOT on the first pass: `validate_render` skips it unless `MANIMGEN_FIRST_PASS_LAYOUT=1`, because its verdict was never enforced there.
 
 ### 7. TTS voice

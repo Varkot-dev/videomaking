@@ -5,3 +5,4 @@ recursive-include manimgen/validator/prompts *.md
 recursive-include manimgen/validator *.json
 recursive-include manimgen/editor/templates *.html
 recursive-include manimgen/examples *.py
+recursive-include manimgen/probes/bootstrap *.py

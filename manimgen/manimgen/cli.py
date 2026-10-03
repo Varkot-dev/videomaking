@@ -12,6 +12,7 @@ from manimgen import config, paths
 from manimgen.generator.scene_generator import ScenePrecheckError, generate_scenes
 from manimgen.input.parser import parse_input
 from manimgen.planner.lesson_planner import plan_lesson, plan_lesson_from_pdf
+from manimgen.probes import overlap_report
 from manimgen.renderer.assembler import assemble_video
 from manimgen.renderer.muxer import clear_mismatch_log, get_mismatch_log
 from manimgen.types import (
@@ -498,11 +499,16 @@ def _render_with_retry(
         # retry_scene accepts a render with known freeze-frame tails on its
         # last attempt; re-run the same zero-cost check on the final source.
         freezes = _scene_file_blocking_freezes(gate.scene_path, cue_durations)
-        if freezes:
+        # #97: the same holds for text overlaps the render probe still sees.
+        overlaps = overlap_report.load_for_video(video_path).overlaps
+        defects = freezes + [
+            f"text overlap {o.a!r} / {o.b!r} at t={o.time:.1f}s" for o in overlaps
+        ]
+        if defects:
             return RenderResult(
                 video_path,
                 SectionStatus.ACCEPTED_WITH_DEFECTS,
-                "accepted after retries with " + "; ".join(freezes),
+                "accepted after retries with " + "; ".join(defects),
             )
         return RenderResult(video_path, SectionStatus.OK, "repaired by retry")
 
