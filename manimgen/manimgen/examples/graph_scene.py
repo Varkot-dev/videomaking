@@ -8,7 +8,8 @@ class GraphScene(Scene):
 
     Key layout rules demonstrated here:
     - Title at top via to_edge(UP, buff=0.8); axes shifted DOWN * 0.5 to avoid collision.
-    - Axes always sized with .set_width(10) so they never overflow the frame.
+    - Axes always sized with explicit width=10, height=4.5 so they never overflow the frame
+      (set_width(10) alone scales the height with it and can push the top tick labels into the title).
     - axis_config always includes decimal_number_config={"font_size": 24} so tick labels don't render oversized.
     - Graph labels placed outside the axes area with .next_to(axes, RIGHT, buff=0.5).
     - Multiple annotations grouped in VGroup + .arrange(DOWN) — never independently next_to same anchor.
@@ -24,12 +25,14 @@ class GraphScene(Scene):
         self.play(Write(title), run_time=1.0)
         self.wait(0.5)
 
-        # --- Axes: always set_width, always shift down when title is present ---
+        # --- Axes: explicit width/height, always shift down when title is present ---
         axes = Axes(
             x_range=[-3, 3, 1],
             y_range=[-1, 5, 1],
+            width=10,
+            height=4.5,
             axis_config={"include_numbers": True, "decimal_number_config": {"font_size": 24}, "color": GREY_B},
-        ).set_width(10).center().shift(DOWN * 0.5)
+        ).center().shift(DOWN * 0.5)
 
         x_label = Text("x", font_size=28).next_to(axes.x_axis, RIGHT, buff=0.2)
         y_label = Text("f(x)", font_size=28).next_to(axes.y_axis, UP, buff=0.2)
