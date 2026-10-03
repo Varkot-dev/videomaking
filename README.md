@@ -6,6 +6,8 @@ An automated pipeline that converts a topic string or PDF of lecture notes into 
 **Output:** A rendered `.mp4` with voiceover, 5–10 minutes of animated content  
 **LLM:** Claude through your Claude subscription by default (Claude Code in headless mode, no API key), with the Anthropic API, Gemini and Ollama as alternatives
 
+How it is built and why: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+
 ---
 
 ## How it works
