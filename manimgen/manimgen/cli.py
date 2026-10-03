@@ -25,7 +25,7 @@ from manimgen.types import (
 )
 from manimgen.utils import is_usage_stop, safe_section_id
 from manimgen.validator.fallback import fallback_scene
-from manimgen.validator.retry import retry_scene
+from manimgen.validator.retry import accepted_issues, retry_scene
 from manimgen.validator.runner import _find_rendered_video, run_scene
 
 logger = logging.getLogger(__name__)
@@ -503,6 +503,11 @@ def _render_with_retry(
         overlaps = overlap_report.load_for_video(video_path).overlaps
         defects = freezes + [
             f"text overlap {o.a!r} / {o.b!r} at t={o.time:.1f}s" for o in overlaps
+        ]
+        # Visual defects retry_scene shipped anyway (budget or attempt limit).
+        # Overlaps are already listed above from the render's own report.
+        defects += [
+            i[:160] for i in accepted_issues(video_path) if not i.startswith("OVERLAP:")
         ]
         if defects:
             return RenderResult(

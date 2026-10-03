@@ -83,6 +83,17 @@ def run_budget_used() -> int:
     return _run_llm_calls_used
 
 
+# Visual defects a shipped render is known to have, keyed by video path. Set
+# whenever retry_scene accepts a render despite defects, cleared on a clean
+# pass, so the caller can report ACCEPTED_WITH_DEFECTS instead of OK.
+_accepted_issues: dict[str, list[str]] = {}
+
+
+def accepted_issues(video_path: str | None) -> list[str]:
+    """Known visual defects of a render retry_scene shipped (empty if clean)."""
+    return list(_accepted_issues.get(video_path or "", []))
+
+
 def _consume_run_budget(category: str) -> bool:
     """Try to reserve one paid LLM call against the global per-run budget.
 
@@ -300,6 +311,13 @@ def retry_scene(
     # one bad LLM fix between attempt 2 and 5 drags the section to fallback.
     best_video_path: str | None = None
     best_issue_count: int = 10**9
+    best_issues: list[str] = []
+
+    def _ship_best(fallback_path: str | None) -> tuple[bool, str | None]:
+        path = best_video_path or fallback_path
+        if path:
+            _accepted_issues[path] = list(best_issues)
+        return True, path
 
     # Timing pass on the initial code — catches freeze-frame tails before the
     # first render attempt at zero cost. (I6 · stable rhythm, I10 · narration contract)
@@ -398,6 +416,7 @@ def retry_scene(
                 defective_frames = layout.get("frames", [])
 
             if not combined_issues and not layout_unverified:
+                _accepted_issues.pop(result["video_path"], None)
                 return True, result["video_path"]
 
             # Record this render as the best-so-far if it has fewer issues
@@ -407,6 +426,7 @@ def retry_scene(
             if issue_count < best_issue_count:
                 best_video_path = result["video_path"]
                 best_issue_count = issue_count
+                best_issues = list(combined_issues)
 
             # #33: UNVERIFIED render (layout LLM was down) with NO concrete
             # frame/timing defect. There is nothing actionable to feed an LLM
@@ -421,7 +441,7 @@ def retry_scene(
                     "UNVERIFIED (LLM unavailable) and no frame/timing defects — "
                     "shipping render unverified (bounded, no clean-pass claim)."
                 )
-                return True, best_video_path or result["video_path"]
+                return _ship_best(result["video_path"])
 
             # Scene rendered but has visual defects. Feed structured feedback
             # back into the retry loop if budget allows.
@@ -438,7 +458,7 @@ def retry_scene(
                 print(
                     "[retry] Accepting video despite visual issues (budget or attempt limit reached)."
                 )
-                return True, best_video_path or result["video_path"]
+                return _ship_best(result["video_path"])
 
             # Dedup: if we already paid for a vision call on this exact set of
             # defects and they came back unchanged, the model has nothing new
@@ -450,7 +470,7 @@ def retry_scene(
                     "already failed to fix it; accepting best render instead of "
                     "paying again."
                 )
-                return True, best_video_path or result["video_path"]
+                return _ship_best(result["video_path"])
 
             # Global per-run ceiling across ALL sections (MAX_TOTAL_LLM_CALLS).
             if not _consume_run_budget("visual"):
@@ -458,7 +478,7 @@ def retry_scene(
                     "[retry] Global run LLM budget exhausted — accepting best "
                     "render instead of requesting a visual fix."
                 )
-                return True, best_video_path or result["video_path"]
+                return _ship_best(result["video_path"])
 
             print("[retry] Requesting visual fix from LLM...")
             previous_code = code
@@ -474,7 +494,7 @@ def retry_scene(
             with open(scene_path, encoding="utf-8") as f:
                 code = f.read()
             if _discard_unsafe_fix(scene_path, code, previous_code, "visual"):
-                return True, best_video_path or result["video_path"]
+                return _ship_best(result["video_path"])
             # Timing pass — catch timing bugs in the LLM's visual fix
             if cue_durations:
                 code, tw = apply_timing_gate(code, scene_path, cue_durations)
@@ -597,7 +617,7 @@ Original code:
         print(
             f"[retry] All attempts exhausted — shipping best earlier render (had {best_issue_count} visual issue(s))."
         )
-        return True, best_video_path
+        return _ship_best(None)
     return False, None
 
 
