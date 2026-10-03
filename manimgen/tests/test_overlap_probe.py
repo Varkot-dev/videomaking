@@ -433,14 +433,21 @@ def test_report_write_failure_is_swallowed(clean_state, tmp_path):
 
 
 def test_pythonpath_is_joined_with_os_pathsep(monkeypatch):
-    # Windows uses ";" (drive letters contain ":"), POSIX uses ":".
-    for sep, first, second in ((";", "C:\\a", "D:\\b"), (":", "/a", "/b")):
+    # Windows uses ";" (drive letters contain ":"), POSIX uses ":". The
+    # bootstrap path is faked per platform: the real one on a Windows runner
+    # holds a drive letter, which the POSIX case would split.
+    cases = (
+        (";", "E:\\m\\bootstrap", "C:\\a", "D:\\b"),
+        (":", "/m/bootstrap", "/a", "/b"),
+    )
+    for sep, boot, first, second in cases:
         monkeypatch.setattr(os, "pathsep", sep)
+        monkeypatch.setattr(overlap_report, "bootstrap_dir", lambda boot=boot: boot)
         env = overlap_report.with_probe_env(
             {"PYTHONPATH": f"{first}{sep}{second}", "PATH": "x"}, "r.json"
         )
         parts = env["PYTHONPATH"].split(sep)
-        assert parts == [overlap_report.bootstrap_dir(), first, second]
+        assert parts == [boot, first, second]
         assert env[overlap_report.REPORT_ENV] == "r.json"
         assert env["PATH"] == "x"
 

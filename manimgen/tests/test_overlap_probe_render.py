@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -28,13 +29,34 @@ def _has_display() -> bool:
     return True
 
 
+def _has_opengl() -> bool:
+    # A CI runner can have manimgl and no usable OpenGL (GitHub's Windows
+    # runner fails with "wglCreateContextAttribsARB not found"). Ask a child
+    # process, so a driver crash cannot take the test session down.
+    code = "import moderngl; moderngl.create_standalone_context().release()"
+    try:
+        return (
+            subprocess.run(
+                [sys.executable, "-c", code], capture_output=True, timeout=60
+            ).returncode
+            == 0
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+_CAN_RENDER = (
+    importlib.util.find_spec("manimlib") is not None
+    and shutil.which("manimgl") is not None
+    and _has_display()
+    and _has_opengl()
+)
+
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
-        importlib.util.find_spec("manimlib") is None
-        or shutil.which("manimgl") is None
-        or not _has_display(),
-        reason="needs manimgl and a display (xvfb-run on Linux)",
+        not _CAN_RENDER,
+        reason="needs manimgl, a display (xvfb-run on Linux) and OpenGL 3.3",
     ),
 ]
 
