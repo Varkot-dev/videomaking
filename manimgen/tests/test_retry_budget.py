@@ -164,7 +164,7 @@ def test_per_category_counter_names_state_their_scope(retry_mod):
 
 def _stub_retry(retry_mod, monkeypatch, tmp_path, chat_calls, render_result):
     scene = tmp_path / "s.py"
-    scene.write_text("from manimlib import *\n")
+    scene.write_text("from manimlib import *\n", encoding="utf-8")
 
     monkeypatch.setattr(retry_mod, "_load_retry_system_prompt", lambda: "sys")
     monkeypatch.setattr(

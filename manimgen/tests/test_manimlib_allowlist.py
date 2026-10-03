@@ -8,8 +8,8 @@ block, degrade, or alter a render this cycle. These tests pin that contract:
   1. shadow_check_allowlist flags an unknown call target,
   2. it never flags builtins / locally bound names / real manimlib symbols,
   3. it fails open (returns []) when the symbol table is unavailable,
-  4. precheck_and_autofix(_file) keeps shipping clean output even when a name
-     would be flagged — shadow mode does not block.
+  4. unknown names now BLOCK precheck by default (see test_unknown_symbols.py);
+     MANIMGEN_UNKNOWN_SYMBOLS=report restores the original report-only mode.
 
 Zero LLM calls, zero subprocess calls.
 """
@@ -18,6 +18,7 @@ import logging
 
 from manimgen.validator import manimlib_symbols
 from manimgen.validator.codeguard import (
+    _check_unknown_symbols,
     _shadow_log_unknown_symbols,
     precheck_and_autofix,
     precheck_and_autofix_file,
@@ -81,40 +82,40 @@ class TestShadowCheckAllowlist:
         assert manimlib_symbols.shadow_check_allowlist("def (:\n") == []
 
 
-class TestShadowModeIsNonBlocking:
-    """The core #30 guarantee: shadow logging NEVER blocks or degrades output."""
+class TestKillSwitchKeepsReportOnlyMode:
+    """MANIMGEN_UNKNOWN_SYMBOLS=report restores the old #30 shadow behaviour."""
 
     def test_shadow_log_returns_flagged_but_does_not_raise(self, monkeypatch):
         _fake_symbols(monkeypatch, {"Scene", "ShowCreation"})
         flagged = _shadow_log_unknown_symbols(_SCENE_WITH_UNKNOWN)
         assert "TotallyMadeUpMobject" in flagged
 
-    def test_shadow_log_emits_info_only(self, monkeypatch, caplog):
+    def test_report_mode_logs_info_only(self, monkeypatch, caplog):
         _fake_symbols(monkeypatch, {"Scene", "ShowCreation"})
+        monkeypatch.setenv(manimlib_symbols.ENFORCE_ENV, "report")
         with caplog.at_level(logging.INFO):
-            _shadow_log_unknown_symbols(_SCENE_WITH_UNKNOWN)
-        # It logs at INFO (report-only) and never escalates to WARNING+.
-        assert any("allowlist-shadow" in r.message for r in caplog.records)
+            assert _check_unknown_symbols(_SCENE_WITH_UNKNOWN) == []
+        assert any("unknown-symbols" in r.message for r in caplog.records)
         assert all(r.levelno < logging.WARNING for r in caplog.records)
 
-    def test_precheck_does_not_block_on_unknown_symbol(self, monkeypatch):
-        # Even with a name the allowlist WOULD flag, precheck must not introduce
-        # an error from the allowlist — shadow mode is report-only. The returned
-        # code is unchanged by the allowlist (autofixes aside).
+    def test_report_mode_precheck_file_stays_ok(self, monkeypatch, tmp_path):
         _fake_symbols(monkeypatch, {"Scene", "ShowCreation"})
-        out = precheck_and_autofix(_SCENE_WITH_UNKNOWN)
-        # The unknown symbol is left intact: shadow mode never rewrites/strips it.
-        assert "TotallyMadeUpMobject" in out
-
-    def test_precheck_file_ok_despite_flagged_symbol(self, monkeypatch, tmp_path):
-        _fake_symbols(monkeypatch, {"Scene", "ShowCreation"})
+        monkeypatch.setenv(manimlib_symbols.ENFORCE_ENV, "report")
         scene = tmp_path / "section_01.py"
-        scene.write_text(_SCENE_WITH_UNKNOWN)
+        scene.write_text(_SCENE_WITH_UNKNOWN, encoding="utf-8")
+        assert precheck_and_autofix_file(str(scene))["ok"] is True
+
+    def test_string_precheck_never_rewrites_unknown_symbol(self, monkeypatch):
+        _fake_symbols(monkeypatch, {"Scene", "ShowCreation"})
+        assert "TotallyMadeUpMobject" in precheck_and_autofix(_SCENE_WITH_UNKNOWN)
+
+
+class TestEnforcedByDefault:
+    def test_precheck_file_blocks_unknown_symbol(self, monkeypatch, tmp_path):
+        _fake_symbols(monkeypatch, {"Scene", "ShowCreation"})
+        monkeypatch.delenv(manimlib_symbols.ENFORCE_ENV, raising=False)
+        scene = tmp_path / "section_01.py"
+        scene.write_text(_SCENE_WITH_UNKNOWN, encoding="utf-8")
         result = precheck_and_autofix_file(str(scene))
-        # No denylist/validate error here, so precheck stays ok — the allowlist
-        # shadow check did NOT contribute a blocking error or layout warning.
-        assert result["ok"] is True
-        flagged_in_warnings = any(
-            "TotallyMadeUpMobject" in w for w in result.get("layout_warnings", [])
-        )
-        assert not flagged_in_warnings
+        assert result["ok"] is False
+        assert "TotallyMadeUpMobject" in result["stderr"]

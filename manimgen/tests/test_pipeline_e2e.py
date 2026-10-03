@@ -25,6 +25,7 @@ import inspect
 import pytest
 
 import manimgen.cli as cli
+from manimgen.types import SectionStatus
 from manimgen.validator import fallback as fallback_mod
 from manimgen.validator import runner as runner_mod
 
@@ -96,11 +97,11 @@ def test_run_scene_invokes_manimgl_subprocess(mocker, tmp_path):
     a returncode==0 yields the discovered video path. No real render.
     """
     scene_path = tmp_path / "section_01.py"
-    scene_path.write_text("from manimlib import *\n\n\nclass S(Scene):\n    pass\n")
+    scene_path.write_text("from manimlib import *\n\n\nclass S(Scene):\n    pass\n", encoding="utf-8")
 
     fake_proc = mocker.MagicMock(returncode=0, stdout="ok", stderr="")
     run_mock = mocker.patch(
-        "manimgen.validator.runner.subprocess.run", return_value=fake_proc
+        "manimgen.procutil.run_tree", return_value=(fake_proc.returncode, "ok", fake_proc.stderr, False)
     )
     mocker.patch(
         "manimgen.validator.runner.precheck_and_autofix_file",
@@ -126,11 +127,11 @@ def test_run_scene_invokes_manimgl_subprocess(mocker, tmp_path):
 def test_run_scene_returns_failure_on_nonzero_exit(mocker, tmp_path):
     """A non-zero manimgl exit yields (False, None) without raising."""
     scene_path = tmp_path / "section_01.py"
-    scene_path.write_text("from manimlib import *\n\n\nclass S(Scene):\n    pass\n")
+    scene_path.write_text("from manimlib import *\n\n\nclass S(Scene):\n    pass\n", encoding="utf-8")
 
     fake_proc = mocker.MagicMock(returncode=1, stdout="", stderr="boom")
     mocker.patch(
-        "manimgen.validator.runner.subprocess.run", return_value=fake_proc
+        "manimgen.procutil.run_tree", return_value=(fake_proc.returncode, "ok", fake_proc.stderr, False)
     )
     mocker.patch(
         "manimgen.validator.runner.precheck_and_autofix_file",
@@ -156,7 +157,7 @@ def test_fallback_scene_renders_without_llm(mocker, tmp_path):
     )
     fake_proc = mocker.MagicMock(returncode=0, stdout="ok", stderr="")
     run_mock = mocker.patch(
-        "manimgen.validator.fallback.subprocess.run", return_value=fake_proc
+        "manimgen.procutil.run_tree", return_value=(0, "ok", "", False)
     )
     mocker.patch(
         "manimgen.validator.runner._find_rendered_video",
@@ -200,7 +201,8 @@ def test_run_section_uses_fallback_when_render_and_retry_fail(mocker):
     section = {"id": "section_01", "title": "Scan", "narration": "scan."}
     out = cli._run_section(section, 1, tts_on=False, current_topic_hash="deadbeef")
 
-    assert out == ["/tmp/fallback.mp4"]
+    assert out.clips == ["/tmp/fallback.mp4"]
+    assert out.status == SectionStatus.FALLBACK
     retry.assert_called_once()
     fb.assert_called_once_with(section)
 
@@ -220,7 +222,8 @@ def test_run_section_returns_empty_when_fallback_also_fails(mocker):
     section = {"id": "section_01", "title": "Scan", "narration": "scan."}
     out = cli._run_section(section, 1, tts_on=False, current_topic_hash="deadbeef")
 
-    assert out == []
+    assert out.clips == []
+    assert out.status == SectionStatus.DROPPED
 
 
 # ── Regression: the xfail reason's dead symbol claim is now accurate ─────────

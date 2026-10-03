@@ -1,13 +1,10 @@
 import os
-import subprocess
 import time
 from datetime import datetime
 
 from manimgen import paths
 from manimgen.validator.codeguard import precheck_and_autofix_file
-from manimgen.validator.env import get_render_env
-from manimgen.validator.render_command import build_manimgl_command
-from manimgen.validator.scene_ast_gate import inspect_scene_file
+from manimgen.validator.render_command import run_manimgl
 
 # Slack subtracted from "now" when computing the freshness floor for
 # _find_rendered_video. Some filesystems store mtime at whole-second
@@ -27,7 +24,7 @@ def _render_floor() -> float:
 
 
 def _is_3d_scene(scene_path: str) -> bool:
-    with open(scene_path) as f:
+    with open(scene_path, encoding="utf-8") as f:
         return "ThreeDScene" in f.read()
 
 
@@ -47,7 +44,7 @@ def validate_scene_inputs(scene_path: str) -> dict:
         errors.append(f"Scene file is empty: {scene_path}")
 
     try:
-        with open(scene_path) as f:
+        with open(scene_path, encoding="utf-8") as f:
             f.read(1)
     except OSError as e:
         errors.append(f"Scene file not readable: {e}")
@@ -56,7 +53,7 @@ def validate_scene_inputs(scene_path: str) -> dict:
     try:
         os.makedirs(scenes_dir, exist_ok=True)
         write_check = os.path.join(scenes_dir, ".write_check")
-        with open(write_check, "w") as f:
+        with open(write_check, "w", encoding="utf-8") as f:
             f.write("")
         os.unlink(write_check)
     except OSError as e:
@@ -92,7 +89,7 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
 
     precheck = precheck_and_autofix_file(scene_path)
     if not precheck["ok"]:
-        with open(log_path, "w") as f:
+        with open(log_path, "w", encoding="utf-8") as f:
             if precheck.get("applied_fixes"):
                 f.write("=== PRECHECK AUTO-FIXES ===\n")
                 for fix in precheck.get("applied_fixes"):
@@ -108,72 +105,51 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
             f.write("\n")
         return False, None
 
-    # Pre-execution AST gate (#27): manimgl imports the scene module, running
-    # every top-level statement before the Scene is instantiated. Inspect the
-    # exact file we are about to execute for disallowed top-level statements
-    # (shelling out, importing os/subprocess, exec/eval, second class, ...).
+    # The scene safety gate (#27, #87) is enforced inside run_manimgl, the one
+    # entry point every render goes through: a rejected file is never handed to
+    # manimgl and comes back as a failure whose stderr lists the findings
+    # (written to this attempt's log below). Codeguard is not a security check.
     #
-    # Warning-only by design: codeguard's banned-pattern denylist already
-    # blocks the known exec/eval/shell primitives outright, and hard-breaking
-    # here would regress any scene that emits a benign extra top-level
-    # statement. We log findings loudly so they are visible in the run log.
-    # TODO(#27): once Director output is constrained enough that findings are
-    # reliably malicious, hard-block here (return False, None) instead of only
-    # warning.
-    gate = inspect_scene_file(scene_path)
-    if not gate.ok:
-        import logging as _logging
+    # One shared entry point: scene-kind timeout from config, whole-tree kill on
+    # timeout, and exit 0 without a fresh video counts as a failure.
+    result = run_manimgl(scene_path, class_name)
 
-        _logging.getLogger(__name__).warning(
-            "[runner] AST gate findings for %s (warning-only, render continues): %s",
-            class_name,
-            "; ".join(gate.findings),
-        )
-
-    # Director scenes can be long (multiple cue beats in one section file).
-    # Use a larger timeout to avoid false "runtime" failures.
-    timeout = 360 if _is_3d_scene(scene_path) else 240
-
-    # Freshness floor for _find_rendered_video: any .mp4 older than this cannot
-    # be the output of the render we are about to start. Backdated by one second
-    # to absorb filesystem mtime granularity (some filesystems truncate to whole
-    # seconds, which would otherwise reject a video this render just wrote).
-    render_started_at = _render_floor()
-
-    try:
-        result = subprocess.run(
-            build_manimgl_command(scene_path, class_name),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=get_render_env(),
-        )
-
-        with open(log_path, "w") as f:
-            if precheck.get("applied_fixes"):
-                f.write("=== PRECHECK AUTO-FIXES ===\n")
-                for fix in precheck.get("applied_fixes"):
-                    f.write(f"- {fix}\n")
-                f.write("\n")
-            if precheck.get("layout_warnings"):
-                f.write("=== PRECHECK LAYOUT WARNINGS ===\n")
-                for warning in precheck["layout_warnings"]:
-                    f.write(f"- {warning}\n")
-                f.write("\n")
+    with open(log_path, "w", encoding="utf-8") as f:
+        if precheck.get("applied_fixes"):
+            f.write("=== PRECHECK AUTO-FIXES ===\n")
+            for fix in precheck.get("applied_fixes"):
+                f.write(f"- {fix}\n")
+            f.write("\n")
+        if precheck.get("layout_warnings"):
+            f.write("=== PRECHECK LAYOUT WARNINGS ===\n")
+            for warning in precheck["layout_warnings"]:
+                f.write(f"- {warning}\n")
+            f.write("\n")
+        if result.timed_out:
+            f.write(f"=== TIMEOUT ===\n{result.stderr}\n")
+        else:
             f.write(f"=== STDOUT ===\n{result.stdout}\n")
             f.write(f"=== STDERR ===\n{result.stderr}\n")
             f.write(f"=== RETURN CODE ===\n{result.returncode}\n")
 
-        if result.returncode == 0:
-            video_path = _find_rendered_video(class_name, newer_than=render_started_at)
-            return True, video_path
+    return result.ok, result.video_path
 
-        return False, None
 
-    except subprocess.TimeoutExpired:
-        with open(log_path, "w") as f:
-            f.write(f"=== TIMEOUT ===\nScene rendering exceeded {timeout} seconds.\n")
-        return False, None
+def _video_search_dirs() -> list[str]:
+    """Folders searched for a rendered video (ManimGL output dirs plus ours)."""
+    from manimgen import paths as _paths
+
+    # ManimGL writes to "videos/" relative to the scene file's directory.
+    # Also check the configured output videos dir in case of prior pipeline runs.
+    here = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(here))
+    return [
+        os.path.join(project_root, "videos"),
+        os.path.join(project_root, "media", "videos"),
+        "videos",
+        "media/videos",
+        _paths.videos_dir(),
+    ]
 
 
 def _find_rendered_video(
@@ -197,25 +173,13 @@ def _find_rendered_video(
        sorted by mtime descending.
     3. **Freshness floor.** ``newer_than`` (a POSIX timestamp, normally the
        time the render started) rejects any file that predates the current
-       render — such a file cannot be this render's output.
+       render; such a file cannot be this render's output.
 
     ``newer_than=None`` keeps the old permissive behaviour for callers that
     legitimately want a pre-existing render (the cache / --resume path in
     ``cli.py``, which does its own ``.hash`` sidecar freshness check).
     """
-    from manimgen import paths as _paths
-
-    # ManimGL writes to "videos/" relative to the scene file's directory.
-    # Also check the configured output videos dir in case of prior pipeline runs.
-    here = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(os.path.dirname(here))
-    search_dirs = [
-        os.path.join(project_root, "videos"),
-        os.path.join(project_root, "media", "videos"),
-        "videos",
-        "media/videos",
-        _paths.videos_dir(),
-    ]
+    search_dirs = _video_search_dirs()
 
     exact: list[tuple[float, str]] = []
     partial: list[tuple[float, str]] = []

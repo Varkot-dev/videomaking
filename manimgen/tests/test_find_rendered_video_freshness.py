@@ -48,7 +48,7 @@ def videos_dir(tmp_path, monkeypatch):
 
 
 def test_exact_stem_wins_over_substring_match(videos_dir):
-    """"Section01Scene" must not resolve to "Section01SceneOld.mp4"."""
+    """ "Section01Scene" must not resolve to "Section01SceneOld.mp4"."""
     now = time.time()
     # The decoy is NEWER, so mtime sorting alone would not save us — only an
     # exact-stem preference does.
@@ -154,25 +154,21 @@ def test_run_scene_threads_a_freshness_floor(tmp_path, monkeypatch):
     import manimgen.validator.runner as runner
 
     scene = tmp_path / "s.py"
-    scene.write_text("class MyScene:\n    pass\n")
+    scene.write_text("class MyScene:\n    pass\n", encoding="utf-8")
 
-    monkeypatch.setattr(runner, "validate_scene_inputs", lambda p: {"ok": True, "errors": [], "warnings": []})
+    monkeypatch.setattr(
+        runner,
+        "validate_scene_inputs",
+        lambda p: {"ok": True, "errors": [], "warnings": []},
+    )
     monkeypatch.setattr(
         runner, "precheck_and_autofix_file", lambda p: {"ok": True, "stderr": ""}
     )
-    monkeypatch.setattr(
-        runner, "inspect_scene_file", lambda p: type("G", (), {"ok": True, "findings": []})()
-    )
+    # The scene safety gate now runs inside run_manimgl; this scene passes it.
     monkeypatch.setattr("manimgen.paths.logs_dir", lambda: str(tmp_path / "logs"))
-    monkeypatch.setattr(runner, "build_manimgl_command", lambda p, c: ["true"])
-    monkeypatch.setattr(runner, "get_render_env", lambda: {})
-
-    class _R:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    monkeypatch.setattr(runner.subprocess, "run", lambda *a, **k: _R())
+    monkeypatch.setattr(
+        "manimgen.procutil.run_tree", lambda *a, **k: (0, "", "", False)
+    )
 
     captured = {}
 
@@ -195,20 +191,14 @@ def test_retry_run_and_capture_threads_a_freshness_floor(tmp_path, monkeypatch):
     import manimgen.validator.retry as retry
 
     scene = tmp_path / "s.py"
-    scene.write_text("class MyScene:\n    pass\n")
+    scene.write_text("class MyScene:\n    pass\n", encoding="utf-8")
 
     monkeypatch.setattr(
         retry, "precheck_and_autofix_file", lambda p: {"ok": True, "stderr": ""}
     )
-    monkeypatch.setattr(retry, "build_manimgl_command", lambda p, c: ["true"])
-    monkeypatch.setattr(retry, "get_render_env", lambda: {})
-
-    class _R:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    monkeypatch.setattr(retry.subprocess, "run", lambda *a, **k: _R())
+    monkeypatch.setattr(
+        "manimgen.procutil.run_tree", lambda *a, **k: (0, "", "", False)
+    )
 
     captured = {}
 
@@ -216,7 +206,7 @@ def test_retry_run_and_capture_threads_a_freshness_floor(tmp_path, monkeypatch):
         captured["newer_than"] = newer_than
         return None
 
-    monkeypatch.setattr(retry, "_find_rendered_video", _fake_find)
+    monkeypatch.setattr("manimgen.validator.runner._find_rendered_video", _fake_find)
 
     retry._run_and_capture(str(scene), "MyScene")
 

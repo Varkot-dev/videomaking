@@ -11,11 +11,9 @@ These tests verify:
 
 import ast
 import os
-import py_compile
-import tempfile
 import unittest
 
-EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
+EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "manimgen", "examples")
 
 NEW_EXAMPLES = [
     "camera_zoom_scene.py",
@@ -38,17 +36,17 @@ BANNED_APIS = [
 
 def _read(filename):
     path = os.path.join(EXAMPLES_DIR, filename)
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return f.read()
 
 
 class TestExampleSyntax(unittest.TestCase):
 
     def _check_compiles(self, filename):
-        path = os.path.join(EXAMPLES_DIR, filename)
-        # py_compile raises SyntaxError on bad code
-        with tempfile.NamedTemporaryFile(suffix=".pyc", delete=True) as tmp:
-            py_compile.compile(path, cfile=tmp.name, doraise=True)
+        # compile() raises SyntaxError on bad code. In memory on purpose: a
+        # NamedTemporaryFile target stays open while py_compile replaces it,
+        # which Windows refuses (PermissionError WinError 5).
+        compile(_read(filename), filename, "exec")
 
     def test_camera_zoom_compiles(self):
         self._check_compiles("camera_zoom_scene.py")

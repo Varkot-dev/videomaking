@@ -1,0 +1,222 @@
+name: Nightly render
+
+# Real manimgl renders on software OpenGL. A manimgl or dependency break (the
+# kind found only at runtime, e.g. the --fps crash noted in
+# tests/test_render_command.py) shows up here within a day instead of on a
+# user's machine.
+#
+# Deliberately separate from ci.yml: these jobs take minutes, need system
+# packages or a Mesa download, and must not run on every push or pull request.
+# They run on a schedule, and by hand from the Actions tab.
+
+on:
+  schedule:
+    # 03:17 UTC every day (off the hour, when scheduled runs are least delayed).
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+# Scheduled workflows run on the default branch only.
+concurrency:
+  group: nightly-render-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: manimgen
+
+jobs:
+  linux-render:
+    name: Linux real render (xvfb + Mesa llvmpipe, nightly)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # get_render_env() forwards only an allowlist of variables to manimgl
+      # (DISPLAY and LIBGL_* are on it); the Mesa variables must be named here.
+      MANIMGEN_RENDER_ENV_EXTRA: GALLIUM_DRIVER,MESA_GL_VERSION_OVERRIDE,MESA_GLSL_VERSION_OVERRIDE
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      GALLIUM_DRIVER: llvmpipe
+      MESA_GL_VERSION_OVERRIDE: "4.5"
+      MESA_GLSL_VERSION_OVERRIDE: "450"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: System libs - pangocairo build deps, Mesa software GL, Xvfb, FFmpeg
+        run: >
+          sudo apt-get update &&
+          sudo apt-get install -y
+          pkg-config
+          libpango1.0-dev
+          libcairo2-dev
+          libgl1 libglu1-mesa libegl1 libgl1-mesa-dri libglx-mesa0
+          xvfb
+          ffmpeg
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install -e .
+      - name: Render smoke test (480p only, software OpenGL is slow)
+        # xvfb-run gives manimgl's window a virtual X display; -a picks a free
+        # display number. --out keeps the mp4, render logs and smoke_report.txt
+        # for the upload step.
+        run: >
+          xvfb-run -a -s "-screen 0 1280x720x24"
+          python scripts/render_smoke.py --quick --out smoke_out
+      - name: Upload render and smoke output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-render-smoke
+          path: manimgen/smoke_out/
+          if-no-files-found: warn
+
+  windows-render:
+    name: Windows real render (software OpenGL, nightly)
+    # Renders a real manimgl scene on GitHub's Windows runner with Mesa
+    # llvmpipe. This passed in its exploratory form inside ci.yml, so it is no
+    # longer continue-on-error: a failure is a real manimgl or dependency break.
+    #
+    # Software OpenGL options considered for a GPU-less Windows runner:
+    #   1. Mesa llvmpipe via pal1000/mesa-dist-win (CHOSEN). Its release .7z
+    #      holds x64\opengl32.dll (+ libgallium_wgl.dll, libglapi.dll on Mesa
+    #      24+). A Mesa opengl32.dll placed NEXT TO python.exe is found before
+    #      C:\Windows\System32\opengl32.dll, so moderngl/glcontext (WGL) and
+    #      manimgl pick up llvmpipe with no admin rights and no install. This is
+    #      also the realistic no-admin recipe for the library PC if its GL
+    #      driver turns out to be unusable.
+    #   2. MSYS2 / choco mesa: gives mingw-built Mesa for MSYS2 programs, not a
+    #      drop-in opengl32.dll for a python.org-style CPython; rejected.
+    #   3. Microsoft's "OpenGL Compatibility Pack" / D3D12 mapping layer: only
+    #      OpenGL 3.3 via a Store package, needs a GPU/WARP device and the
+    #      Store; rejected.
+    # The asset name pattern below must keep matching the latest
+    # mesa-dist-win release; the render_smoke OpenGL check prints the exact
+    # reason if the context cannot be created.
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      # get_render_env() forwards only an allowlist of variables to manimgl;
+      # these Mesa variables must be named here to reach the render child.
+      MANIMGEN_RENDER_ENV_EXTRA: GALLIUM_DRIVER,MESA_GL_VERSION_OVERRIDE,MESA_GLSL_VERSION_OVERRIDE
+      GALLIUM_DRIVER: llvmpipe
+      MESA_GL_VERSION_OVERRIDE: "4.5"
+      MESA_GLSL_VERSION_OVERRIDE: "450"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: FFmpeg (ffmpeg + ffprobe)
+        run: choco install ffmpeg -y --no-progress
+      - name: Install dependencies
+        # setuptools<81 (pkg_resources for manimgl) is pinned in requirements.txt.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install -e .
+      - name: Mesa llvmpipe opengl32.dll next to python.exe (software OpenGL)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP "mesa"
+          New-Item -ItemType Directory -Force -Path $work | Out-Null
+          gh release download --repo pal1000/mesa-dist-win --pattern "mesa3d-*-release-msvc.7z" --dir $work
+          if ($LASTEXITCODE -ne 0) { throw "could not download the mesa-dist-win release" }
+          $archive = Get-ChildItem -Path $work -Filter "mesa3d-*-release-msvc.7z" | Select-Object -First 1
+          if (-not $archive) { throw "no mesa3d-*-release-msvc.7z asset found" }
+          Write-Host "Using $($archive.Name)"
+          $extract = Join-Path $work "x"
+          7z x $archive.FullName "-o$extract" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7z extraction failed" }
+          $pyDir = $env:pythonLocation
+          foreach ($name in "opengl32.dll", "libgallium_wgl.dll", "libglapi.dll") {
+            $src = Join-Path $extract "x64\$name"
+            if (Test-Path $src) {
+              Copy-Item $src -Destination $pyDir -Force
+              Write-Host "copied $name -> $pyDir"
+            } else {
+              Write-Host "note: $name not in this Mesa release"
+            }
+          }
+          if (-not (Test-Path (Join-Path $pyDir "opengl32.dll"))) { throw "opengl32.dll was not installed" }
+      - name: Render smoke test (480p only, software OpenGL is slow)
+        # --out keeps the rendered mp4, render.log files and smoke_report.txt in
+        # manimgen/smoke_out so the next step can upload them.
+        run: python scripts/render_smoke.py --quick --out smoke_out
+      - name: Upload render and smoke output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-render-smoke
+          path: manimgen/smoke_out/
+          if-no-files-found: warn
+
+  linux-tts:
+    name: Linux real narration (edge-tts, nightly)
+    # The unit tests fake edge-tts, and the dev sandbox cannot reach Microsoft's
+    # speech service, so this is the only place real narration is verified.
+    # GitHub-hosted runners have open internet. scripts/tts_smoke.py calls the
+    # pipeline's own generate_narration, checks the audio with ffprobe, checks
+    # the word timestamps and the [CUE] mapping, and prints the real WordBoundary
+    # tokens for the sentences in tests/test_cue_tokenization.py so that test's
+    # fake can be compared with reality. No LLM calls, no secrets.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: System libs - FFmpeg and the pangocairo build deps manimgl needs
+        run: >
+          sudo apt-get update &&
+          sudo apt-get install -y
+          pkg-config
+          libpango1.0-dev
+          libcairo2-dev
+          ffmpeg
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+      - name: TTS smoke test (real edge-tts)
+        # --out keeps the mp3 files, the timestamps JSON and tts_smoke_report.txt
+        # (which has the real token lists) for the upload step.
+        run: python scripts/tts_smoke.py --out tts_out
+      - name: Upload audio and smoke output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-tts-smoke
+          path: manimgen/tts_out/
+          if-no-files-found: warn
+
+  windows-tts:
+    name: Windows real narration (edge-tts, nightly)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: FFmpeg (ffmpeg + ffprobe)
+        run: choco install ffmpeg -y --no-progress
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+      - name: TTS smoke test (real edge-tts)
+        run: python scripts/tts_smoke.py --out tts_out
+      - name: Upload audio and smoke output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-tts-smoke
+          path: manimgen/tts_out/
+          if-no-files-found: warn

@@ -86,7 +86,7 @@ def log_event(event_type: str, **fields: Any) -> bool:
         parent = os.path.dirname(path)
         if parent:
             os.makedirs(parent, exist_ok=True)
-        with open(path, "a") as f:
+        with open(path, "a", encoding="utf-8") as f:
             f.write(line + "\n")
         return True
     except OSError as exc:
@@ -103,7 +103,7 @@ def read_events(path: str | None = None) -> list[dict[str, Any]]:
     if not os.path.exists(target):
         return []
     events: list[dict[str, Any]] = []
-    with open(target) as f:
+    with open(target, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:

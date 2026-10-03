@@ -25,12 +25,12 @@ import json
 import logging
 import os
 import subprocess
-import warnings
+import time
 from dataclasses import dataclass
 
 import edge_tts
-import yaml
 
+from manimgen import config
 from manimgen.utils import safe_probe_duration
 
 logger = logging.getLogger(__name__)
@@ -41,27 +41,20 @@ logger = logging.getLogger(__name__)
 
 
 def _load_tts_config() -> dict:
-    config_path = os.path.join(os.path.dirname(__file__), "..", "..", "config.yaml")
-    try:
-        with open(config_path) as f:
-            cfg = yaml.safe_load(f) or {}
-        return cfg.get("tts", {})
-    except Exception as e:
-        # Runs at import time before logging is configured. A malformed config
-        # silently falls back to default voice/speed — surface it via warn().
-        warnings.warn(
-            f"Failed to load TTS config {config_path} ({e}) — "
-            f"using default voice/speed settings",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-        return {}
+    """tts settings from the shared config loader (manimgen.config)."""
+    return config.section("tts")
 
 
 _TTS_CFG = _load_tts_config()
 
 _DEFAULT_VOICE = "en-US-AndrewMultilingualNeural"
 _DEFAULT_SPEED = "+5%"
+
+# edge-tts talks to an unofficial Microsoft endpoint over the network, so a
+# single call fails on flaky Wi-Fi or a slow proxy (#73). Three attempts, with
+# these waits before the second and the third.
+_TTS_ATTEMPTS = 3
+_TTS_BACKOFF_SECONDS = (2, 5)
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +81,14 @@ async def _generate_async(
     rate: str,
 ) -> list[WordTimestamp]:
     """Stream TTS, write audio to output_path, return word timestamps."""
-    communicate = edge_tts.Communicate(text, voice, rate=rate, boundary="WordBoundary")
+    communicate = edge_tts.Communicate(
+        text,
+        voice,
+        rate=rate,
+        boundary="WordBoundary",
+        # Optional tts.proxy in config.yaml; HTTPS_PROXY is honoured anyway.
+        proxy=_TTS_CFG.get("proxy") or None,
+    )
 
     audio_chunks: list[bytes] = []
     word_timestamps: list[WordTimestamp] = []
@@ -127,6 +127,9 @@ def generate_narration(
     where start/end are seconds from the beginning of the audio file.
     These are used to cue animations: when word[i] starts speaking,
     the animation associated with that cue point begins.
+
+    edge-tts is tried up to three times; empty audio or no word timestamps
+    counts as a failure. Raises RuntimeError when every attempt failed.
     """
     if voice is None:
         voice = _TTS_CFG.get("voice", _DEFAULT_VOICE)
@@ -134,21 +137,38 @@ def generate_narration(
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    timestamps = asyncio.run(_generate_async(text, output_path, voice, rate))
-    return output_path, timestamps
+    last_error: Exception | None = None
+    for attempt in range(1, _TTS_ATTEMPTS + 1):
+        if attempt > 1:
+            time.sleep(_TTS_BACKOFF_SECONDS[attempt - 2])
+        try:
+            timestamps = asyncio.run(_generate_async(text, output_path, voice, rate))
+            # Words in, nothing out is a failed call (cues need the timings).
+            if text.strip():
+                if not os.path.exists(output_path) or not os.path.getsize(output_path):
+                    raise RuntimeError("edge-tts returned no audio")
+                if not timestamps:
+                    raise RuntimeError("edge-tts returned no word timestamps")
+            return output_path, timestamps
+        except Exception as e:
+            last_error = e
+            logger.warning("[tts] attempt %d/%d failed: %s", attempt, _TTS_ATTEMPTS, e)
+    raise RuntimeError(
+        f"edge-tts failed after {_TTS_ATTEMPTS} attempts: {last_error}"
+    ) from last_error
 
 
 def save_timestamps(timestamps: list[WordTimestamp], json_path: str) -> None:
     """Persist word timestamps to a JSON file next to the audio."""
     os.makedirs(os.path.dirname(json_path), exist_ok=True)
     data = [{"word": t.word, "start": t.start, "end": t.end} for t in timestamps]
-    with open(json_path, "w") as f:
+    with open(json_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
 
 def load_timestamps(json_path: str) -> list[WordTimestamp]:
     """Load previously saved word timestamps from JSON."""
-    with open(json_path) as f:
+    with open(json_path, encoding="utf-8") as f:
         data = json.load(f)
     return [WordTimestamp(word=d["word"], start=d["start"], end=d["end"]) for d in data]
 
@@ -204,6 +224,8 @@ def get_audio_duration(audio_path: str) -> float:
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
             timeout=30,
         )
@@ -262,7 +284,12 @@ def check_audio_not_silent(audio_path: str) -> dict:
     ]
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=_EBUR128_TIMEOUT_SECONDS
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_EBUR128_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
         logger.warning(

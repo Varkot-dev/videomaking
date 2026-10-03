@@ -9,6 +9,8 @@ dependency is mocked.
 
 from unittest.mock import patch
 
+import pytest
+
 from manimgen.validator.frame_checker import FrameCheckResult
 from manimgen.validator.render_validator import validate_render
 
@@ -114,9 +116,70 @@ class TestFrozenTimingJoin:
         assert result.severity == "hard"
 
 
+class TestFirstPassLayoutDefaultOff:
+    """R10 (owner decision, option B): the first-pass vision check is not run by
+    default because its verdict was never enforced. It stays available behind
+    MANIMGEN_FIRST_PASS_LAYOUT."""
+
+    def test_default_makes_no_layout_call(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("MANIMGEN_FIRST_PASS_LAYOUT", raising=False)
+        video = _video(tmp_path)
+        with patch(
+            "manimgen.validator.render_validator.check_frames",
+            return_value=FrameCheckResult(ok=True),
+        ), patch("manimgen.validator.render_validator.check_layout") as mock_layout:
+            result = validate_render(video, _CODE, "/s.py", [1.5])
+
+        mock_layout.assert_not_called()
+        assert result.severity == "none"
+        assert result.issues == []
+
+    @pytest.mark.parametrize("value", ["0", "false", "off", "no", ""])
+    def test_falsey_values_stay_off(self, tmp_path, monkeypatch, value):
+        monkeypatch.setenv("MANIMGEN_FIRST_PASS_LAYOUT", value)
+        video = _video(tmp_path)
+        with patch(
+            "manimgen.validator.render_validator.check_frames",
+            return_value=FrameCheckResult(ok=True),
+        ), patch("manimgen.validator.render_validator.check_layout") as mock_layout:
+            validate_render(video, _CODE, "/s.py", [1.5])
+        mock_layout.assert_not_called()
+
+    def test_opt_in_runs_layout(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MANIMGEN_FIRST_PASS_LAYOUT", "1")
+        video = _video(tmp_path)
+        with patch(
+            "manimgen.validator.render_validator.check_frames",
+            return_value=FrameCheckResult(ok=True),
+        ), patch(
+            "manimgen.validator.render_validator.check_layout",
+            return_value={"ok": False, "issues": "ISSUE: x | CAUSE: y | FIX: z", "skipped": False},
+        ) as mock_layout:
+            result = validate_render(video, _CODE, "/s.py", [1.5])
+
+        mock_layout.assert_called_once()
+        assert result.severity == "soft"
+
+    def test_opt_in_still_skipped_without_tts(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MANIMGEN_FIRST_PASS_LAYOUT", "1")
+        video = _video(tmp_path)
+        with patch(
+            "manimgen.validator.render_validator.check_frames",
+            return_value=FrameCheckResult(ok=True),
+        ), patch("manimgen.validator.render_validator.check_layout") as mock_layout:
+            validate_render(video, _CODE, "/s.py", None)
+        mock_layout.assert_not_called()
+
+
+@pytest.fixture
+def _layout_on(monkeypatch):
+    monkeypatch.setenv("MANIMGEN_FIRST_PASS_LAYOUT", "1")
+
+
+@pytest.mark.usefixtures("_layout_on")
 class TestSkippedLayoutUnverified:
     """#33 at the cli path: a skipped layout becomes a SOFT 'unverified' issue,
-    never a silent verified-clean (none) pass."""
+    never a silent verified-clean (none) pass (when the layout check is on)."""
 
     def test_skipped_layout_is_soft_not_none(self, tmp_path):
         video = _video(tmp_path)

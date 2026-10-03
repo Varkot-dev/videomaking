@@ -1,9 +1,15 @@
 import ast
 import os
 import re
-from typing import Any
+from collections import Counter
+from typing import Any, Callable
 
 from manimgen.validator.invariants import run_all as _run_invariants
+from manimgen.validator.manimlib_signatures import (
+    _line_col_to_offset,
+    _split_source_lines,
+    excise_span,
+)
 
 _CANONICAL_FONT_SIZES = (48, 44, 36, 28, 22, 20, 18)
 
@@ -32,6 +38,10 @@ def _fix_font_size_to_scale(code: str) -> tuple[str, list[str]]:
     new = re.sub(r"\bfont_size\s*=\s*(\d+)", _replace, code)
     return new, applied
 
+
+# The one banned pattern whose match text lives inside a string literal, so it is
+# scanned with strings kept (comments are still removed).
+_TEX_TEXT_WRAPPER_PATTERN = r"""Tex\(\s*r?['"]\s*\\text\{[^}]*\}\s*['"]\s*[,)]"""
 
 _BANNED_PATTERNS: list[tuple[str, str]] = [
     (
@@ -65,10 +75,6 @@ _BANNED_PATTERNS: list[tuple[str, str]] = [
         "Text has no set_text() method in ManimGL. To update a counter label: create a new Text(...) and use FadeOut(old), FadeIn(new) or ReplacementTransform(old, new).",
     ),
     (
-        r"\bscale_factor\s*=",
-        "Remove `scale_factor`; FadeIn/FadeOut in ManimGL does not support it.",
-    ),
-    (
         r"\bCircumscribe\s*\(",
         "Use `FlashAround(...)` in ManimGL, not `Circumscribe(...)`.",
     ),
@@ -91,29 +97,9 @@ _BANNED_PATTERNS: list[tuple[str, str]] = [
         "self.play(ShowCreation(SurroundingRectangle(...))).",
     ),
     (
-        r"""Tex\(\s*r?['"]\s*\\text\{[^}]*\}\s*['"]\s*[,)]""",
+        _TEX_TEXT_WRAPPER_PATTERN,
         r"Remove outer \text{} wrapper from Tex(): use Tex(r'content') not Tex(r'\text{content}'). "
         r"\text{} inside a longer expression like Tex(r'f(x) = \text{label}') is fine.",
-    ),
-    (
-        # Tuple-swap on VGroup-style names: boxes[i], boxes[j] = boxes[j], boxes[i]
-        # Only matches known VGroup-style plural names. Excludes _list suffix (safe parallel lists).
-        r"\b(boxes|labels|cells|group|vgroup|mobs|mobjects|elems|elements|shapes|squares|circles|arrows)\b(?!_list)"
-        r"\[.+?\]\s*,\s*"
-        r"(boxes|labels|cells|group|vgroup|mobs|mobjects|elems|elements|shapes|squares|circles|arrows)\b(?!_list)"
-        r"\[.+?\]\s*=(?!=)",
-        "VGroup does not support item assignment. "
-        "Use a parallel Python list: box_list = list(boxes), then swap box_list[i], box_list[j]. "
-        "Never assign into the VGroup directly.",
-    ),
-    (
-        # Single-assign on VGroup-style name: boxes[i] = new_mob
-        # Excludes _list suffix names.
-        r"\b(boxes|labels|cells|group|vgroup|mobs|mobjects|elems|elements|shapes|squares|circles|arrows)\b(?!_list)"
-        r"\[.+?\]\s*=(?!=)\s*\S",
-        "VGroup does not support item assignment. "
-        "Use a parallel Python list: box_list = list(boxes). "
-        "Never assign into the VGroup directly.",
     ),
     (
         r"\bself\.set_camera_orientation\s*\(",
@@ -134,17 +120,237 @@ _BANNED_PATTERNS: list[tuple[str, str]] = [
     ),
 ]
 
-_BANNED_KWARGS = [
-    "tip_length",
-    "tip_width",
-    "tip_shape",
-    "corner_radius",
-    "scale_factor",
-    "target_position",
+# VGroup-style names the item-assignment ban applies to. The ban is decided by the
+# AST (_vgroup_item_assignment_errors), not by a regex on the spelling alone.
+_VGROUP_STYLE_NAMES = frozenset(
+    {
+        "boxes",
+        "labels",
+        "cells",
+        "group",
+        "vgroup",
+        "mobs",
+        "mobjects",
+        "elems",
+        "elements",
+        "shapes",
+        "squares",
+        "circles",
+        "arrows",
+    }
+)
+
+_VGROUP_ASSIGN_MESSAGE = (
+    "VGroup does not support item assignment. "
+    "Use a parallel Python list: box_list = list(boxes), then swap box_list[i], box_list[j]. "
+    "Never assign into the VGroup directly."
+)
+
+
+def _blank_spans(code: str, strings: bool) -> str:
+    """Return code with comments (and, if `strings`, string literals) blanked out.
+
+    Blanked characters become spaces and newlines are kept, so line numbers do not
+    move. Falls back to the raw source when it cannot be tokenized; the SyntaxError
+    itself is reported separately by validate_scene_code.
+    """
+    import io
+    import tokenize
+
+    fstring_start = getattr(tokenize, "FSTRING_START", None)
+    fstring_end = getattr(tokenize, "FSTRING_END", None)
+    offsets = [0]
+    for line in code.split("\n"):
+        offsets.append(offsets[-1] + len(line) + 1)
+
+    def _off(pos: tuple[int, int]) -> int:
+        return offsets[pos[0] - 1] + pos[1]
+
+    spans: list[tuple[int, int]] = []
+    open_fstring: tuple[int, int] | None = None
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(code).readline):
+            # Python 3.12+ splits an f-string into FSTRING_START ... FSTRING_END.
+            if fstring_start is not None and tok.type == fstring_start:
+                open_fstring = tok.start
+            elif fstring_end is not None and tok.type == fstring_end:
+                if strings and open_fstring is not None:
+                    spans.append((_off(open_fstring), _off(tok.end)))
+                open_fstring = None
+            elif open_fstring is None and (
+                tok.type == tokenize.COMMENT
+                or (strings and tok.type == tokenize.STRING)
+            ):
+                spans.append((_off(tok.start), _off(tok.end)))
+    except (tokenize.TokenError, SyntaxError):
+        return code
+
+    out = list(code)
+    for start, end in spans:
+        for k in range(start, min(end, len(out))):
+            if out[k] != "\n":
+                out[k] = " "
+    return "".join(out)
+
+
+def _is_plain_list_value(node: ast.AST | None) -> bool:
+    """True for an expression that certainly evaluates to a plain Python list."""
+    if isinstance(node, (ast.List, ast.ListComp)):
+        return True
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mult)):
+        return _is_plain_list_value(node.left) or _is_plain_list_value(node.right)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        return node.func.id in ("list", "sorted")
+    return False
+
+
+def _binding_key(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+_SCALE_FACTOR_MESSAGE = (
+    "Remove `scale_factor`; FadeIn/FadeOut in ManimGL does not support it "
+    "(use scale=). Indicate(..., scale_factor=) is valid and is not flagged."
+)
+
+
+def _scale_factor_errors(code: str) -> list[str]:
+    """Flag scale_factor= only on the callees _BANNED_KWARGS names (FadeIn/FadeOut).
+
+    Indicate takes scale_factor in ManimGL 1.7.2, so a spelling-based regex would
+    reject valid scenes; the AST decides, exactly as the autofix does.
+    """
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return []  # reported by the compile() check
+    banned = _BANNED_KWARGS["scale_factor"]
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and _callee_name(node) in banned:
+            if any(kw.arg == "scale_factor" for kw in node.keywords):
+                return [_SCALE_FACTOR_MESSAGE]
+    return []
+
+
+def _vgroup_item_assignment_errors(code: str) -> list[str]:
+    """Flag item assignment into a VGroup-style name unless it is provably a list.
+
+    `elements = [5, 3, 8, 1]` followed by a swap is plain Python and must pass; the
+    old regex banned the spelling of the name whatever it held. A name counts as a
+    plain list only when every binding of it in the file is a list literal,
+    comprehension or list(...). Parameters, VGroup(...) and anything else keep the
+    ban, because the file cannot prove the value supports item assignment.
+    """
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return []  # reported by the compile() check
+
+    bound: set[str] = set()
+    non_list: set[str] = set()
+
+    def _bind(target: ast.AST, value: ast.AST | None) -> None:
+        if isinstance(target, (ast.Tuple, ast.List)):
+            for elt in target.elts:
+                _bind(elt, None)
+            return
+        if isinstance(target, ast.Starred):
+            _bind(target.value, None)
+            return
+        key = _binding_key(target)
+        if key is None:
+            return
+        bound.add(key)
+        if not _is_plain_list_value(value):
+            non_list.add(key)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                _bind(target, node.value)
+        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)):
+            _bind(node.target, getattr(node, "value", None))
+        elif isinstance(
+            node, (ast.AugAssign, ast.For, ast.AsyncFor, ast.comprehension)
+        ):
+            _bind(node.target, None)
+        elif isinstance(node, ast.withitem) and node.optional_vars is not None:
+            _bind(node.optional_vars, None)
+        elif isinstance(node, ast.arg):
+            bound.add(node.arg)
+            non_list.add(node.arg)
+
+    def _item_targets(target: ast.AST):
+        if isinstance(target, (ast.Tuple, ast.List)):
+            for elt in target.elts:
+                yield from _item_targets(elt)
+        elif isinstance(target, ast.Starred):
+            yield from _item_targets(target.value)
+        elif isinstance(target, ast.Subscript):
+            yield target
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            for sub in _item_targets(target):
+                root = sub
+                while isinstance(root, ast.Subscript):
+                    root = root.value
+                key = _binding_key(root)
+                if key not in _VGROUP_STYLE_NAMES:
+                    continue
+                if key in bound and key not in non_list:
+                    continue
+                return [_VGROUP_ASSIGN_MESSAGE]
+    return []
+
+
+_ARROW_CALLEES = frozenset(
+    {"Arrow", "Vector", "DoubleArrow", "CurvedArrow", "CurvedDoubleArrow"}
+)
+_SURFACE_CALLEES = frozenset(
+    {
+        "Surface",
+        "ParametricSurface",
+        "Sphere",
+        "Torus",
+        "Cylinder",
+        "Cone",
+        "Disk3D",
+        "Prism",
+        "Cube",
+    }
+)
+
+# Kwargs ManimGL rejects, mapped to the only callees they are stripped from. A
+# kwarg of the same name on any other call is valid (Indicate(scale_factor=),
+# RoundedRectangle(corner_radius=)) or a plain name, and is left alone.
+_BANNED_KWARGS: dict[str, frozenset[str]] = {
+    "tip_length": _ARROW_CALLEES,
+    "tip_width": _ARROW_CALLEES,
+    "tip_shape": _ARROW_CALLEES,
+    # RoundedRectangle takes corner_radius; plain Rectangle-family constructors do not.
+    "corner_radius": frozenset({"Rectangle", "Square", "SurroundingRectangle"}),
+    # Fade takes scale=; Indicate really does take scale_factor=.
+    "scale_factor": frozenset({"FadeIn", "FadeOut"}),
+    "target_position": frozenset({"move_to"}),
     # ManimCommunity surface kwarg; ManimGL surfaces have no checkerboard concept.
     # Stripping it (rather than translating) lets the surface render in a solid color.
-    "checkerboard_colors",
-]
+    "checkerboard_colors": _SURFACE_CALLEES,
+}
+
+# ManimCommunity Axes size kwargs, renamed on the calls that take them.
+_AXES_CALLEES = frozenset({"Axes", "ThreeDAxes", "NumberPlane", "ComplexPlane"})
+_AXES_LENGTH_RENAMES: dict[str, str] = {
+    "x_length": "width",
+    "y_length": "height",
+    "z_length": "depth",
+}
 
 # Canonical color-role → ManimGL constant map. Single source of truth, mirrors
 # the palette table in generator/prompts/director_system.md. The Director shows
@@ -162,6 +368,71 @@ _COLOR_ROLE_CONSTANTS: dict[str, str] = {
     "ALERT": "RED",
 }
 
+
+def _callee_name(node: ast.Call) -> str | None:
+    """Name a call is made through: ``Foo(...)`` -> Foo, ``x.foo(...)`` -> foo."""
+    if isinstance(node.func, ast.Name):
+        return node.func.id
+    if isinstance(node.func, ast.Attribute):
+        return node.func.attr
+    return None
+
+
+def _edit_call_kwargs(
+    code: str,
+    plan: Callable[[ast.Call, str | None, ast.keyword], str | None],
+) -> tuple[str, list[tuple[str | None, str, str]]]:
+    """Strip or rename keyword arguments of specific calls, by AST source span.
+
+    ``plan(call, callee, keyword)`` returns None to leave the keyword alone, ""
+    to strip it, or a new name to rename it. Only the keyword's own span is
+    touched (plus one bordering comma on a strip), so comments, formatting and
+    every other call survive; nothing goes through ``ast.unparse``. A rename that
+    would duplicate a keyword already on the call is skipped. Fail-open: code
+    that does not parse is returned unchanged. Returns ``(code, edits)`` with one
+    ``(callee, old_kwarg, new_kwarg_or_"")`` per edit, in source order.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code, []
+    lines = _split_source_lines(code)
+    # (start, end, new_name, callee, old_name)
+    edits: list[tuple[int, int, str, str | None, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        callee = _callee_name(node)
+        present = {kw.arg for kw in node.keywords if kw.arg}
+        for kw in node.keywords:
+            if kw.arg is None:
+                continue
+            action = plan(node, callee, kw)
+            if action is None or (action and action in present):
+                continue
+            if kw.end_col_offset is None or kw.end_lineno is None:
+                continue
+            start = _line_col_to_offset(lines, kw.lineno, kw.col_offset)
+            end = _line_col_to_offset(lines, kw.end_lineno, kw.end_col_offset)
+            edits.append((start, end, action, callee, kw.arg))
+    if not edits:
+        return code, []
+    strips = [(s, e) for s, e, new, _, _ in edits if not new]
+    out = code
+    done: list[tuple[str | None, str, str]] = []
+    for start, end, new, callee, old in sorted(edits, key=lambda e: -e[0]):
+        # An edit inside a keyword that is itself being stripped is moot.
+        if any(s <= start and end <= e and (s, e) != (start, end) for s, e in strips):
+            continue
+        if new:
+            out = out[:start] + new + out[start + len(old) :]
+        else:
+            out = excise_span(out, start, end)
+        done.append((callee, old, new))
+    done.reverse()
+    return out, done
+
+
 # Registry of known-wrong kwarg names per method.
 # Maps method_name → {wrong_kwarg: correct_kwarg or None (strip)}.
 # Used by both apply_known_fixes (proactive) and apply_error_aware_fixes (reactive).
@@ -169,8 +440,10 @@ _KWARG_NORMALIZATION_REGISTRY: dict[str, dict[str, str | None]] = {
     "arrange_in_grid": {
         "rows": "n_rows",
         "cols": "n_cols",
-        "row_buff": "buff",
-        "col_buff": "buff",
+        # ManimGL splits the gap: h_buff between columns, v_buff between rows.
+        # Mapping both to buff produced a repeated keyword argument (#55 class).
+        "row_buff": "v_buff",
+        "col_buff": "h_buff",
     },
     "reorient": {
         "theta_deg": "theta_degrees",
@@ -182,34 +455,41 @@ _KWARG_NORMALIZATION_REGISTRY: dict[str, dict[str, str | None]] = {
 }
 
 
+def _apply_registry(
+    code: str,
+    method: str,
+    targets: Callable[[ast.Call], bool] | None = None,
+) -> tuple[str, list[tuple[str | None, str, str]]]:
+    """Apply every registry fix for ``method`` to the calls made through that name.
+
+    ``targets`` optionally narrows which of those calls are edited (the error-aware
+    path uses it to pin the call named by the traceback line).
+    """
+    norm = _KWARG_NORMALIZATION_REGISTRY[method]
+
+    def plan(call: ast.Call, callee: str | None, kw: ast.keyword) -> str | None:
+        if callee != method or kw.arg not in norm:
+            return None
+        if targets is not None and not targets(call):
+            return None
+        return norm[kw.arg] or ""
+
+    return _edit_call_kwargs(code, plan)
+
+
 def _fix_arrange_in_grid_kwargs(code: str) -> tuple[str, str | None]:
     """Normalize all wrong kwarg names on .arrange_in_grid() calls in one pass.
 
-    Correct signature: arrange_in_grid(n_rows=None, n_cols=None, buff=MED_SMALL_BUFF)
+    Correct signature: arrange_in_grid(n_rows=None, n_cols=None, buff=None,
+    h_buff=None, v_buff=None, ...).
     LLM commonly emits rows=, cols=, row_buff=, col_buff= simultaneously.
     """
-    norm = _KWARG_NORMALIZATION_REGISTRY["arrange_in_grid"]
-    applied = []
-    fixed = code
-    for wrong, right in norm.items():
-        if right is None:
-            new, count = re.subn(
-                rf"(\.arrange_in_grid\([^)]*?),?\s*{re.escape(wrong)}\s*=\s*[^,\)\n]+",
-                r"\1",
-                fixed,
-                flags=re.DOTALL,
-            )
-        else:
-            new, count = re.subn(
-                rf"(\.arrange_in_grid\([^)]*?)\b{re.escape(wrong)}\s*=",
-                rf"\1{right}=",
-                fixed,
-                flags=re.DOTALL,
-            )
-        if count:
-            applied.append(f"{wrong}= → {right or 'stripped'} ({count})")
-            fixed = new
-    if applied:
+    fixed, edits = _apply_registry(code, "arrange_in_grid")
+    if edits:
+        applied = [
+            f"{old}= → {new or 'stripped'} ({n})"
+            for (old, new), n in Counter((o, n) for _, o, n in edits).items()
+        ]
         return fixed, "fixed arrange_in_grid kwargs: " + ", ".join(applied)
     return code, None
 
@@ -224,12 +504,6 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
         (r"\bCreate\s*\(", "ShowCreation(", "Create -> ShowCreation"),
         (r"self\.camera\.frame", "self.frame", "self.camera.frame -> self.frame"),
         (r"\bCircumscribe\s*\(", "FlashAround(", "Circumscribe -> FlashAround"),
-        # ManimCommunity Axes uses x_length/y_length; ManimGL uses width/height
-        (r"\bx_length\s*=", "width=", "x_length -> width (ManimGL Axes)"),
-        (r"\by_length\s*=", "height=", "y_length -> height (ManimGL Axes)"),
-        # ManimCommunity ThreeDAxes uses z_length; ManimGL uses depth.
-        # (x_axis_config/y_axis_config are VALID ManimGL Axes kwargs — do NOT touch.)
-        (r"\bz_length\s*=", "depth=", "z_length -> depth (ManimGL ThreeDAxes)"),
         # NOTE: fill_color/fill_opacity are NOT rewritten. They are VALID on every
         # VMobject subclass (Square/Circle/Line/Tex/Text/... — vectorized_mobject.py
         # names them explicitly + has **kwargs). The old blanket fill_color->color /
@@ -259,6 +533,19 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
         (r"\bLIGHT_GREY\b", "GREY_A", "LIGHT_GREY -> GREY_A"),
         (r"\bLIGHT_GRAY\b", "GREY_A", "LIGHT_GRAY -> GREY_A"),
     ]
+
+    # ManimCommunity Axes uses x_length/y_length; ManimGL uses width/height, and
+    # ThreeDAxes z_length -> depth. (x_axis_config/y_axis_config are VALID ManimGL
+    # Axes kwargs: do NOT touch.) Renamed only as keywords of the Axes family, never
+    # as variable names or kwargs of other calls.
+    fixed, renamed = _edit_call_kwargs(
+        fixed,
+        lambda call, callee, kw: (
+            _AXES_LENGTH_RENAMES.get(kw.arg) if callee in _AXES_CALLEES else None
+        ),
+    )
+    for (old, new), count in Counter((o, n) for _, o, n in renamed).items():
+        applied.append(f"{old} -> {new} (ManimGL Axes) ({count})")
 
     for pattern, repl, label in replacements:
         new_fixed, count = re.subn(pattern, repl, fixed)
@@ -338,33 +625,14 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
         applied.append(f"frame y-bounds -> set_height ({count})")
         fixed = new_fixed
 
-    for kw in _BANNED_KWARGS:
-        # The value alternation must try bracketed forms before the scalar one.
-        # A plain [^,)\n]+ stops at the first comma, so a list value such as
-        # checkerboard_colors=[BLUE_D, BLUE_E] had only "[BLUE_D" removed and
-        # left ", BLUE_E]" orphaned inside the call — Surface(, BLUE_E], ...) —
-        # a SyntaxError. The auto-fixer was corrupting valid code while trying
-        # to repair it, and the project's own root-cause notes recorded exactly
-        # that mangling in a real run.
-        #
-        # Bracket contents are matched without spanning newlines, so a nested or
-        # unbalanced literal is left untouched rather than swallowing the rest
-        # of the call.
-        # A separator is consumed on exactly one side. Taking the leading comma
-        # when present, and otherwise the trailing one, keeps the argument list
-        # well-formed whether the banned kwarg is first, middle, or last —
-        # stripping neither leaves Surface(, v_range=...) when it was first.
-        value = (
-            r"(?:\[[^\[\]\n]*\]"  # list literal
-            r"|\([^()\n]*\)"  # tuple literal
-            r"|\{[^{}\n]*\}"  # dict or set literal
-            r"|[^,)\n]+)"  # plain scalar
-        )
-        pattern = rf",\s*{kw}\s*=\s*{value}|{kw}\s*=\s*{value}\s*,?\s*"
-        new_fixed, count = re.subn(pattern, "", fixed)
-        if count:
-            applied.append(f"removed {kw} ({count})")
-            fixed = new_fixed
+    fixed, stripped = _edit_call_kwargs(
+        fixed,
+        lambda call, callee, kw: (
+            "" if callee in _BANNED_KWARGS.get(kw.arg, ()) else None
+        ),
+    )
+    for kw_name, count in Counter(old for _, old, _ in stripped).items():
+        applied.append(f"removed {kw_name} ({count})")
 
     new_fixed, count = re.subn(
         r"Arrow\(\s*ORIGIN\s*,\s*ORIGIN(\s*[,)])",
@@ -614,100 +882,65 @@ def _fix_transform_matching_tex_on_text(code: str) -> tuple[str, str | None]:
 
 
 def _fix_become_inside_play(code: str) -> tuple[str, str | None]:
-    """Rewrite self.play(obj.become(...), ...) to the correct two-step form.
+    """Rewrite self.play(obj.become(...), ...) to self.play(obj.animate.become(...), ...).
 
     In ManimGL, become() returns self (the mutated Mobject), not an Animation.
     Passing it to self.play() is equivalent to self.play(obj) which crashes with
-    "Object X cannot be converted to an animation".
+    "Object X cannot be converted to an animation". `.animate.become(...)` is a
+    real animation, so the rewrite is made in place: only the `.animate` is
+    inserted, every other argument of the play call (other animations, run_time,
+    rate_func) stays exactly as written.
 
-    Correct pattern:
-        obj.become(SurroundingRectangle(...))
-        self.play(ShowCreation(obj), run_time=X)
-
-    Handles both single-line and multiline self.play() forms:
-        # single-line:
-        self.play(scan_rect.become(SurroundingRectangle(...)), run_time=0.2)
-        # multiline:
-        self.play(
-            scan_rect.become(SurroundingRectangle(...)),
-            run_time=0.2
-        )
+    Only arguments of self.play that are the become call itself (or an element
+    of a starred list/generator of them) are rewritten; a become() nested
+    deeper, e.g. inside Transform(a, b.become(c)), is a mobject there and stays.
     """
-    # Find self.play( ... var.become( ... ) ... ) using depth-aware scan on the full code.
-    # We do NOT use .animate.become() — that is a different (valid) pattern.
-    play_re = re.compile(r"([ \t]*)self\.play\(")
-    result_parts: list[str] = []
-    pos = 0
-    count = 0
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code, None
+    lines = _split_source_lines(code)
 
-    while pos < len(code):
-        m = play_re.search(code, pos)
-        if not m:
-            result_parts.append(code[pos:])
-            break
+    def is_bare_become(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "become"
+            and not (
+                isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "animate"
+            )
+        )
 
-        indent = m.group(1)
-        play_open = m.end() - 1  # index of '(' in self.play(
-
-        # Walk the full self.play(...) call depth-aware
-        depth = 1
-        i = play_open + 1
-        while i < len(code) and depth > 0:
-            if code[i] == "(":
-                depth += 1
-            elif code[i] == ")":
-                depth -= 1
-            i += 1
-        play_close = i - 1  # index of the closing ) of self.play(...)
-
-        play_interior = code[
-            play_open + 1 : play_close
-        ]  # everything inside self.play(...)
-
-        # Check if interior contains var.become( but NOT var.animate.become(
-        become_re = re.compile(r"(?<!\.)(?<!animate\.)(\w+)\.become\(")
-        bm = become_re.search(play_interior)
-
-        if not bm:
-            # No bare .become() — leave unchanged
-            result_parts.append(code[pos : play_close + 1])
-            pos = play_close + 1
+    inserts: list[int] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "play"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "self"
+        ):
             continue
-
-        var_name = bm.group(1)
-
-        # Extract the content of var.become(...) using depth-aware scan inside play_interior
-        become_open_in_interior = bm.end() - 1  # '(' of become(
-        bdepth = 1
-        bi = become_open_in_interior + 1
-        while bi < len(play_interior) and bdepth > 0:
-            if play_interior[bi] == "(":
-                bdepth += 1
-            elif play_interior[bi] == ")":
-                bdepth -= 1
-            bi += 1
-        become_close_in_interior = bi - 1
-        become_inner = play_interior[
-            become_open_in_interior + 1 : become_close_in_interior
-        ]
-
-        # Extract run_time kwarg from the play_interior (after the become call)
-        after_become = play_interior[become_close_in_interior + 1 :]
-        rt_match = re.search(r"run_time\s*=\s*[\d.]+", after_become)
-        rt_str = f", {rt_match.group(0)}" if rt_match else ""
-
-        # Emit: become() on its own line, then self.play(ShowCreation(...))
-        result_parts.append(code[pos : m.start()])  # code before this self.play
-        result_parts.append(f"{indent}{var_name}.become({become_inner})\n")
-        result_parts.append(f"{indent}self.play(ShowCreation({var_name}){rt_str})")
-        pos = play_close + 1
-        count += 1
-
-    if count:
-        return "".join(
-            result_parts
-        ), f"self.play(obj.become(...)) -> become()+ShowCreation ({count})"
-    return code, None
+        for arg in node.args:
+            if isinstance(arg, ast.Starred):
+                arg = arg.value
+                if isinstance(arg, (ast.ListComp, ast.GeneratorExp)):
+                    arg = arg.elt
+            if is_bare_become(arg) and arg.func.value.end_lineno is not None:
+                inserts.append(
+                    _line_col_to_offset(
+                        lines, arg.func.value.end_lineno, arg.func.value.end_col_offset
+                    )
+                )
+    if not inserts:
+        return code, None
+    for at in sorted(set(inserts), reverse=True):
+        code = code[:at] + ".animate" + code[at:]
+    return (
+        code,
+        f"self.play(obj.become(...)) -> obj.animate.become(...) ({len(inserts)})",
+    )
 
 
 def _inject_color_role_header(code: str) -> tuple[str, str | None]:
@@ -750,15 +983,13 @@ def _inject_color_role_header(code: str) -> tuple[str, str | None]:
         + "\n"
     )
 
-    # Insert after the last top-level import line so roles are module-scoped before
-    # the Scene class; if there are no imports, prepend at the very top.
-    lines = code.splitlines(keepends=True)
-    last_import = -1
-    for i, line in enumerate(lines):
-        if re.match(r"\s*(from\s+\S+\s+import|import\s+\S+)", line):
-            last_import = i
-    if last_import >= 0:
-        insert_at = last_import + 1
+    # Insert after the last TOP-LEVEL import statement (by AST position, so an
+    # import inside a method or a continuation line is never mistaken for one) so
+    # roles are module-scoped before the Scene class; with no imports, prepend.
+    imports = [n for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))]
+    if imports:
+        lines = _split_source_lines(code)
+        insert_at = imports[-1].end_lineno
         new_code = (
             "".join(lines[:insert_at]) + "\n" + header + "".join(lines[insert_at:])
         )
@@ -766,6 +997,58 @@ def _inject_color_role_header(code: str) -> tuple[str, str | None]:
         new_code = header + "\n" + code
 
     return new_code, f"injected color-role header ({', '.join(injected)})"
+
+
+def _replace_self_calls(
+    code: str, method: str, build: Callable[[str], str | None]
+) -> tuple[str, int]:
+    """Replace every ``self.<method>(...)`` call expression by its AST span.
+
+    ``build(args_source)`` returns the replacement text, or None when the call
+    cannot be translated; those calls become ``pass`` (when the call is a whole
+    statement) or ``None`` (inside a larger expression). Only the call expression
+    is replaced, so nested parentheses, multi-line calls and anything that follows
+    on the same line (``; next_statement``) are untouched. Fail-open on a syntax
+    error. Returns ``(code, replaced_count)``.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code, 0
+    lines = _split_source_lines(code)
+    statement_calls = {
+        id(n.value)
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)
+    }
+    edits: list[tuple[int, int, str]] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == method
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "self"
+            and node.end_lineno is not None
+        ):
+            continue
+        start = _line_col_to_offset(lines, node.lineno, node.col_offset)
+        end = _line_col_to_offset(lines, node.end_lineno, node.end_col_offset)
+        src = code[start:end]
+        args = src[src.index("(") + 1 : src.rindex(")")]
+        new = build(args)
+        if new is None:
+            new = "pass" if id(node) in statement_calls else "None"
+        edits.append((start, end, new))
+    # Outermost-last so nested matches (rare) cannot corrupt earlier offsets.
+    kept: list[tuple[int, int, str]] = []
+    for e in sorted(edits, key=lambda e: (e[0], -e[1])):
+        if kept and e[0] < kept[-1][1]:
+            continue
+        kept.append(e)
+    for start, end, new in reversed(kept):
+        code = code[:start] + new + code[end:]
+    return code, len(kept)
 
 
 def _fix_set_camera_orientation(code: str) -> tuple[str, str | None]:
@@ -778,22 +1061,19 @@ def _fix_set_camera_orientation(code: str) -> tuple[str, str | None]:
     phi and theta may appear in either order and with optional `* DEGREES` suffix.
     Values without `* DEGREES` are passed through as-is (assumed already in degrees).
 
-    If the call cannot be parsed cleanly, the entire line is removed to prevent
-    AttributeError crashes — the retry LLM will receive the banned-pattern message.
+    If the call cannot be parsed cleanly, only that call expression is replaced by
+    `pass` to prevent AttributeError crashes; the retry LLM receives the
+    banned-pattern message.
     """
-    outer = re.compile(r"self\.set_camera_orientation\(([^)]*)\)")
 
-    def _replacer(m: re.Match) -> str:
-        args = m.group(1)
+    def build(args: str) -> str | None:
         phi_m = re.search(r"\bphi\s*=\s*(-?[\d.]+)\s*(?:\*\s*DEGREES)?", args)
         theta_m = re.search(r"\btheta\s*=\s*(-?[\d.]+)\s*(?:\*\s*DEGREES)?", args)
         if phi_m and theta_m:
-            phi_val = phi_m.group(1)
-            theta_val = theta_m.group(1)
-            return f"self.frame.reorient({theta_val}, {phi_val})"
-        return "pass  # removed unparseable set_camera_orientation call"
+            return f"self.frame.reorient({theta_m.group(1)}, {phi_m.group(1)})"
+        return None
 
-    new, count = re.subn(outer, _replacer, code)
+    new, count = _replace_self_calls(code, "set_camera_orientation", build)
     if count:
         return new, f"set_camera_orientation -> self.frame.reorient ({count})"
     return code, None
@@ -809,18 +1089,17 @@ def _fix_begin_ambient_camera_rotation(code: str) -> tuple[str, str | None]:
     the spin lives on the frame as add_ambient_rotation(angular_speed=...). The
     ManimCommunity `rate=` kwarg maps to ManimGL `angular_speed=`. A bare call
     with no args maps to add_ambient_rotation() (its angular_speed defaults).
+    Multi-line calls and nested parentheses are handled (#57).
     """
-    outer = re.compile(r"self\.begin_ambient_camera_rotation\(([^)]*)\)")
 
-    def _replacer(m: re.Match) -> str:
-        args = m.group(1).strip()
+    def build(args: str) -> str:
         rate_m = re.search(r"\brate\s*=\s*(-?[\d.]+)", args)
         if rate_m:
             return f"self.frame.add_ambient_rotation(angular_speed={rate_m.group(1)})"
         # bare call or unrecognized args: use the default spin
         return "self.frame.add_ambient_rotation()"
 
-    new, count = re.subn(outer, _replacer, code)
+    new, count = _replace_self_calls(code, "begin_ambient_camera_rotation", build)
     if count:
         return new, f"begin_ambient_camera_rotation -> add_ambient_rotation ({count})"
     return code, None
@@ -834,56 +1113,121 @@ def _fix_reorient_wrong_kwargs(code: str) -> tuple[str, str | None]:
 
     The real param names are theta_degrees= and phi_degrees= (or positional).
     """
-    applied = []
-    fixed = code
-
-    for wrong, right in [
-        ("theta_deg=", "theta_degrees="),
-        ("phi_deg=", "phi_degrees="),
-    ]:
-        new, count = re.subn(re.escape(wrong), right, fixed)
-        if count:
-            applied.append(f"{wrong} -> {right} ({count})")
-            fixed = new
-
-    if applied:
+    fixed, edits = _apply_registry(code, "reorient")
+    if edits:
+        applied = [
+            f"{old}= -> {new}= ({n})"
+            for (old, new), n in Counter((o, n) for _, o, n in edits).items()
+        ]
         return fixed, "fixed reorient kwarg names: " + ", ".join(applied)
     return code, None
 
 
 def _strip_label_kwarg_from_numberline(code: str) -> tuple[str, str | None]:
     """Strip label= kwarg from NumberLine() — not a valid ManimGL parameter."""
-    new, count = re.subn(r"(NumberLine\([^)]*?),?\s*label\s*=\s*[^,\)]+", r"\1", code)
-    if count:
-        return new, f"removed label= from NumberLine ({count})"
+    new, edits = _apply_registry(code, "NumberLine")
+    if edits:
+        return new, f"removed label= from NumberLine ({len(edits)})"
     return code, None
 
 
 def _fix_broken_call_args(code: str) -> tuple[str, list[str]]:
-    """Fix LLM-generated calls with leading/trailing commas in argument lists.
+    """Strip the stray leading comma from calls like get_axis_labels(, y_label=...).
 
-    Patterns like get_axis_labels(, y_label=...) and reorient(, theta=...)
-    are SyntaxErrors. Strip the stray leading comma.
+    ``f(, arg)`` is a SyntaxError. Runs only on code that does not compile: valid
+    code is never touched (a trailing comma, as in the 1-tuple ``(title,)``, is
+    legal Python and changes meaning if removed).
     """
-    applied: list[str] = []
-    # Leading comma after open paren: func(, arg) → func(arg)
+    try:
+        ast.parse(code)
+    except SyntaxError:
+        pass
+    else:
+        return code, []
     new, count = re.subn(r"\(\s*,\s*", "(", code)
     if count:
-        applied.append(f"removed leading comma in call args ({count})")
-        code = new
-    # Trailing comma before close paren when nothing follows: func(arg,) → func(arg)
-    new, count = re.subn(r",\s*\)", ")", code)
-    if count:
-        applied.append(f"removed trailing comma in call args ({count})")
-        code = new
-    # reorient(, theta=X * DEGREES) → reorient() — can't salvage partial 3D args
-    new, count = re.subn(
-        r"\.reorient\(\s*,\s*theta\s*=\s*[^)]+\)", ".reorient(-45, 70)", code
-    )
-    if count:
-        applied.append(f"fixed broken reorient call ({count})")
-        code = new
-    return code, applied
+        return new, [f"removed leading comma in call args ({count})"]
+    return code, []
+
+
+def _user_traceback_line(stderr: str) -> int | None:
+    """Line of the innermost traceback frame that is in the user's scene file."""
+    line = None
+    for m in re.finditer(r'File "([^"]+)", line (\d+)', stderr):
+        path = m.group(1).replace("\\", "/")
+        if "manimlib" in path or "site-packages" in path or "dist-packages" in path:
+            continue
+        line = int(m.group(2))
+    return line
+
+
+def _fix_unexpected_kwarg(
+    code: str,
+    bad_kw: str,
+    method: str | None,
+    good_kw: str,
+    tb_line: int | None,
+    applied: list[str],
+) -> str:
+    """Repair one "unexpected keyword argument" error on the call that raised it.
+
+    Known-wrong kwargs of ``method`` are fixed from the registry first. Otherwise
+    the kwarg is renamed to ``good_kw`` (the traceback's "Did you mean") or, with no
+    hint, stripped. Only keywords of the failing call are touched, found as: the
+    call made through ``method``; else (the error can come from a base-class
+    ``__init__``) a call spanning the traceback line; else the only call in the file
+    that carries the kwarg. A same-named kwarg on any other call is never edited.
+    """
+    if method and method in _KWARG_NORMALIZATION_REGISTRY:
+        # Fix ALL known wrong kwargs for this method in one pass, not just the one
+        # named in the error. This prevents the one-kwarg-at-a-time peeling pattern.
+        new_code, edits = _apply_registry(code, method)
+        if edits:
+            for (old, new), n in Counter((o, n) for _, o, n in edits).items():
+                applied.append(f"registry fix: {old}= → {new or 'stripped'} ({n})")
+            return new_code
+
+    def spans_tb_line(call: ast.Call) -> bool:
+        end = getattr(call, "end_lineno", call.lineno)
+        return tb_line is not None and call.lineno <= tb_line <= end
+
+    carriers = [
+        n
+        for n in ast.walk(_safe_parse(code))
+        if isinstance(n, ast.Call) and any(k.arg == bad_kw for k in n.keywords)
+    ]
+    scopes: list[Callable[[ast.Call, str | None], bool]] = []
+    if method:
+        scopes.append(lambda call, callee: callee == method)
+    else:
+        scopes.append(lambda call, callee: True)
+    scopes.append(lambda call, callee: spans_tb_line(call))
+    if len(carriers) == 1:
+        # Nodes differ between parses, so identify the call by its position.
+        at = (carriers[0].lineno, carriers[0].col_offset)
+        scopes.append(lambda call, callee: (call.lineno, call.col_offset) == at)
+
+    for scope in scopes:
+        new_code, edits = _edit_call_kwargs(
+            code,
+            lambda call, callee, kw, scope=scope: (
+                good_kw if kw.arg == bad_kw and scope(call, callee) else None
+            ),
+        )
+        if edits:
+            if good_kw:
+                applied.append(f"renamed kwarg '{bad_kw}' → '{good_kw}' ({len(edits)})")
+            else:
+                applied.append(f"removed unexpected kwarg '{bad_kw}' ({len(edits)})")
+            return new_code
+    return code
+
+
+def _safe_parse(code: str) -> ast.AST:
+    try:
+        return ast.parse(code)
+    except SyntaxError:
+        return ast.Module(body=[], type_ignores=[])
 
 
 def apply_error_aware_fixes(code: str, stderr: str) -> tuple[str, list[str]]:
@@ -913,49 +1257,27 @@ def apply_error_aware_fixes(code: str, stderr: str) -> tuple[str, list[str]]:
     if "unexpected keyword argument" in stderr:
         kw_match = re.search(r"got an unexpected keyword argument '(\w+)'", stderr)
         hint_match = re.search(r"Did you mean '(\w+)'\?", stderr)
+        # "Arrow.__init__() got ..." names the class, "Mobject.arrange_in_grid()
+        # got ..." names the method; take the callable the user wrote, not __init__.
         method_match = re.search(
-            r"(\w+)\(\) got an unexpected keyword argument", stderr
+            r"(?:(\w+)\.)?(\w+)\(\) got an unexpected keyword argument", stderr
         )
         if kw_match:
             bad_kw = kw_match.group(1)
-            method = method_match.group(1) if method_match else None
+            method = None
+            if method_match:
+                owner, name = method_match.groups()
+                method = owner if name == "__init__" else name
             # font_size= is a valid kwarg on Tex() (handled internally) — do not strip or convert.
-            if bad_kw == "font_size":
-                pass
-            elif method and method in _KWARG_NORMALIZATION_REGISTRY:
-                # Fix ALL known wrong kwargs for this method in one pass — not just the one
-                # named in the error. This prevents the one-kwarg-at-a-time peeling pattern.
-                norm = _KWARG_NORMALIZATION_REGISTRY[method]
-                for wrong, right in norm.items():
-                    if right is None:
-                        new_fixed, count = re.subn(
-                            rf",?\s*{re.escape(wrong)}\s*=\s*[^,\)\n]+", "", fixed
-                        )
-                    else:
-                        new_fixed, count = re.subn(
-                            rf"\b{re.escape(wrong)}\s*=", f"{right}=", fixed
-                        )
-                    if count:
-                        applied.append(
-                            f"registry fix: {wrong}= → {right or 'stripped'} ({count})"
-                        )
-                        fixed = new_fixed
-            elif hint_match:
-                # Rename, don't strip — the traceback tells us what the right name is.
-                good_kw = hint_match.group(1)
-                new_fixed, count = re.subn(
-                    rf"\b{re.escape(bad_kw)}\s*=",
-                    f"{good_kw}=",
+            if bad_kw != "font_size":
+                fixed = _fix_unexpected_kwarg(
                     fixed,
+                    bad_kw,
+                    method,
+                    hint_match.group(1) if hint_match else "",
+                    _user_traceback_line(stderr),
+                    applied,
                 )
-                if count:
-                    applied.append(f"renamed kwarg '{bad_kw}' → '{good_kw}' ({count})")
-                    fixed = new_fixed
-            else:
-                new_fixed, count = re.subn(rf",?\s*{bad_kw}\s*=\s*[^,\)\n]+", "", fixed)
-                if count:
-                    applied.append(f"removed unexpected kwarg '{bad_kw}' ({count})")
-                    fixed = new_fixed
 
     if "NameError: name '" in stderr:
         name_match = re.search(r"NameError: name '(\w+)' is not defined", stderr)
@@ -972,16 +1294,14 @@ def apply_error_aware_fixes(code: str, stderr: str) -> tuple[str, list[str]]:
                 "LIGHT_BLUE": "BLUE_A",
                 "LIGHT_GREEN": "GREEN_A",
                 "LIGHT_RED": "RED_A",
-                "DARK_BROWN": "GREY_D",
-                "MAROON": "MAROON_B",
-                "TEAL": "TEAL_C",
-                "PURPLE": "PURPLE_B",
-                "PINK": "PINK",
                 # Common model mistake: this easing name is not present in ManimGL
                 "slow_into_fast": "smooth",
             }
             if bad_name in _name_fixes:
-                fixed = fixed.replace(bad_name, _name_fixes[bad_name])
+                # Whole identifiers only: TEAL_A must not become TEAL_C_A.
+                fixed = re.sub(
+                    rf"\b{re.escape(bad_name)}\b", _name_fixes[bad_name], fixed
+                )
                 applied.append(f"{bad_name} -> {_name_fixes[bad_name]} (error-aware)")
 
     if "TypeError" in stderr and "color_gradient" in stderr:
@@ -1036,14 +1356,25 @@ def validate_scene_code(code: str) -> list[str]:
     """
     errors: list[str] = []
 
+    # compile(), not ast.parse(): only the compiler rejects errors such as a
+    # repeated keyword argument or `return` outside a function.
     try:
-        ast.parse(code)
+        compile(code, "<scene>", "exec", dont_inherit=True)
     except SyntaxError as exc:
         errors.append(f"SyntaxError: {exc.msg} (line {exc.lineno})")
 
+    # Scan code, not prose: a comment or docstring that mentions a banned API
+    # ("# avoid boxes[i] = x") must not block a render.
+    code_only = _blank_spans(code, strings=True)
+    no_comments = _blank_spans(code, strings=False)
     for pattern, message in _BANNED_PATTERNS:
-        if re.search(pattern, code):
+        view = no_comments if pattern == _TEX_TEXT_WRAPPER_PATTERN else code_only
+        if re.search(pattern, view):
             errors.append(message)
+
+    errors.extend(_vgroup_item_assignment_errors(code))
+
+    errors.extend(_scale_factor_errors(code))
 
     errors.extend(_detect_tmt_on_text(code))
 
@@ -1468,32 +1799,44 @@ def _fix_y_axis_include_numbers(code: str) -> tuple[str, str | None]:
     return code, None
 
 
-def _shadow_log_unknown_symbols(code: str) -> list[str]:
-    """Report-only (#30): log manimlib symbols the allowlist *would* flag.
+def _check_unknown_symbols(code: str) -> list[str]:
+    """Unknown bare names (#30, #60): precheck errors, or a log line in report mode.
 
-    Pure shadow mode this cycle — it NEVER blocks the render, never adds to
-    ``errors`` or ``layout_warnings``, and never degrades output. The goal is to
-    land the allowlist mechanism + shadow logging so enforcement can be gated on
-    real data later. Fail-open: when ``manimlib`` is unavailable (CI) the check
-    is a no-op. Returns the flagged names (for tests); callers ignore the value.
+    A name that is not defined in the scene, not a builtin and not exported by
+    ManimGL would raise NameError at render time, so it is returned as precheck
+    errors (with real alternatives) and the retry path repairs it before a render
+    is spent. ``MANIMGEN_UNKNOWN_SYMBOLS=report`` is the kill switch: findings are
+    only logged and no error is returned. Fail-open when no symbol table exists.
     """
+    from manimgen.validator import manimlib_symbols as ms
+
+    findings = ms.find_unknown_names(code)
+    if not findings:
+        return []
+    names = [n for n, _ in findings]
+    import logging
+
+    enforce = ms.enforcement_enabled()
+    logging.getLogger(__name__).info(
+        "[codeguard][unknown-symbols] %d unknown symbol(s) (%s): %s",
+        len(names),
+        "blocking, render skipped" if enforce else "report-only, render NOT blocked",
+        ", ".join(names),
+    )
+    # Persist so real runs accumulate evidence (see evidence_log docstring).
+    from manimgen.validator.evidence_log import log_event
+
+    log_event(
+        "unknown_symbols", count=len(names), symbols=sorted(names), enforced=enforce
+    )
+    return ms.format_unknown_symbol_errors(findings) if enforce else []
+
+
+def _shadow_log_unknown_symbols(code: str) -> list[str]:
+    """Names the unknown-symbol check flags, with no logging or enforcement."""
     from manimgen.validator.manimlib_symbols import shadow_check_allowlist
 
-    flagged = shadow_check_allowlist(code)
-    if flagged:
-        import logging
-
-        logging.getLogger(__name__).info(
-            "[codeguard][allowlist-shadow] would flag %d unknown symbol(s) "
-            "(report-only, render NOT blocked): %s",
-            len(flagged),
-            ", ".join(flagged),
-        )
-        # Persist so real runs accumulate evidence (see evidence_log docstring).
-        from manimgen.validator.evidence_log import log_event
-
-        log_event("shadow_unknown_symbols", count=len(flagged), symbols=sorted(flagged))
-    return flagged
+    return shadow_check_allowlist(code)
 
 
 def _shadow_log_invalid_kwargs(code: str) -> list:
@@ -1579,18 +1922,18 @@ def _precheck_and_autofix_verbose(code: str) -> tuple[str, list[str]]:
 
 def precheck_and_autofix_file(scene_path: str) -> dict[str, Any]:
     """Read a scene file, apply auto-fixes, write back, return result dict."""
-    with open(scene_path) as f:
+    with open(scene_path, encoding="utf-8") as f:
         code = f.read()
 
     fixed, applied_fixes = _precheck_and_autofix_verbose(code)
     if fixed != code:
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(fixed)
 
-    _shadow_log_unknown_symbols(fixed)
     _shadow_log_invalid_kwargs(fixed)
 
     errors = validate_scene_code(fixed)
+    errors.extend(_check_unknown_symbols(fixed))
     layout_warnings = run_invariant_warnings(fixed)
     layout_warnings.extend(_check_layout_smells(fixed))
     layout_warnings.extend(_check_loop_timing_smells(fixed))

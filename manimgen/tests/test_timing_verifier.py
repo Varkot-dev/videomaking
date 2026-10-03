@@ -492,7 +492,7 @@ class TestApplyTimingGate:
             self.wait(1.0)
         """)
         scene_path = str(tmp_path / "scene.py")
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(code)
 
         out_code, warnings = apply_timing_gate(code, scene_path, [2.0])
@@ -519,7 +519,7 @@ class TestApplyTimingGate:
             self.play(Write(title), run_time=rt)
         """)
         scene_path = str(tmp_path / "scene.py")
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(code)
 
         out_code, warnings = apply_timing_gate(code, scene_path, [5.0])

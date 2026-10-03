@@ -10,6 +10,9 @@ from drifting apart on this.
 
 from __future__ import annotations
 
+import pytest
+
+from manimgen import paths
 from manimgen.validator.render_command import build_manimgl_command
 
 
@@ -36,3 +39,29 @@ class TestBuildManimglCommand:
         cmd = build_manimgl_command("scene.py", "MyScene")
         # render_quality_flag() returns e.g. '--hd'
         assert any(part.startswith("--") and part not in ("--fps",) for part in cmd)
+
+
+class TestQualityFlagMapping:
+    """manimgl only accepts -l, -m, --hd and --uhd; "--l" is not a flag."""
+
+    @pytest.mark.parametrize(
+        "name,flag",
+        [
+            ("l", "-l"),
+            ("low", "-l"),
+            ("m", "-m"),
+            ("medium", "-m"),
+            ("hd", "--hd"),
+            ("HD", "--hd"),
+            ("uhd", "--uhd"),
+            ("4k", "--uhd"),
+        ],
+    )
+    def test_maps_to_a_real_manimgl_flag(self, monkeypatch, name, flag):
+        monkeypatch.setitem(paths._RENDERING, "quality", name)
+        assert paths.render_quality_flag() == flag
+
+    def test_unknown_quality_fails_loudly(self, monkeypatch):
+        monkeypatch.setitem(paths._RENDERING, "quality", "ultra")
+        with pytest.raises(ValueError, match="rendering.quality"):
+            paths.render_quality_flag()

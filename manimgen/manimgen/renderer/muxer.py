@@ -18,7 +18,8 @@ import os
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from manimgen.utils import safe_probe_duration
+from manimgen import paths
+from manimgen.utils import atomic_output, safe_probe_duration
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +30,21 @@ _WARN_THRESHOLD_SECONDS = 1.0
 # The pipeline's dark background (matches the -c "#1C1C1C" render flag). Used to
 # synthesize a placeholder clip when a cue's render produced no video stream.
 _BG_COLOR = "#1C1C1C"
-_SYNTH_RESOLUTION = "1920x1080"
-_SYNTH_FPS = 60
+# Placeholder resolution and fps come from config (paths.render_resolution /
+# paths.render_fps) so it matches the rest of the render.
+
+# Re-encode quality for the freeze and placeholder paths; the stream-copy path
+# is lossless. Matches the cutter's settings so a re-encode adds no visible loss.
+_REENCODE_ARGS = [
+    "-c:v",
+    "libx264",
+    "-preset",
+    "fast",
+    "-crf",
+    "18",
+    "-pix_fmt",
+    "yuv420p",
+]
 
 # Module-level mismatch log — each entry is a dict with video_path, diff, cue info.
 # The CLI reads this at the end of a run and prints a summary.
@@ -124,9 +138,25 @@ def mux_audio_video(video_path: str, audio_path: str, output_path: str) -> str:
         _mux_synth_background(audio_path, output_path, audio_dur)
         return output_path
 
-    if audio_dur > video_dur:
+    # Audio is usually a little longer than video. A gap under one frame is not
+    # worth a lossy re-encode (a freeze of less than a frame is invisible), so
+    # only freeze when the gap is at least one frame.
+    one_frame = 1.0 / max(1, paths.render_fps())
+    if audio_dur - video_dur >= one_frame:
+        logger.info(
+            "[muxer] %s: freeze-frame branch (audio %.3fs > video %.3fs)",
+            os.path.basename(output_path),
+            audio_dur,
+            video_dur,
+        )
         _mux_freeze_video(video_path, audio_path, output_path, audio_dur)
     else:
+        logger.info(
+            "[muxer] %s: stream-copy branch (video %.3fs, audio %.3fs)",
+            os.path.basename(output_path),
+            video_dur,
+            audio_dur,
+        )
         _mux_pad_audio(video_path, audio_path, output_path, video_dur)
 
     return output_path
@@ -191,8 +221,7 @@ def _mux_freeze_video(
         "[v]",
         "-map",
         "1:a",
-        "-c:v",
-        "libx264",
+        *_REENCODE_ARGS,
         "-c:a",
         "aac",
         "-t",
@@ -213,21 +242,22 @@ def _mux_synth_background(
     render). Produces a clean dark clip lasting the full narration so the section
     is preserved with its audio, rather than crashing the freeze path.
     """
+    resolution = paths.render_resolution()
+    fps = paths.render_fps()
     cmd = [
         "ffmpeg",
         "-y",
         "-f",
         "lavfi",
         "-i",
-        f"color=c={_BG_COLOR}:s={_SYNTH_RESOLUTION}:r={_SYNTH_FPS}:d={audio_dur:.6f}",
+        f"color=c={_BG_COLOR}:s={resolution}:r={fps}:d={audio_dur:.6f}",
         "-i",
         audio_path,
         "-map",
         "0:v",
         "-map",
         "1:a",
-        "-c:v",
-        "libx264",
+        *_REENCODE_ARGS,
         "-c:a",
         "aac",
         "-t",
@@ -265,6 +295,8 @@ def _has_video_stream(path: str) -> bool:
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
         )
     except (OSError, subprocess.SubprocessError):
@@ -295,6 +327,8 @@ def _get_duration(path: str) -> float:
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
             timeout=30,
         )
@@ -324,17 +358,36 @@ _FFMPEG_TIMEOUT_SECONDS = 300
 
 
 def _run(cmd: list[str], output_path: str) -> None:
-    try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=_FFMPEG_TIMEOUT_SECONDS
-        )
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(
-            f"[muxer] ffmpeg timed out after {_FFMPEG_TIMEOUT_SECONDS}s "
-            f"for {output_path}"
-        )
-    if result.returncode != 0:
-        raise RuntimeError(f"[muxer] ffmpeg failed for {output_path}:\n{result.stderr}")
+    """Run ffmpeg (``output_path`` must be the last argv entry) atomically.
+
+    ffmpeg writes to a temp file that replaces ``output_path`` only on exit
+    code 0 with output present, so a timeout, kill or failure never leaves a
+    partial file at the final path (#76).
+    """
+    assert cmd[-1] == output_path
+    with atomic_output(output_path) as tmp:
+        try:
+            result = subprocess.run(
+                [*cmd[:-1], tmp],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=_FFMPEG_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                f"[muxer] ffmpeg timed out after {_FFMPEG_TIMEOUT_SECONDS}s "
+                f"for {output_path}"
+            )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"[muxer] ffmpeg failed for {output_path}:\n{result.stderr}"
+            )
+        if not os.path.exists(tmp):
+            raise RuntimeError(
+                f"[muxer] ffmpeg exited 0 but wrote no output for {output_path}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -345,8 +398,6 @@ _MAX_PARALLEL_CUTS = min(4, (os.cpu_count() or 1))
 
 
 def _cut_one(video_path: str, start: float, dur: float, out_path: str, i: int) -> str:
-    from manimgen import paths as _paths
-
     cmd = [
         "ffmpeg",
         "-y",
@@ -365,26 +416,35 @@ def _cut_one(video_path: str, start: float, dur: float, out_path: str, i: int) -
         "-pix_fmt",
         "yuv420p",
         "-r",
-        str(_paths.render_fps()),
+        str(paths.render_fps()),
         "-an",
-        out_path,
     ]
-    try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=_FFMPEG_TIMEOUT_SECONDS
-        )
-    except subprocess.TimeoutExpired:
-        logger.error(
-            "[cutter] FFmpeg timed out after %ds for cue %d",
-            _FFMPEG_TIMEOUT_SECONDS,
-            i,
-        )
-        raise RuntimeError(
-            f"cutter timed out after {_FFMPEG_TIMEOUT_SECONDS}s for cue {i}"
-        )
-    if result.returncode != 0:
-        logger.error("[cutter] FFmpeg failed for cue %d: %s", i, result.stderr[-500:])
-        raise RuntimeError(f"cutter failed for cue {i}: {result.stderr[-200:]}")
+    with atomic_output(out_path) as tmp:
+        try:
+            result = subprocess.run(
+                [*cmd, tmp],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=_FFMPEG_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            logger.error(
+                "[cutter] FFmpeg timed out after %ds for cue %d",
+                _FFMPEG_TIMEOUT_SECONDS,
+                i,
+            )
+            raise RuntimeError(
+                f"cutter timed out after {_FFMPEG_TIMEOUT_SECONDS}s for cue {i}"
+            )
+        if result.returncode != 0:
+            logger.error(
+                "[cutter] FFmpeg failed for cue %d: %s", i, result.stderr[-500:]
+            )
+            raise RuntimeError(f"cutter failed for cue {i}: {result.stderr[-200:]}")
+        if not os.path.exists(tmp):
+            raise RuntimeError(f"cutter produced no output for cue {i}")
     logger.info(
         "[cutter] Cut cue %d: %.2f–%.2f → %s",
         i,

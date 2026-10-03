@@ -151,6 +151,10 @@ def _resolves(rel: str) -> bool:
     """
     if (REPO_ROOT / rel).exists():
         return True
+    # Git-root-relative: the README GitHub renders links `manimgen/docs/X.md`
+    # from the repository root, and that is what a visitor's click resolves.
+    if (GIT_ROOT / rel).exists():
+        return True
     # Package-relative: `validator/retry.py` -> `manimgen/validator/retry.py`
     if (REPO_ROOT / "manimgen" / rel).exists():
         return True
@@ -323,7 +327,7 @@ def test_readme_example_count_matches_examples_dir() -> None:
     README claimed "5 hand-written ManimGL scenes" against an `examples/`
     directory holding 32.
     """
-    actual = len(list((REPO_ROOT / "examples").glob("*.py")))
+    actual = len(list((REPO_ROOT / "manimgen" / "examples").glob("*.py")))
     text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
 
     stated = re.findall(
@@ -390,3 +394,15 @@ def test_config_does_not_advertise_unimplemented_tts_engines() -> None:
                 "implementation. Mark it UNIMPLEMENTED in a comment or "
                 "implement it."
             )
+
+
+@pytest.mark.unit
+def test_readme_linux_latex_packages_cover_the_tex_template() -> None:
+    """ManimGL's default tex template loads dsfont and physics and shells out to dvisvgm.
+
+    The README once listed only texlive-latex-extra, so every Tex() scene on a
+    fresh Linux box died with `LatexError: File dsfont.sty not found`.
+    """
+    text = (GIT_ROOT / "README.md").read_text(encoding="utf-8")
+    for needed in ("texlive-fonts-extra", "texlive-science", "dvisvgm"):
+        assert needed in text, f"README Linux LaTeX instructions must mention {needed}"

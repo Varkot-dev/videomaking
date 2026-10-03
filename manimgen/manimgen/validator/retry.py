@@ -2,23 +2,18 @@ import enum
 import logging
 import os
 import re
-import subprocess
 
 from manimgen import paths
 from manimgen.llm import chat
+from manimgen.probes.overlap_report import overlap_issues
 from manimgen.utils import strip_fencing
 from manimgen.validator.codeguard import (
     apply_error_aware_fixes,
     precheck_and_autofix_file,
 )
-from manimgen.validator.env import get_render_env
 from manimgen.validator.layout_checker import check_layout
-from manimgen.validator.render_command import build_manimgl_command
-from manimgen.validator.runner import (
-    _find_rendered_video,
-    _is_3d_scene,
-    _render_floor,
-)
+from manimgen.validator.render_command import run_manimgl
+from manimgen.validator.scene_ast_gate import inspect_scene_code
 from manimgen.validator.timing_verifier import auto_fix_timing, verify_timing
 
 logger = logging.getLogger(__name__)
@@ -86,6 +81,17 @@ def reset_run_budget() -> None:
 def run_budget_used() -> int:
     """Paid retry LLM calls consumed so far in this run, across all sections."""
     return _run_llm_calls_used
+
+
+# Visual defects a shipped render is known to have, keyed by video path. Set
+# whenever retry_scene accepts a render despite defects, cleared on a clean
+# pass, so the caller can report ACCEPTED_WITH_DEFECTS instead of OK.
+_accepted_issues: dict[str, list[str]] = {}
+
+
+def accepted_issues(video_path: str | None) -> list[str]:
+    """Known visual defects of a render retry_scene shipped (empty if clean)."""
+    return list(_accepted_issues.get(video_path or "", []))
 
 
 def _consume_run_budget(category: str) -> bool:
@@ -256,7 +262,7 @@ def apply_timing_gate(
 
     fixed, fixes_applied = auto_fix_timing(code, cue_durations)
     if fixes_applied:
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(fixed)
         for fix in fixes_applied:
             print(f"[retry] timing auto-fix: {fix}")
@@ -305,6 +311,13 @@ def retry_scene(
     # one bad LLM fix between attempt 2 and 5 drags the section to fallback.
     best_video_path: str | None = None
     best_issue_count: int = 10**9
+    best_issues: list[str] = []
+
+    def _ship_best(fallback_path: str | None) -> tuple[bool, str | None]:
+        path = best_video_path or fallback_path
+        if path:
+            _accepted_issues[path] = list(best_issues)
+        return True, path
 
     # Timing pass on the initial code — catches freeze-frame tails before the
     # first render attempt at zero cost. (I6 · stable rhythm, I10 · narration contract)
@@ -359,6 +372,18 @@ def retry_scene(
             combined_issues = list(frame_issues)
             defective_frames: list[str] = []
 
+            # #97: text drawn over text, measured inside the render by the
+            # zero-cost overlap probe. A hard defect like the ones above, so it
+            # goes through the same bounded visual fix (budget, signature
+            # dedup, best-render acceptance).
+            overlaps = result.get("overlaps") or ()
+            if overlaps:
+                print(
+                    f"[retry] Attempt {attempt}/{MAX_RETRIES} has "
+                    f"{len(overlaps)} text overlap(s) (render probe)."
+                )
+                combined_issues.extend(overlap_issues(overlaps))
+
             if freezes:
                 print(
                     f"[retry] Attempt {attempt}/{MAX_RETRIES} has "
@@ -391,6 +416,7 @@ def retry_scene(
                 defective_frames = layout.get("frames", [])
 
             if not combined_issues and not layout_unverified:
+                _accepted_issues.pop(result["video_path"], None)
                 return True, result["video_path"]
 
             # Record this render as the best-so-far if it has fewer issues
@@ -400,6 +426,7 @@ def retry_scene(
             if issue_count < best_issue_count:
                 best_video_path = result["video_path"]
                 best_issue_count = issue_count
+                best_issues = list(combined_issues)
 
             # #33: UNVERIFIED render (layout LLM was down) with NO concrete
             # frame/timing defect. There is nothing actionable to feed an LLM
@@ -414,7 +441,7 @@ def retry_scene(
                     "UNVERIFIED (LLM unavailable) and no frame/timing defects — "
                     "shipping render unverified (bounded, no clean-pass claim)."
                 )
-                return True, best_video_path or result["video_path"]
+                return _ship_best(result["video_path"])
 
             # Scene rendered but has visual defects. Feed structured feedback
             # back into the retry loop if budget allows.
@@ -431,7 +458,7 @@ def retry_scene(
                 print(
                     "[retry] Accepting video despite visual issues (budget or attempt limit reached)."
                 )
-                return True, best_video_path or result["video_path"]
+                return _ship_best(result["video_path"])
 
             # Dedup: if we already paid for a vision call on this exact set of
             # defects and they came back unchanged, the model has nothing new
@@ -443,7 +470,7 @@ def retry_scene(
                     "already failed to fix it; accepting best render instead of "
                     "paying again."
                 )
-                return True, best_video_path or result["video_path"]
+                return _ship_best(result["video_path"])
 
             # Global per-run ceiling across ALL sections (MAX_TOTAL_LLM_CALLS).
             if not _consume_run_budget("visual"):
@@ -451,20 +478,23 @@ def retry_scene(
                     "[retry] Global run LLM budget exhausted — accepting best "
                     "render instead of requesting a visual fix."
                 )
-                return True, best_video_path or result["video_path"]
+                return _ship_best(result["video_path"])
 
             print("[retry] Requesting visual fix from LLM...")
+            previous_code = code
             code = _request_visual_fix(
                 code, "\n".join(combined_issues), system_prompt, defective_frames
             )
             section_visual_llm_calls_used += 1
             seen_visual_signatures.add(visual_signature)
-            with open(scene_path, "w") as f:
+            with open(scene_path, "w", encoding="utf-8") as f:
                 f.write(code)
             precheck_and_autofix_file(scene_path)
             # Always reload — precheck may have applied auto-fixes in-place
-            with open(scene_path) as f:
+            with open(scene_path, encoding="utf-8") as f:
                 code = f.read()
+            if _discard_unsafe_fix(scene_path, code, previous_code, "visual"):
+                return _ship_best(result["video_path"])
             # Timing pass — catch timing bugs in the LLM's visual fix
             if cue_durations:
                 code, tw = apply_timing_gate(code, scene_path, cue_durations)
@@ -478,9 +508,14 @@ def retry_scene(
 
         # Token-free deterministic fixes first.
         local_fixed, local_applied = apply_error_aware_fixes(code, result["stderr"])
-        if local_applied and local_fixed != code:
+        if local_applied and local_fixed != code and _breaks_compile(code, local_fixed):
+            print(
+                f"[retry] Attempt {attempt}/{MAX_RETRIES} discarded local fixes "
+                f"that left the scene uncompilable: {', '.join(local_applied)}"
+            )
+        elif local_applied and local_fixed != code:
             code = local_fixed
-            with open(scene_path, "w") as f:
+            with open(scene_path, "w", encoding="utf-8") as f:
                 f.write(code)
             print(
                 f"[retry] Attempt {attempt}/{MAX_RETRIES} applied local fixes: {', '.join(local_applied)}"
@@ -541,21 +576,25 @@ Full error:
 
 Original code:
 {prompt_code}""",
+            role="error_fix",
         )
         section_error_llm_calls_used += 1
         seen_error_signatures.add(error_signature)
 
         fixed = strip_fencing(fixed)
 
+        previous_code = code
         code = fixed
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(code)
 
         # Local auto-fixes are free and often resolve common ManimGL mismatches.
         # Always reload — precheck may have applied auto-fixes in-place.
         precheck_and_autofix_file(scene_path)
-        with open(scene_path) as f:
+        with open(scene_path, encoding="utf-8") as f:
             code = f.read()
+        if _discard_unsafe_fix(scene_path, code, previous_code, "error"):
+            break
 
         # Timing pass — auto-fix self.wait() values and inject remaining
         # timing warnings into the next attempt's error context.
@@ -578,8 +617,48 @@ Original code:
         print(
             f"[retry] All attempts exhausted — shipping best earlier render (had {best_issue_count} visual issue(s))."
         )
-        return True, best_video_path
+        return _ship_best(None)
     return False, None
+
+
+def _discard_unsafe_fix(
+    scene_path: str, code: str, previous_code: str, kind: str
+) -> bool:
+    """Discard an LLM fix that the scene safety gate rejects (#87).
+
+    A rejected fix is never rendered: the previous code is written back to
+    ``scene_path`` and True is returned so the caller stops asking for fixes
+    (it then ships the best earlier render or falls back). run_manimgl would
+    refuse the file anyway; discarding here also keeps the unsafe text off disk.
+    """
+    gate = inspect_scene_code(code)
+    if gate.ok:
+        return False
+    logger.warning(
+        "[retry] %s fix rejected by the scene safety gate and discarded: %s",
+        kind,
+        "; ".join(gate.findings),
+    )
+    print(
+        f"[retry] LLM {kind} fix rejected by the scene safety gate; discarded "
+        f"({len(gate.findings)} finding(s)). Not rendering it."
+    )
+    with open(scene_path, "w", encoding="utf-8") as f:
+        f.write(previous_code)
+    return True
+
+
+def _breaks_compile(before: str, after: str) -> bool:
+    """True when a local fix turned compilable code into code that does not compile."""
+    try:
+        compile(before, "<scene>", "exec", dont_inherit=True)
+    except SyntaxError:
+        return False  # already broken: a partial structural fix is still progress
+    try:
+        compile(after, "<scene>", "exec", dont_inherit=True)
+    except SyntaxError:
+        return True
+    return False
 
 
 def _run_and_capture(scene_path: str, class_name: str) -> dict:
@@ -592,31 +671,18 @@ def _run_and_capture(scene_path: str, class_name: str) -> dict:
             )
         return {"success": False, "video_path": None, "stderr": stderr}
 
-    # Director scenes can be long; avoid false timeout-driven fallbacks.
-    timeout = 360 if _is_3d_scene(scene_path) else 240
-    # Freshness floor: without it, an attempt whose render silently produced no
-    # file would pick up the PREVIOUS attempt's video and validate that instead
-    # — shipping the pre-fix render while we pay for a fix that never landed.
-    render_started_at = _render_floor()
-    try:
-        result = subprocess.run(
-            build_manimgl_command(scene_path, class_name),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=get_render_env(),
-        )
-        if result.returncode == 0:
-            return {
-                "success": True,
-                "video_path": _find_rendered_video(
-                    class_name, newer_than=render_started_at
-                ),
-                "stderr": "",
-            }
-        return {"success": False, "video_path": None, "stderr": result.stderr}
-    except subprocess.TimeoutExpired:
-        return {"success": False, "video_path": None, "stderr": "TimeoutExpired"}
+    # Shared entry point (tree-kill timeout, configurable budget, fresh-video
+    # check). Exit 0 without a fresh video comes back as a failure, so callers
+    # never see success with video_path None.
+    result = run_manimgl(scene_path, class_name)
+    if result.ok:
+        return {
+            "success": True,
+            "video_path": result.video_path,
+            "stderr": "",
+            "overlaps": tuple(result.overlaps),
+        }
+    return {"success": False, "video_path": None, "stderr": result.stderr}
 
 
 _retry_system_prompt_cache: str | None = None
@@ -631,9 +697,9 @@ def _load_retry_system_prompt() -> str:
         director_system_path = os.path.join(
             root, "generator", "prompts", "director_system.md"
         )
-        with open(retry_system_path) as f:
+        with open(retry_system_path, encoding="utf-8") as f:
             system = f.read()
-        with open(director_system_path) as f:
+        with open(director_system_path, encoding="utf-8") as f:
             director = f.read()
         _retry_system_prompt_cache = system.strip() + "\n\n" + director
     return _retry_system_prompt_cache
@@ -660,6 +726,7 @@ Fix the code to resolve these visual defects. Return only the corrected Python �
 Original code:
 {prompt_code}""",
         images=ref_frames + frames,
+        role="visual_fix",
     )
     return strip_fencing(fixed)
 
@@ -670,7 +737,7 @@ def _write_attempt_artifacts(
     code_path = os.path.join(logs_dir, f"{class_name}_attempt{attempt}.py")
     log_path = os.path.join(logs_dir, f"{class_name}_attempt{attempt}.log")
 
-    with open(code_path, "w") as f:
+    with open(code_path, "w", encoding="utf-8") as f:
         f.write(code)
-    with open(log_path, "w") as f:
+    with open(log_path, "w", encoding="utf-8") as f:
         f.write(stderr)

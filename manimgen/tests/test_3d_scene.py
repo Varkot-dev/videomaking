@@ -14,14 +14,14 @@ import re
 import unittest
 from unittest.mock import patch
 
-EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
+EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "manimgen", "examples")
 SCENE_FILE = os.path.join(EXAMPLES_DIR, "parametric_surface_scene.py")
 
 
 class TestParametricSurfaceExampleTag(unittest.TestCase):
 
     def _read(self):
-        with open(SCENE_FILE) as f:
+        with open(SCENE_FILE, encoding="utf-8") as f:
             return f.read()
 
     def test_file_exists(self):
@@ -200,7 +200,7 @@ class TestThreeDSceneSubstitution(unittest.TestCase):
                 )
 
             self.assertTrue(os.path.isfile(scene_path))
-            with open(scene_path) as f:
+            with open(scene_path, encoding="utf-8") as f:
                 saved = f.read()
             self.assertIn("ThreeDScene", saved)
 
@@ -239,10 +239,16 @@ class TestGenerateScenesPrecheckGate(unittest.TestCase):
             tempfile.TemporaryDirectory() as tmpdir,
         ):
             mock_paths.scenes_dir.return_value = tmpdir
-            with self.assertRaisesRegex(ValueError, "failed precheck"):
+            with self.assertRaisesRegex(ValueError, "failed precheck") as ctx:
                 scene_generator.generate_scenes(
                     self._make_section(), cue_durations=[5.0]
                 )
+            # The draft rides on the exception so cli can route it into retry.
+            exc = ctx.exception
+            self.assertIsInstance(exc, scene_generator.ScenePrecheckError)
+            self.assertEqual(exc.class_name, "Section01Scene")
+            self.assertTrue(exc.scene_path.startswith(tmpdir))
+            self.assertIn("def construct(self)", exc.code)
 
     def test_valid_scene_does_not_raise(self):
         import tempfile

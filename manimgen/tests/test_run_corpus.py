@@ -227,11 +227,11 @@ class TestCli:
         rc = main(["--corpus", DEFAULT_CORPUS, "--out", str(out), "--quiet"])
         assert rc == 0
 
-        payload = json.loads((out / "codeguard.json").read_text())
+        payload = json.loads((out / "codeguard.json").read_text(encoding="utf-8"))
         assert "summary" in payload and "cases" in payload
         assert payload["summary"]["overall"]["total"] == len(payload["cases"])
 
-        md = (out / "codeguard.md").read_text()
+        md = (out / "codeguard.md").read_text(encoding="utf-8")
         assert "Codeguard resolution rate" in md
         assert "By corpus source" in md
 
@@ -240,8 +240,8 @@ class TestCli:
         a, b = tmp_path / "a", tmp_path / "b"
         main(["--corpus", DEFAULT_CORPUS, "--out", str(a), "--quiet"])
         main(["--corpus", DEFAULT_CORPUS, "--out", str(b), "--quiet"])
-        ja = json.loads((a / "codeguard.json").read_text())["summary"]["overall"]
-        jb = json.loads((b / "codeguard.json").read_text())["summary"]["overall"]
+        ja = json.loads((a / "codeguard.json").read_text(encoding="utf-8"))["summary"]["overall"]
+        jb = json.loads((b / "codeguard.json").read_text(encoding="utf-8"))["summary"]["overall"]
         assert ja == jb
 
     def test_missing_corpus_dir_raises(self, tmp_path):

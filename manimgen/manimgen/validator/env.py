@@ -1,4 +1,5 @@
 import os
+import shutil
 
 # Allowlist of environment variable NAMES that may be forwarded to the manimgl
 # render subprocess. Generated scene code runs *inside* manimgl and can read
@@ -17,6 +18,21 @@ _ALLOWED_EXACT = frozenset(
         "TMPDIR",  # temp render artifacts
         "LANG",  # locale (text rendering)
         "DISPLAY",  # X11 / OpenGL context discovery
+        # X11 cannot connect to the server (including a headless Xvfb) without
+        # the cookie file this points at. It is a path, not a secret.
+        "XAUTHORITY",
+        # Windows: Python and OpenGL fail to start in a child process without
+        # SYSTEMROOT/WINDIR, PATHEXT is how "manimgl"/"latex" resolve to .exe,
+        # and TEMP/TMP/USERPROFILE/APPDATA are the Windows HOME/TMPDIR.
+        "SYSTEMROOT",
+        "WINDIR",
+        "PATHEXT",
+        "COMSPEC",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
         # Vars get_render_env() itself sets for LaTeX discoverability:
         "TEXLIVE_BIN",
         "MANIMGEN_LATEX",
@@ -28,6 +44,11 @@ _ALLOWED_PREFIXES = (
     "LC_",  # locale categories (LC_ALL, LC_CTYPE, ...)
     "TEXLIVE_",  # TeX Live install/runtime config
     "PYTHON",  # PYTHONPATH, PYTHONHOME, PYTHONNOUSERSITE, ...
+    # Mesa software OpenGL (llvmpipe) selection. This is the fallback on a
+    # machine whose GPU driver cannot create an OpenGL 3.3 context.
+    "MESA_",
+    "GALLIUM_",
+    "LIBGL_",
 )
 
 _EXTRA_ENV_VAR = "MANIMGEN_RENDER_ENV_EXTRA"
@@ -59,12 +80,39 @@ def get_render_env() -> dict[str, str]:
         name: value for name, value in os.environ.items() if _is_allowed(name, extra)
     }
 
-    tex_bin = "/usr/local/texlive/2026basic/bin/universal-darwin"
-    # Ensure subprocesses can resolve latex even if PATH is ignored by parent shell.
-    env.setdefault("TEXLIVE_BIN", tex_bin)
-    current_path = env.get("PATH", "")
-    if tex_bin not in current_path.split(":"):
-        env["PATH"] = f"{tex_bin}:{current_path}" if current_path else tex_bin
-    # Also provide common shell startup hint for tools that inspect PATH helper variables.
-    env.setdefault("MANIMGEN_LATEX", os.path.join(tex_bin, "latex"))
+    tex_bin = _find_tex_bin(env.get("PATH", ""))
+    if tex_bin:
+        # Ensure subprocesses can resolve latex even if PATH is ignored by parent shell.
+        env.setdefault("TEXLIVE_BIN", tex_bin)
+        current_path = env.get("PATH", "")
+        if tex_bin not in current_path.split(os.pathsep):
+            env["PATH"] = (
+                f"{tex_bin}{os.pathsep}{current_path}" if current_path else tex_bin
+            )
+        # Also provide common shell startup hint for tools that inspect PATH helper variables.
+        env.setdefault("MANIMGEN_LATEX", os.path.join(tex_bin, "latex"))
     return env
+
+
+# Install locations that are not always on PATH (macOS GUI apps and IDE shells
+# skip the profile that adds them). Only directories that exist are used, so
+# these are harmless on platforms where they do not apply.
+_KNOWN_TEX_BINS = (
+    "/usr/local/texlive/2026basic/bin/universal-darwin",
+    "/Library/TeX/texbin",
+)
+
+
+def _find_tex_bin(path: str) -> str | None:
+    """Return the directory holding ``latex``, or None if it cannot be found.
+
+    PATH is searched first (covers Linux, Windows/MiKTeX and a correctly set up
+    macOS), then the known macOS install locations.
+    """
+    found = shutil.which("latex", path=path or None)
+    if found:
+        return os.path.dirname(found)
+    for candidate in _KNOWN_TEX_BINS:
+        if os.path.isdir(candidate):
+            return candidate
+    return None

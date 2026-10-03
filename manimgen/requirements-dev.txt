@@ -1,0 +1,8 @@
+# Test and lint tooling on top of the runtime dependencies.
+-r requirements.txt
+pytest
+pytest-mock
+pytest-timeout
+pytest-cov>=6.1
+hypothesis
+ruff==0.15.13
