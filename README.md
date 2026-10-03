@@ -31,7 +31,7 @@ Input (topic string or PDF)
 │                     │   - narration with [CUE] markers
 │                     │   - cues[]: [{index, visual}] per cue
 └──────────┬──────────┘
-           │  up to 8 sections (topic) / 10 sections (PDF)
+           │  up to 6 sections (topic) / 8 sections (PDF)
            ▼
 ┌────────────────────────────────────────────────────────────┐
 │  Global Audio Phase (runs BEFORE any codegen)              │
