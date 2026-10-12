@@ -8,8 +8,11 @@
 #   - Cue clips within a section are joined with a hard cut (no transition).
 #     A xfade between cue clips would look wrong — they are continuous narration.
 #   - Section boundaries get a short crossfade (0.3s) to smooth the visual jump.
-#   - All clips are normalised to 1920x1080 30fps yuv420p before joining.
-#   - If only one clip total, it is moved to the output path directly.
+#   - All clips are normalised to the configured resolution and fps (yuv420p)
+#     before joining.
+#   - If only one clip total, it is copied to the output path directly.
+#   - Intermediates live in a private temp folder that is removed on any exit,
+#     and the final file is published with an atomic replace.
 #
 # Section boundary detection:
 #   Clips whose filename contains "_cue00" begin a new section.
@@ -19,10 +22,13 @@
 import logging
 import os
 import re
+import shutil
 import subprocess
+import tempfile
+import time
 
 from manimgen import paths
-from manimgen.utils import ffmpeg_concat_line
+from manimgen.utils import ffmpeg_concat_line, replace_with_retry
 
 _XFADE_DURATION = 0.3
 _CUE00_PATTERN = re.compile(r"_cue00\.mp4$")
@@ -69,27 +75,55 @@ def assemble_video(video_paths: list[str], title: str) -> str:
     if not video_paths:
         raise ValueError("assemble_video called with no clips")
 
-    if len(video_paths) == 1:
-        os.replace(video_paths[0], output_path)
+    # All intermediates live in a private folder next to the output (same
+    # volume, so the final move is an atomic rename) that is deleted on any
+    # exit, including a failed or timed-out ffmpeg (#76). ignore_cleanup_errors
+    # keeps Windows from raising if a handle is still draining.
+    with tempfile.TemporaryDirectory(
+        dir=videos_dir, prefix="_asm_", ignore_cleanup_errors=True
+    ) as work_dir:
+        if len(video_paths) == 1:
+            # Copy, not move: the muxed clip stays in its cache folder.
+            result = os.path.join(work_dir, "_single.mp4")
+            shutil.copyfile(video_paths[0], result)
+        else:
+            # Step 1: normalise all clips to the same resolution/fps/format
+            norm_paths = _normalise_all(video_paths, work_dir)
+
+            # Step 2: identify section boundaries (clips starting a new section)
+            boundaries = _section_boundaries(video_paths)
+
+            # Step 3: hard cuts within sections, xfades between sections
+            result = _concat(norm_paths, boundaries, work_dir)
+
+        return _publish(result, output_path)
+
+
+def _publish(src: str, output_path: str) -> str:
+    """Move the finished video into place; return the path actually written.
+
+    On Windows, replacing a file that a player has open raises PermissionError.
+    Retry briefly, then fall back to a timestamped name so the finished render
+    is never lost behind a locked file.
+    """
+    try:
+        replace_with_retry(src, output_path)
         return output_path
-
-    # Step 1: normalise all clips to the same resolution/fps/format
-    norm_paths = _normalise_all(video_paths, videos_dir)
-
-    # Step 2: identify section boundaries (clips starting a new section)
-    boundaries = _section_boundaries(video_paths)
-
-    # Step 3: concatenate with hard cuts within sections, xfades between sections
-    result = _concat(norm_paths, boundaries, videos_dir)
-
-    os.replace(result, output_path)
-
-    # Clean up normalised intermediates
-    for p in norm_paths:
-        if os.path.exists(p):
-            os.remove(p)
-
-    return output_path
+    except PermissionError:
+        stem, ext = os.path.splitext(output_path)
+        fallback = f"{stem}_{time.strftime('%Y%m%d_%H%M%S')}{ext}"
+        n = 1
+        while os.path.exists(fallback):
+            n += 1
+            fallback = f"{stem}_{time.strftime('%Y%m%d_%H%M%S')}_{n}{ext}"
+        logging.getLogger(__name__).warning(
+            "[assembler] %s is in use (open in a player?); saving the new video "
+            "as %s instead.",
+            output_path,
+            fallback,
+        )
+        replace_with_retry(src, fallback)
+        return fallback
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +132,7 @@ def assemble_video(video_paths: list[str], title: str) -> str:
 
 
 def _normalise_all(clip_paths: list[str], work_dir: str) -> list[str]:
-    """Re-encode all clips to 1920x1080 30fps yuv420p aac."""
+    """Re-encode all clips to the configured resolution/fps, yuv420p, aac."""
     norm_paths = []
     for i, path in enumerate(clip_paths):
         norm = os.path.join(work_dir, f"_norm_{i:03d}.mp4")

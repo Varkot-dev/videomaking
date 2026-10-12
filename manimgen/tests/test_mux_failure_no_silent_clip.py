@@ -34,11 +34,9 @@ def _log() -> logging.LoggerAdapter:
 def _isolate_muxed_dir(tmp_path, monkeypatch):
     """Point the muxed output dir at tmp_path.
 
-    _mux_one_cue computes the muxed output path via paths.muxed_dir() and
-    short-circuits to SUCCESS if that file already exists. Without this
-    isolation the tests collide with real artifacts left in the actual
-    manimgen/output/muxed/ dir from prior pipeline runs (e.g. a stale
-    section_01_cue00.mp4), making the mock mux never run.
+    _mux_one_cue computes the muxed output path via paths.muxed_dir(). Without
+    this isolation the tests would write into, and _run_section would read
+    from, the real manimgen/output/muxed/ dir left by prior pipeline runs.
     """
     monkeypatch.setattr(cli.paths, "muxed_dir", lambda: str(tmp_path))
 
@@ -149,7 +147,8 @@ class TestRunSectionDropsFailedSection:
         rendered = tmp_path / "Section01Scene.mp4"
         rendered.write_bytes(b"video")
         monkeypatch.setattr(cli, "_find_rendered_video", lambda _c: str(rendered))
-        monkeypatch.setattr(cli, "_render_is_fresh", lambda _v, _h: True)
+        # Only the render is fresh; the muxed clips must not be (#66).
+        monkeypatch.setattr(cli, "_render_is_fresh", lambda v, _h: v == str(rendered))
 
         # Cutter returns two per-cue video clips (silent).
         clip0 = tmp_path / "section_01_cue00_video.mp4"
