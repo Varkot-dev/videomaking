@@ -110,7 +110,11 @@ class TestGenerateNarration:
         audio_path = str(tmp_path / "narration.mp3")
 
         fake_communicate = MagicMock()
-        fake_communicate.stream = _make_fake_stream([])
+        # A word in must come back with its timestamp: since #73 an empty
+        # reply for non-empty text is a failed call that is retried.
+        fake_communicate.stream = _make_fake_stream(
+            [{"word": "test", "start": 0.1, "end": 0.3}]
+        )
 
         with patch("manimgen.renderer.tts.edge_tts.Communicate", return_value=fake_communicate) as mock_cls:
             generate_narration("test", audio_path)
