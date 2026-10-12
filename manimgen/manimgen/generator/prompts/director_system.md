@@ -396,6 +396,9 @@ self.wait(max(0.01, D - anim_time))
 | `FlashAround(obj)` | `Circumscribe(obj)` |
 | `width=W, height=H` in Axes | `x_length=W, y_length=H` |
 | `TransformMatchingTex(a, b)` | `TransformMatchingShapes(a, b)` |
+| `NumberLine(x_range=[a, b, step], width=W)` | `NumberLine(..., length=W)` |
+| `RegularPolygon(5)`, or a `Polygon(...)` through 10 points of alternating radius for a star | `Star(...)` (does not exist in ManimGL) |
+| `TrueDot(point)` or `Sphere(radius=0.08).move_to(point)` in 3D | `Dot3D(...)` (does not exist in ManimGL) |
 
 ### self.frame — complete API (ThreeDScene only)
 `self.frame` is a `CameraFrame`. These are the ONLY valid methods. Do not invent others.

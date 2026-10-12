@@ -223,3 +223,36 @@ class TestIndicateScaleFactorAgreesAcrossValidators:
         fixed, applied = apply_known_fixes(src)
         assert "scale_factor=1.05" in fixed
         assert not any("scale_factor" in a for a in applied)
+
+
+class TestNumberLineLengthRename:
+    """ManimCommunity NumberLine(length=) is ManimGL NumberLine(width=).
+
+    The 2026-10-03 run lost an attempt twice to it: the Director wrote it, the
+    error path stripped it after a crash, and the next LLM fix wrote it again.
+    Renaming before the first render keeps the size the model asked for.
+    """
+
+    def test_numberline_length_renamed(self):
+        out = _known("nl = NumberLine(x_range=[0, 1, 0.2], length=4)\n")
+        assert out == "nl = NumberLine(x_range=[0, 1, 0.2], width=4)\n"
+
+    def test_unit_interval_length_renamed(self):
+        assert _known("u = UnitInterval(length=6)\n") == "u = UnitInterval(width=6)\n"
+
+    def test_other_calls_keep_length(self):
+        code = "sq = Square(side_length=2)\nf(length=3)\n"
+        assert _known(code) == code
+
+    def test_rename_never_duplicates_a_kwarg(self):
+        code = "nl = NumberLine(length=4, width=5)\n"
+        assert _known(code) == code
+
+    def test_runs_in_precheck(self):
+        out = precheck_and_autofix(
+            "from manimlib import *\n"
+            "class S(Scene):\n"
+            "    def construct(self):\n"
+            "        nl = NumberLine(x_range=[0, 1, 0.2], length=4)\n"
+        )
+        assert "width=4" in out and "length=" not in out
