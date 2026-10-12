@@ -99,3 +99,20 @@ def _never_launch_real_claude(monkeypatch):
         return real_which(name, *args, **kwargs)
 
     monkeypatch.setattr(shutil, "which", which)
+
+
+# ---------------------------------------------------------------------------
+# LLM usage ledger
+# ---------------------------------------------------------------------------
+# chat() appends one JSONL record per call under paths.logs_dir(). Keep tests
+# from writing to the real output/logs and start each with an empty ledger.
+
+
+@pytest.fixture(autouse=True)
+def _isolate_llm_ledger(tmp_path, monkeypatch):
+    import manimgen.llm as llm_mod
+
+    monkeypatch.setattr(llm_mod, "_ledger_dir", lambda: str(tmp_path / "llm_logs"))
+    llm_mod.reset_usage()
+    yield
+    llm_mod.reset_usage()

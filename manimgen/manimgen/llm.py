@@ -15,6 +15,10 @@ API usage. It needs Claude Code installed and logged in (`claude` on PATH).
 No-spend guard: the per-token providers (`anthropic`, `gemini`) are refused
 unless MANIMGEN_ALLOW_PAID_API=1 is set, and `claude_cli` refuses any reply
 that Claude Code produced with an API key instead of the subscription login.
+It also stops before a plan can run into "extra usage" (overage) billing: a
+call that reports isUsingOverage stops the run, and when the account could
+bill overage the run stops at MANIMGEN_MAX_PLAN_UTILIZATION (default 90%) of
+the 5-hour or 7-day allowance instead of crossing the limit.
 The `ollama` provider talks to a local Ollama server (default
 http://localhost:11434) and needs no API key — use it to exercise pipeline
 plumbing for free. Switching back to gemini/anthropic for a real
@@ -34,7 +38,9 @@ import signal
 import socket
 import subprocess
 import tempfile
+import threading
 import time
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import yaml
@@ -80,6 +86,9 @@ _DEFAULTS = {
     "anthropic_max_tokens": 16000,
     "claude_cli_model": "sonnet",
     "claude_cli_path": "claude",
+    # Per-role model overrides (role -> alias or model ID). Empty: every role
+    # uses the provider default above.
+    "models": {},
     "ollama_model": "llama3.1",
     "ollama_base_url": "http://localhost:11434",
     # Ollama's default context window is smaller than the Director prompt, so
@@ -88,10 +97,22 @@ _DEFAULTS = {
 }
 
 
+def _parse_role_models(raw) -> dict[str, str]:
+    """llm.models from config.yaml as {role: model}; anything unusable is dropped."""
+    if not isinstance(raw, dict):
+        return {}
+    models = {}
+    for role, model in raw.items():
+        model = str(model).strip() if model is not None else ""
+        if model:
+            models[str(role).strip().lower()] = model
+    return models
+
+
 def _load_llm_config() -> dict:
     """Load LLM config from config.yaml, falling back to defaults."""
     try:
-        with open(_CONFIG_PATH) as f:
+        with open(_CONFIG_PATH, encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}
         llm_cfg = cfg.get("llm", {})
         return {
@@ -111,6 +132,7 @@ def _load_llm_config() -> dict:
             "claude_cli_path": str(
                 llm_cfg.get("claude_cli_path", _DEFAULTS["claude_cli_path"])
             ),
+            "models": _parse_role_models(llm_cfg.get("models")),
             "ollama_model": llm_cfg.get("ollama_model", _DEFAULTS["ollama_model"]),
             "ollama_base_url": str(
                 llm_cfg.get("ollama_base_url", _DEFAULTS["ollama_base_url"])
@@ -197,6 +219,7 @@ def chat(
     user: str,
     images: list[str] | None = None,
     json_mode: bool = False,
+    role: str | None = None,
 ) -> str:
     """
     Call the active LLM provider.
@@ -215,6 +238,9 @@ def chat(
                 help given is stripping a surrounding markdown code fence.
                 The text is not validated, so callers still need their own
                 parse-and-retry (the planner has one).
+        role:   What the call is for (see ROLES). Picks the model (env
+                MANIMGEN_MODEL_<ROLE>, then llm.models in config.yaml, then the
+                provider default) and labels the call in the usage ledger.
     """
     provider = _resolve_provider()
 
@@ -225,17 +251,38 @@ def chat(
             f"set {_ALLOW_PAID_ENV}=1 to allow paid calls."
         )
 
-    if provider == "gemini":
-        return _gemini(system, user, images or [], json_mode=json_mode)
-    elif provider == "anthropic":
-        text = _anthropic(system, user, images or [])
-    elif provider == "claude_cli":
-        text = _claude_cli(system, user, images or [])
-    elif provider == "ollama":
-        text = _ollama(system, user, images or [])
-    else:
+    if provider not in ("gemini", "anthropic", "claude_cli", "ollama"):
         raise ValueError(f"Unknown LLM_PROVIDER: {provider}")
-    return _strip_json_fence(text) if json_mode else text
+
+    # The role goes to the provider helper only when there is one, so a call
+    # without a role looks exactly as it did before roles existed.
+    kw = {"role": role} if role else {}
+    _tls.meta = {}
+    before = dict(_plan_windows)
+    started = time.monotonic()
+    error: str | None = None
+    try:
+        if provider == "gemini":
+            return _gemini(system, user, images or [], json_mode=json_mode, **kw)
+        if provider == "anthropic":
+            text = _anthropic(system, user, images or [], **kw)
+        elif provider == "claude_cli":
+            text = _claude_cli(system, user, images or [], **kw)
+        else:
+            text = _ollama(system, user, images or [], **kw)
+        return _strip_json_fence(text) if json_mode else text
+    except BaseException as exc:
+        error = f"{type(exc).__name__}: {exc}"[:500]
+        raise
+    finally:
+        _record_call(
+            role=role,
+            provider=provider,
+            model=_model_for(provider, role),
+            duration_s=time.monotonic() - started,
+            before=before,
+            error=error,
+        )
 
 
 def _strip_json_fence(text: str) -> str:
@@ -249,11 +296,16 @@ def _strip_json_fence(text: str) -> str:
     return stripped
 
 
-def _gemini(system: str, user: str, images: list[str], json_mode: bool = False) -> str:
+def _gemini(
+    system: str,
+    user: str,
+    images: list[str],
+    json_mode: bool = False,
+    role: str | None = None,
+) -> str:
     from google import genai
     from google.genai import types
 
-    cfg = _LLM_CONFIG
     client = genai.Client(
         api_key=os.environ["GEMINI_API_KEY"],
         http_options=types.HttpOptions(
@@ -287,14 +339,16 @@ def _gemini(system: str, user: str, images: list[str], json_mode: bool = False) 
         config_kwargs["response_mime_type"] = "application/json"
 
     response = client.models.generate_content(
-        model=cfg["gemini_model"],
+        model=_model_for("gemini", role),
         contents=contents,
         config=types.GenerateContentConfig(**config_kwargs),
     )
     return response.text.strip()
 
 
-def _anthropic(system: str, user: str, images: list[str]) -> str:
+def _anthropic(
+    system: str, user: str, images: list[str], role: str | None = None
+) -> str:
     import anthropic
 
     cfg = _LLM_CONFIG
@@ -315,7 +369,7 @@ def _anthropic(system: str, user: str, images: list[str]) -> str:
     content.append({"type": "text", "text": user})
 
     message = client.messages.create(
-        model=cfg["anthropic_model"],
+        model=_model_for("anthropic", role),
         max_tokens=cfg["anthropic_max_tokens"],
         system=system,
         messages=[{"role": "user", "content": content}],
@@ -515,7 +569,9 @@ def _run_cli(
     return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 
 
-def _claude_cli(system: str, user: str, images: list[str]) -> str:
+def _claude_cli(
+    system: str, user: str, images: list[str], role: str | None = None
+) -> str:
     """Run one prompt through `claude -p` and return the reply text.
 
     The system prompt goes in a temp file and the user turn (text + images) on
@@ -562,7 +618,7 @@ def _claude_cli(system: str, user: str, images: list[str]) -> str:
             "--system-prompt-file",
             system_file,
             "--model",
-            cfg["claude_cli_model"],
+            _model_for("claude_cli", role),
             # One "--tools=" token rather than "--tools" "": an empty argv entry
             # does not survive the cmd.exe shim npm installs on Windows.
             "--tools=",
@@ -575,6 +631,7 @@ def _claude_cli(system: str, user: str, images: list[str]) -> str:
 
         last_error = ""
         for attempt in range(1, _REQUEST_RETRY_ATTEMPTS + 1):
+            _ensure_plan_headroom()
             if attempt > 1:
                 time.sleep(_CLI_RETRY_BACKOFF_SECONDS * (attempt - 1))
             try:
@@ -592,7 +649,9 @@ def _claude_cli(system: str, user: str, images: list[str]) -> str:
 
             stdout = proc.stdout.decode("utf-8", errors="replace")
             _ensure_subscription_auth(stdout)
+            _check_plan_limits(stdout)
             result = _parse_claude_cli_result(stdout)
+            _tls.meta = _cli_meta(result, attempt)
             if result is not None and not result.get("is_error"):
                 if result.get("stop_reason") == "max_tokens":
                     logger.warning(
@@ -638,6 +697,116 @@ def _parse_claude_cli_result(stdout: str) -> dict | None:
     return result
 
 
+# Overage ("extra usage") bills money once a plan allowance is used up. Claude
+# Code reports the state in a rate_limit_event on every call:
+#   rate_limit_info.isUsingOverage   true once this call was billed as overage
+#   rate_limit_info.overageStatus    "rejected" when overage is off for the
+#                                    account; anything else means it could bill
+#   rate_limit_info.unifiedWindows   {"five_hour": {"utilization": 0.08,
+#                                    "resetsAt": <epoch>}, "seven_day": {...}}
+# When overage is rejected, hitting a limit only blocks calls (free). When it
+# is not, crossing the limit costs money, so stop with headroom to spare.
+_PLAN_UTILIZATION_ENV = "MANIMGEN_MAX_PLAN_UTILIZATION"
+_DEFAULT_PLAN_UTILIZATION = 0.90
+
+# Last plan state seen in this process: window name -> (utilization, resetsAt),
+# and whether overage could bill. Lets the next call be refused before spawning.
+_plan_windows: dict[str, tuple[float, float]] = {}
+_overage_possible = False
+_plan_logged = False
+_last_plan_info: dict = {}  # last rate_limit_info seen, for scripts/check_billing.py
+
+
+def _plan_utilization_limit() -> float:
+    raw = os.environ.get(_PLAN_UTILIZATION_ENV, "").strip()
+    try:
+        value = float(raw) if raw else _DEFAULT_PLAN_UTILIZATION
+    except ValueError:
+        logger.warning(
+            "[llm] ignoring invalid %s=%r, using %s",
+            _PLAN_UTILIZATION_ENV,
+            raw,
+            _DEFAULT_PLAN_UTILIZATION,
+        )
+        return _DEFAULT_PLAN_UTILIZATION
+    return min(max(value, 0.01), 1.0)
+
+
+def _plan_block_message(window: str, utilization: float, resets_at: float) -> str:
+    when = (
+        time.strftime("%Y-%m-%d %H:%M", time.localtime(resets_at))
+        if resets_at
+        else "later"
+    )
+    return (
+        f"Your Claude plan is at {utilization:.0%} of its {window} allowance and "
+        "extra usage (overage) billing is not disabled on this account, so "
+        "continuing could charge you money. Stopped to be safe. Options: wait "
+        f"until the allowance resets ({when} local time), turn extra usage off in "
+        "your Claude settings (then hitting the limit only pauses, it never "
+        f"bills), raise {_PLAN_UTILIZATION_ENV}, or set {_ALLOW_PAID_ENV}=1."
+    )
+
+
+def _ensure_plan_headroom() -> None:
+    """Refuse to start a call when the last known plan state says it could bill."""
+    if _paid_api_allowed() or not _overage_possible:
+        return
+    limit = _plan_utilization_limit()
+    now = time.time()
+    for window, (utilization, resets_at) in _plan_windows.items():
+        # A window that has reset since we last looked is no longer full.
+        if resets_at and resets_at <= now:
+            continue
+        if utilization >= limit:
+            raise PaidApiBlockedError(
+                _plan_block_message(window, utilization, resets_at)
+            )
+
+
+def _check_plan_limits(stdout: str) -> None:
+    """Stop the run if a call used, or is about to run into, overage billing."""
+    global _overage_possible, _plan_logged, _last_plan_info
+    if _paid_api_allowed():
+        return
+    for event in _iter_cli_events(stdout):
+        if event.get("type") != "rate_limit_event":
+            continue
+        info = event.get("rate_limit_info")
+        if not isinstance(info, dict):
+            continue
+        if info.get("isUsingOverage") is True:
+            raise PaidApiBlockedError(
+                "Claude Code reports this call was billed as overage (extra "
+                "usage), which costs money. Stopped. Turn extra usage off in "
+                f"your Claude settings, or set {_ALLOW_PAID_ENV}=1 to allow it."
+            )
+        _last_plan_info = info
+        # Anything but an explicit "rejected" (including a missing field) is
+        # treated as "overage could bill": fail safe, not open.
+        _overage_possible = info.get("overageStatus") != "rejected"
+        windows = info.get("unifiedWindows")
+        if isinstance(windows, dict):
+            for name, w in windows.items():
+                if isinstance(w, dict) and isinstance(
+                    w.get("utilization"), (int, float)
+                ):
+                    _plan_windows[name] = (
+                        float(w["utilization"]),
+                        float(w.get("resetsAt") or 0),
+                    )
+        if not _plan_logged:
+            _plan_logged = True
+            logger.info(
+                "[llm] plan: %s; overage %s (%s)",
+                ", ".join(f"{n} {u:.0%}" for n, (u, _) in _plan_windows.items())
+                or "usage unknown",
+                info.get("overageStatus", "unknown"),
+                info.get("overageDisabledReason", "n/a"),
+            )
+    _ensure_plan_headroom()
+
+
 def _ensure_subscription_auth(stdout: str) -> None:
     """Refuse output Claude Code produced with an API key instead of the login.
 
@@ -663,7 +832,262 @@ def _ensure_subscription_auth(stdout: str) -> None:
             return
 
 
-def _ollama(system: str, user: str, images: list[str]) -> str:
+# ---------------------------------------------------------------------------
+# Usage ledger: one JSONL record per chat() call
+# ---------------------------------------------------------------------------
+# Written to <logs_dir>/llm_usage.jsonl so one video's cost can be read back
+# per role. The fields come from undocumented `claude -p` stream-json output
+# (result.usage, result.total_cost_usd, rate_limit_event.unifiedWindows), so
+# every one is parsed defensively and is null when absent. On a subscription
+# `total_cost_usd` is a cost-equivalent at API prices, not money charged.
+_LEDGER_NAME = "llm_usage.jsonl"
+_PLAN_WINDOWS = ("five_hour", "seven_day")
+
+_tls = threading.local()  # per-call data the provider helper hands back to chat()
+_ledger_lock = threading.Lock()
+_records: list[dict] = []  # this process's records, for usage_summary()
+
+
+def _ledger_dir() -> str:
+    from manimgen import paths
+
+    return paths.logs_dir()
+
+
+def _num(value) -> float | int | None:
+    """A real number, or None (bool and numeric strings are not numbers here)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
+def _cli_meta(result: dict | None, attempt: int) -> dict:
+    """Usage numbers from a `claude -p` result event (all optional)."""
+    if not isinstance(result, dict):
+        return {"attempts": attempt}
+    usage = result.get("usage")
+    if not isinstance(usage, dict):
+        usage = {}
+    return {
+        "attempts": attempt,
+        "input_tokens": _num(usage.get("input_tokens")),
+        "output_tokens": _num(usage.get("output_tokens")),
+        "cache_read_tokens": _num(usage.get("cache_read_input_tokens")),
+        "cache_creation_tokens": _num(usage.get("cache_creation_input_tokens")),
+        "cost_usd_equiv": _num(result.get("total_cost_usd")),
+        "num_turns": _num(result.get("num_turns")),
+    }
+
+
+def _record_call(
+    *,
+    role: str | None,
+    provider: str,
+    model: str,
+    duration_s: float,
+    before: dict,
+    error: str | None,
+) -> None:
+    """Append this call to the ledger. Never raises: metrics must not fail a call."""
+    try:
+        meta = getattr(_tls, "meta", None) or {}
+        rec: dict = {
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "role": role,
+            "provider": provider,
+            "model": model,
+            "duration_s": round(duration_s, 3),
+            "ok": error is None,
+            "error": error,
+        }
+        for key in (
+            "attempts",
+            "input_tokens",
+            "output_tokens",
+            "cache_read_tokens",
+            "cache_creation_tokens",
+            "cost_usd_equiv",
+            "num_turns",
+        ):
+            rec[key] = meta.get(key)
+        for name in _PLAN_WINDOWS:
+            prev = before.get(name)
+            now = _plan_windows.get(name) if provider == "claude_cli" else None
+            rec[f"{name}_before"] = prev[0] if prev else None
+            rec[f"{name}_after"] = now[0] if now else None
+            rec[f"{name}_resets_at"] = now[1] if now else None
+        with _ledger_lock:
+            _records.append(rec)
+            directory = _ledger_dir()
+            os.makedirs(directory, exist_ok=True)
+            # One write of one line; "a" appends atomically enough for the
+            # single-process pipeline. newline="\n" keeps LF on Windows.
+            with open(
+                os.path.join(directory, _LEDGER_NAME),
+                "a",
+                encoding="utf-8",
+                newline="\n",
+            ) as f:
+                f.write(json.dumps(rec, ensure_ascii=True) + "\n")
+    except Exception as exc:  # noqa: BLE001 - the ledger is best effort
+        logger.warning("[llm] could not write usage ledger: %s", exc)
+
+
+def reset_usage() -> None:
+    """Forget this process's in-memory ledger (the file is left alone)."""
+    with _ledger_lock:
+        _records.clear()
+
+
+def _read_ledger_file(path: str) -> list[dict]:
+    records = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(rec, dict):
+                records.append(rec)
+    return records
+
+
+def usage_summary(path: str | None = None) -> str:
+    """Text summary of the run's LLM calls: per-role totals and plan usage.
+
+    Covers the calls this process made, or the records in the JSONL file at
+    `path`. Call it once at the end of a run and print it; it shows what share
+    of the 5-hour and 7-day plan allowance the run used.
+    """
+    if path is not None:
+        try:
+            records = _read_ledger_file(path)
+        except OSError as exc:
+            return f"LLM usage: could not read {path}: {exc}"
+    else:
+        with _ledger_lock:
+            records = list(_records)
+    if not records:
+        return "LLM usage: no LLM calls recorded."
+
+    def total(items, key):
+        values = [r[key] for r in items if _num(r.get(key)) is not None]
+        return sum(values) if values else None
+
+    def fmt(value, spec="{:,.0f}"):
+        return "-" if value is None else spec.format(value)
+
+    by_role: dict[str, list[dict]] = {}
+    for rec in records:
+        by_role.setdefault(str(rec.get("role") or "(none)"), []).append(rec)
+
+    failed = sum(1 for r in records if not r.get("ok", True))
+    n = len(records)
+    lines = [
+        f"LLM usage: {n} call{'s' if n != 1 else ''}"
+        + (f", {failed} failed" if failed else "")
+        + f", {fmt(total(records, 'duration_s'))}s in calls"
+    ]
+    lines.append(
+        f"  {'role':<14}{'calls':>6}{'in_tok':>10}{'out_tok':>10}"
+        f"{'secs':>8}{'cost_eq_usd':>13}"
+    )
+    for role in sorted(by_role):
+        items = by_role[role]
+        lines.append(
+            f"  {role:<14}{len(items):>6}"
+            f"{fmt(total(items, 'input_tokens')):>10}"
+            f"{fmt(total(items, 'output_tokens')):>10}"
+            f"{fmt(total(items, 'duration_s')):>8}"
+            f"{fmt(total(items, 'cost_usd_equiv'), '{:,.2f}'):>13}"
+        )
+    lines.append(
+        f"  {'total':<14}{n:>6}"
+        f"{fmt(total(records, 'input_tokens')):>10}"
+        f"{fmt(total(records, 'output_tokens')):>10}"
+        f"{fmt(total(records, 'duration_s')):>8}"
+        f"{fmt(total(records, 'cost_usd_equiv'), '{:,.2f}'):>13}"
+    )
+    lines.append(
+        "  (cost_eq_usd is the API-price equivalent, not money charged on a plan)"
+    )
+
+    for name in _PLAN_WINDOWS:
+        label = {"five_hour": "5-hour", "seven_day": "7-day"}[name]
+        seen = [r for r in records if _num(r.get(f"{name}_after")) is not None]
+        if not seen:
+            continue
+        first, last = seen[0], seen[-1]
+        if _num(first.get(f"{name}_before")) is not None:
+            start, note = first[f"{name}_before"], ""
+        else:
+            start, note = first[f"{name}_after"], " (from the first call's reading)"
+        end = last[f"{name}_after"]
+        if first.get(f"{name}_resets_at") != last.get(f"{name}_resets_at"):
+            lines.append(
+                f"  {label} plan allowance: window reset during the run "
+                f"(now {end:.1%}); delta not available"
+            )
+        else:
+            lines.append(
+                f"  {label} plan allowance: {start:.1%} -> {end:.1%} "
+                f"({(end - start) * 100:+.1f} percentage points){note}"
+            )
+    return "\n".join(lines)
+
+
+_PROVIDER_MODEL_KEY = {
+    "claude_cli": "claude_cli_model",
+    "anthropic": "anthropic_model",
+    "gemini": "gemini_model",
+    "ollama": "ollama_model",
+}
+
+# Roles call sites pass to chat(role=...). Any other string is accepted and
+# simply uses the default model.
+ROLES = (
+    "researcher",
+    "planner",
+    "planner_pdf",
+    "critic",
+    "cue_refill",
+    "director",
+    "error_fix",
+    "visual_fix",
+    "layout_check",
+)
+
+
+def _model_for(provider: str, role: str | None = None) -> str:
+    """Model to use for `role` on `provider`.
+
+    Order: MANIMGEN_MODEL_<ROLE> env var, then llm.models[role] in config.yaml,
+    then the provider's default model. An unknown or missing role, or an
+    unusable value (empty, or starting with "-" so it could pass as a CLI flag),
+    falls back to the default; it is never an error.
+    """
+    default = str(_LLM_CONFIG[_PROVIDER_MODEL_KEY[provider]])
+    name = (role or "").strip().lower()
+    if not name:
+        return default
+    env_name = "MANIMGEN_MODEL_" + "".join(
+        c if c.isalnum() else "_" for c in name.upper()
+    )
+    configured = _LLM_CONFIG.get("models")
+    candidates = (
+        os.environ.get(env_name, ""),
+        configured.get(name, "") if isinstance(configured, dict) else "",
+    )
+    for value in candidates:
+        value = str(value).strip()
+        if value and not value.startswith("-"):
+            return value
+        if value:
+            logger.warning("[llm] ignoring unusable model %r for role %s", value, name)
+    return default
+
+
+def _ollama(system: str, user: str, images: list[str], role: str | None = None) -> str:
     import requests
 
     cfg = _LLM_CONFIG
@@ -674,7 +1098,7 @@ def _ollama(system: str, user: str, images: list[str]) -> str:
 
     url = f"{base_url}/api/chat"
     payload = {
-        "model": cfg["ollama_model"],
+        "model": _model_for("ollama", role),
         "messages": [{"role": "system", "content": system}, user_msg],
         "stream": False,
         "options": {"num_ctx": cfg["ollama_num_ctx"]},

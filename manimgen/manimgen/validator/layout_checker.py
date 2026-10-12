@@ -134,6 +134,7 @@ def check_layout(video_path: str) -> dict:
                 "If the candidates look cramped, misaligned, or amateurish compared to the references, reject them."
             ),
             images=ref_frames + frames,
+            role="layout_check",
         )
     except Exception as exc:
         logger.warning("[layout_checker] LLM call failed: %s", exc)
