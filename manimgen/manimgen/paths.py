@@ -4,6 +4,8 @@
 # All pipeline modules import from here instead of hardcoding strings.
 # Override any path by editing the output: block in config.yaml.
 
+import os
+
 from manimgen import config
 
 _RENDER_DEFAULTS = config.DEFAULTS["rendering"]
@@ -86,6 +88,27 @@ def render_quality_flag() -> str:
             f"rendering.quality {q!r} in config.yaml is not valid; use one of "
             f"{sorted(_QUALITY_FLAGS)} (l = 480p, m = 720p, hd = 1080p, uhd = 4K)"
         ) from None
+
+
+def render_timeout(kind: str) -> float:
+    """Seconds a manimgl render may run before its process tree is killed.
+
+    ``kind`` is "2d", "3d" or "fallback". Defaults come from config.yaml
+    ``rendering.render_timeout_*``; the environment variable
+    ``MANIMGEN_RENDER_TIMEOUT_<KIND>`` (e.g. ``MANIMGEN_RENDER_TIMEOUT_2D``)
+    overrides it. A non-positive or unparsable value falls back to the config.
+    """
+    key = f"render_timeout_{kind}"
+    raw = os.environ.get(f"MANIMGEN_RENDER_TIMEOUT_{kind.upper()}")
+    if raw:
+        try:
+            value = float(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+    value = float(_RENDERING.get(key) or _RENDER_DEFAULTS[key])
+    return value if value > 0 else float(_RENDER_DEFAULTS[key])
 
 
 def render_resolution() -> str:
