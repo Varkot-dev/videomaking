@@ -53,8 +53,10 @@ setup(
     package_data={
         "manimgen.planner": ["prompts/*.md"],
         "manimgen.generator": ["prompts/*.md"],
-        "manimgen.validator": ["prompts/*.md"],
+        "manimgen.validator": ["prompts/*.md", "manimlib_symbols.json"],
         "manimgen.editor": ["templates/*.html"],
+        # Start-up hook put on the manimgl child's PYTHONPATH (render_command).
+        "manimgen.probes": ["bootstrap/*.py"],
         # Few-shot scenes the Director reads at runtime (scene_generator._examples_dir).
         "manimgen": ["examples/*.py"],
     },

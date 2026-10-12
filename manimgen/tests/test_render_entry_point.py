@@ -117,7 +117,12 @@ def test_nonzero_exit_is_failure_with_stderr(scene, monkeypatch):
         runner_mod, "_find_rendered_video", lambda *a, **k: find.append(1)
     )
     res = retry_mod._run_and_capture(scene, "SceneA")
-    assert res == {"success": False, "video_path": None, "stderr": "boom"}
+    assert res == {
+        "success": False,
+        "video_path": None,
+        "stderr": "boom",
+        "rendered": True,  # manimgl ran and failed, so the attempt is used
+    }
     assert not find
 
 
