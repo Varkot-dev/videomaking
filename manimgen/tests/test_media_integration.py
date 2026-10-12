@@ -71,6 +71,19 @@ def _duration(path):
     return float(_probe(path)["format"]["duration"])
 
 
+def _stream_duration(path, kind):
+    """Length of one stream on its own, not of the container.
+
+    The muxer forces the container length with -t, so the container duration
+    alone cannot tell whether the video was really frozen or the audio really
+    padded: each stream's own length can.
+    """
+    for stream in _probe(path)["streams"]:
+        if stream["codec_type"] == kind:
+            return float(stream["duration"])
+    raise AssertionError(f"no {kind} stream in {path}")
+
+
 def _max_volume_db(path):
     """Loudest sample in the audio track, in dB (about -91 or lower is silence)."""
     r = subprocess.run(
@@ -98,6 +111,8 @@ def test_mux_freezes_video_when_audio_is_longer(tmp_path):
     out = muxer.mux_audio_video(video, audio, str(tmp_path / "out" / "m.mp4"))
     assert sorted(_kinds(_probe(out))) == ["audio", "video"]
     assert _duration(out) == pytest.approx(2.0, abs=_TOL)
+    # The 1 s video was frozen out to the 2 s of audio, not just cut off there.
+    assert _stream_duration(out, "video") == pytest.approx(2.0, abs=_TOL)
     assert _max_volume_db(out) > -20  # the sine survived: not a silent track
 
 
@@ -107,6 +122,8 @@ def test_mux_pads_audio_when_video_is_longer(tmp_path):
     out = muxer.mux_audio_video(video, audio, str(tmp_path / "m.mp4"))
     assert sorted(_kinds(_probe(out))) == ["audio", "video"]
     assert _duration(out) == pytest.approx(2.0, abs=_TOL)
+    # The 1 s of audio was padded with silence to the 2 s of video.
+    assert _stream_duration(out, "audio") == pytest.approx(2.0, abs=_TOL)
     assert _max_volume_db(out) > -20
 
 
