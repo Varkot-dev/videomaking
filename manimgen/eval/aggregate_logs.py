@@ -146,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.json_out:
         os.makedirs(os.path.dirname(os.path.abspath(args.json_out)), exist_ok=True)
-        with open(args.json_out, "w") as f:
+        with open(args.json_out, "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2)
             f.write("\n")
 

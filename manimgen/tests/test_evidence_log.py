@@ -58,7 +58,7 @@ class TestEvidenceLog:
         log_event("precheck", scene="a.py", validation_clean=False)
         log_event("av_mismatch", output="a.mp4", diff=2.0)
         lines = evidence_path()
-        with open(lines) as f:
+        with open(lines, encoding="utf-8") as f:
             raw = [ln for ln in f.read().splitlines() if ln.strip()]
         assert len(raw) == 2
         for ln in raw:
@@ -74,7 +74,7 @@ class TestEvidenceLog:
     def test_unwritable_path_never_raises(self, tmp_path, monkeypatch):
         """Instrumentation must not be able to fail a render."""
         blocker = tmp_path / "blocked"
-        blocker.write_text("i am a file, not a directory")
+        blocker.write_text("i am a file, not a directory", encoding="utf-8")
         monkeypatch.setenv("MANIMGEN_EVIDENCE_DIR", str(blocker / "sub"))
         monkeypatch.setenv("MANIMGEN_EVIDENCE_LOG", "1")
         assert log_event("precheck", scene="x.py") is False  # no exception
@@ -90,7 +90,7 @@ class TestEvidenceLog:
 
     def test_malformed_line_is_skipped(self, log_dir):
         log_event("precheck", scene="good.py", validation_clean=True)
-        with open(evidence_path(), "a") as f:
+        with open(evidence_path(), "a", encoding="utf-8") as f:
             f.write("{ this is not json\n")
         events = read_events()
         assert len(events) == 1
@@ -110,7 +110,8 @@ class TestCodeguardWiring:
         scene = tmp_path / "s01.py"
         scene.write_text(
             "from manim import *\n\n\nclass S(Scene):\n"
-            "    def construct(self):\n        self.play(Create(Circle()))\n"
+            "    def construct(self):\n        self.play(Create(Circle()))\n",
+            encoding="utf-8",
         )
         result = precheck_and_autofix_file(str(scene))
 
@@ -128,7 +129,9 @@ class TestCodeguardWiring:
         from manimgen.validator.codeguard import precheck_and_autofix_file
 
         scene = tmp_path / "bad.py"
-        scene.write_text("from manimlib import *\n\ndef broken(:\n    pass\n")
+        scene.write_text(
+            "from manimlib import *\n\ndef broken(:\n    pass\n", encoding="utf-8"
+        )
         result = precheck_and_autofix_file(str(scene))
 
         assert result["ok"] is False
@@ -198,7 +201,8 @@ class TestAggregator:
         good = tmp_path / "good.py"
         good.write_text(
             "from manim import *\n\n\nclass S(Scene):\n"
-            "    def construct(self):\n        self.play(Create(Circle()))\n"
+            "    def construct(self):\n        self.play(Create(Circle()))\n",
+            encoding="utf-8",
         )
         precheck_and_autofix_file(str(good))
 

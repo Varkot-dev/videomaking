@@ -168,7 +168,7 @@ class TestSharedFreezeSeam:
 
         scene_dir = tmp_path / "scenes"
         scene_dir.mkdir()
-        (scene_dir / "section_01.py").write_text("# scene\n")
+        (scene_dir / "section_01.py").write_text("# scene\n", encoding="utf-8")
         monkeypatch.setattr(paths, "scenes_dir", lambda: str(scene_dir))
 
         seen = {}

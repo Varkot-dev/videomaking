@@ -179,7 +179,7 @@ class TestRetryVisualLoop:
 
     def test_accepts_video_when_layout_ok(self, tmp_path):
         scene_path = str(tmp_path / "scene.py")
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write("from manimlib import *\nclass TestScene(Scene):\n    def construct(self): pass\n")
 
         with patch("manimgen.validator.retry._run_and_capture",
@@ -196,7 +196,7 @@ class TestRetryVisualLoop:
         """When layout check fails and budget allows, LLM is called with structured visual issues."""
         scene_path = str(tmp_path / "scene.py")
         original_code = "from manimlib import *\nclass TestScene(Scene):\n    def construct(self): pass\n"
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(original_code)
 
         issues = "ISSUE: ghost element | CAUSE: Transform point mismatch | FIX: use FadeOut/FadeIn"
@@ -228,7 +228,7 @@ class TestRetryVisualLoop:
     def test_accepts_video_when_budget_exhausted_despite_layout_issues(self, tmp_path):
         scene_path = str(tmp_path / "scene.py")
         original_code = "from manimlib import *\nclass TestScene(Scene):\n    def construct(self): pass\n"
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(original_code)
 
         issues = "ISSUE: overlap | CAUSE: stale rect | FIX: recreate rect"
@@ -258,7 +258,7 @@ class TestRetryVisualLoop:
         not spin idle render iterations until MAX_RETRIES is exhausted."""
         scene_path = str(tmp_path / "scene.py")
         original_code = "from manimlib import *\nclass TestScene(Scene):\n    BROKEN\n"
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(original_code)
 
         stderr = "AttributeError: 'Scene' object has no attribute 'frobnicate'"
@@ -291,7 +291,7 @@ class TestRetryVisualLoop:
         frame_checker already found concrete (non-frozen) defects."""
         scene_path = str(tmp_path / "scene.py")
         original_code = "from manimlib import *\nclass TestScene(Scene):\n    def construct(self): pass\n"
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(original_code)
 
         from manimgen.validator.frame_checker import FrameCheckResult
@@ -315,7 +315,7 @@ class TestRetryVisualLoop:
         versa). The two budgets are tracked separately."""
         scene_path = str(tmp_path / "scene.py")
         original_code = "from manimlib import *\nclass TestScene(Scene):\n    def construct(self): pass\n"
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(original_code)
 
         issues = "ISSUE: ghost | CAUSE: stale | FIX: recreate"
@@ -366,7 +366,7 @@ class TestRetryVisualLoop:
             "        self.play(Write(Text('hi')), run_time=1.0)\n"
             "        self.wait(0.5)\n"
         )
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(frozen_code)
 
         from manimgen.validator.frame_checker import FrameCheckResult
@@ -395,7 +395,7 @@ class TestRetryVisualLoop:
         # The scene file on disk now has the corrected wait (~9.0s) and the
         # render was accepted.
         from manimgen.validator.timing_verifier import blocking_freezes, verify_timing
-        with open(scene_path) as f:
+        with open(scene_path, encoding="utf-8") as f:
             final_code = f.read()
         assert "self.wait(9.00)" in final_code
         assert blocking_freezes(verify_timing(final_code, [10.0])) == []
@@ -420,7 +420,7 @@ class TestRetryVisualLoop:
             "class TestScene(Scene):\n"
             "    def construct(self): pass\n"
         )
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(code)
 
         fixed = (
@@ -481,7 +481,7 @@ class TestRetryVisualLoop:
             "class TestScene(Scene):\n"
             "    def construct(self): pass\n"
         )
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(code)
 
         from manimgen.validator.frame_checker import FrameCheckResult
@@ -542,7 +542,7 @@ class TestRetryVisualLoop:
             "        self.play(Write(Text('hi')), run_time=1.0)\n"
             "        self.wait(9.0)\n"
         )
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(code)
 
         from manimgen.validator.frame_checker import FrameCheckResult
@@ -599,7 +599,7 @@ class TestRetryVisualLoop:
             "        self.play(Write(Text('hi')), run_time=1.0)\n"
             "        self.wait(9.0)\n"
         )
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(code)
 
         from manimgen.validator.frame_checker import FrameCheckResult

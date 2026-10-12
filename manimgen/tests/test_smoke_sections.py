@@ -33,7 +33,7 @@ def _load_log(filename: str) -> str:
     log_path = os.path.join(here, "..", "manimgen", "output", "logs", filename)
     if not os.path.isfile(log_path):
         pytest.skip(f"Log file not found (run the pipeline first): {log_path}")
-    with open(log_path) as f:
+    with open(log_path, encoding="utf-8") as f:
         return f.read()
 
 
@@ -271,7 +271,7 @@ class TestArraySwapExamplePassesPrecheck:
         path = os.path.join(here, "..", "examples", "array_swap_scene.py")
         if not os.path.isfile(path):
             pytest.skip("examples/array_swap_scene.py not found")
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             code = f.read()
         fixed = precheck_and_autofix(code)
         errors = validate_scene_code(fixed)
