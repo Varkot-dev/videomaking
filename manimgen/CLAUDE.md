@@ -181,7 +181,9 @@ python3 -m pytest -q
 
 **API key location:** `manimgen/.env` (GEMINI_API_KEY=...)
 
-**Output locations:**
+**Config and output locations:** `manimgen/config.py` is the one loader of `config.yaml` (or the file named by `MANIMGEN_CONFIG`); a missing or malformed file raises `ConfigError`, never a silent default. Relative `output:` paths resolve against the folder holding config.yaml, not the cwd. Editable install (`pip install -e .`) only.
+
+**Output locations** (relative to the config.yaml folder):
 - Final video: `manimgen/output/videos/<title>.mp4`
 - Muxed clips: `manimgen/output/muxed/`
 - Scene code + logs: `manimgen/output/scenes/`, `manimgen/output/logs/`

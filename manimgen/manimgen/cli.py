@@ -4,11 +4,10 @@ import json
 import logging
 import os
 import sys
+import time
 from collections.abc import Callable
 
-import yaml
-
-from manimgen import paths
+from manimgen import config, paths
 from manimgen.generator.scene_generator import generate_scenes
 from manimgen.input.parser import parse_input
 from manimgen.planner.lesson_planner import plan_lesson, plan_lesson_from_pdf
@@ -26,20 +25,8 @@ _PLAN_CACHE = paths.plan_cache()
 
 
 def _load_config() -> dict:
-    config_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
-    try:
-        with open(config_path, encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-    except Exception as e:
-        # A malformed/unreadable config.yaml silently disables TTS and can
-        # route output to default dirs — make the failure visible.
-        logger.warning(
-            "[manimgen] Failed to load config %s (%s) — using empty config "
-            "(TTS may be disabled, defaults applied)",
-            config_path,
-            e,
-        )
-        return {}
+    """The merged settings from the shared loader; a bad config raises ConfigError."""
+    return config.load()
 
 
 def _tts_enabled(cfg: dict) -> bool:
@@ -613,6 +600,70 @@ def _run_section(
 # ---------------------------------------------------------------------------
 
 
+def _configure_logging() -> None:
+    """Show INFO progress on stderr and keep a DEBUG run log under logs_dir().
+
+    main() is the installed console-script entry point, so logging must be set
+    up here rather than under ``__main__`` (#63). If the root logger already
+    has handlers (a host app, a test harness, or an earlier call) it is left
+    alone so output is never duplicated.
+    """
+    root = logging.getLogger()
+    if root.handlers:
+        return
+    root.setLevel(logging.DEBUG)
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    console.setFormatter(logging.Formatter("%(message)s"))
+    root.addHandler(console)
+    try:
+        os.makedirs(paths.logs_dir(), exist_ok=True)
+        log_path = os.path.join(
+            paths.logs_dir(), time.strftime("run_%Y%m%d_%H%M%S.log")
+        )
+        run_log = logging.FileHandler(log_path, encoding="utf-8")
+    except OSError as e:
+        logger.warning("[manimgen] Could not open a run log file (%s)", e)
+        return
+    run_log.setLevel(logging.DEBUG)
+    run_log.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    root.addHandler(run_log)
+
+
+def _die(message: str):
+    """Print an error to stderr and exit non-zero."""
+    print(f"[manimgen] error: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def _save_plan(lesson_plan: dict) -> None:
+    os.makedirs(os.path.dirname(_PLAN_CACHE), exist_ok=True)
+    with open(_PLAN_CACHE, "w", encoding="utf-8") as f:
+        json.dump(lesson_plan, f, indent=2)
+    logger.info("[manimgen] Plan saved to %s", _PLAN_CACHE)
+
+
+def _load_cached_plan() -> dict:
+    """Load the cached plan for --resume, exiting with a clear error if unusable."""
+    if not os.path.exists(_PLAN_CACHE):
+        _die(
+            f"--resume needs a cached plan but none exists at {_PLAN_CACHE}. "
+            "Run without --resume first."
+        )
+    try:
+        with open(_PLAN_CACHE, encoding="utf-8") as f:
+            lesson_plan = json.load(f)
+    except (OSError, ValueError) as e:
+        _die(f"cached plan {_PLAN_CACHE} is corrupt or unreadable ({e}). Delete it.")
+    if not isinstance(lesson_plan, dict) or not isinstance(
+        lesson_plan.get("sections"), list
+    ):
+        _die(f"cached plan {_PLAN_CACHE} is corrupt: no sections list. Delete it.")
+    return lesson_plan
+
+
 def main():
     # Windows writes redirected or piped output in the ANSI code page (cp1252),
     # which cannot encode the arrows used in log lines; replace instead of
@@ -625,27 +676,53 @@ def main():
                 pass
 
     parser = argparse.ArgumentParser(description="ManimGen: topic to 3B1B-style video")
-    group = parser.add_mutually_exclusive_group(required=True)
+    group = parser.add_mutually_exclusive_group()
     group.add_argument("topic", nargs="?", help="Topic string")
     group.add_argument("--pdf", metavar="FILE", help="Path to a PDF of lecture notes")
     parser.add_argument(
-        "--resume", action="store_true", help=f"Resume from cached plan ({_PLAN_CACHE})"
+        "--resume",
+        action="store_true",
+        help=(
+            f"Resume from the cached plan ({_PLAN_CACHE}). Alone it reuses the "
+            "plan as is; with a topic or --pdf the plan must match it or the "
+            "run is refused."
+        ),
     )
     args = parser.parse_args()
+    if not (args.topic or args.pdf or args.resume):
+        parser.error("one of the arguments topic, --pdf or --resume is required")
+
+    _configure_logging()
 
     cfg = _load_config()
     tts_on = _tts_enabled(cfg)
+    logger.info(
+        "[manimgen] Config: %s | plan and output folders: %s",
+        config.config_path(),
+        os.path.dirname(paths.plan_cache()),
+    )
 
     # Reset per-run mismatch log so a new run doesn't accumulate stale entries.
     clear_mismatch_log()
 
     # --- Plan ---
-    if args.resume and os.path.exists(_PLAN_CACHE):
-        logger.info("[manimgen] Resuming from cached plan: %s", _PLAN_CACHE)
-        with open(_PLAN_CACHE, encoding="utf-8") as f:
-            lesson_plan = json.load(f)
-        # Recover topic hash from cached plan (stored during original run)
+    if args.resume:
+        # Refuse rather than replan: replanning spends LLM quota (#64).
+        lesson_plan = _load_cached_plan()
         current_topic_hash = lesson_plan.get("_topic_hash", "")
+        requested = None
+        if args.pdf:
+            requested = (args.pdf, _topic_hash(os.path.abspath(args.pdf)))
+        elif args.topic:
+            requested = (args.topic, _topic_hash(parse_input(args.topic)))
+        if requested and requested[1] != current_topic_hash:
+            _die(
+                f"cached plan {_PLAN_CACHE} is for "
+                f"'{lesson_plan.get('title', '?')}' and does not match the "
+                f"requested input '{requested[0]}'. Rerun without --resume to "
+                "plan it, or drop the input to resume the cached plan."
+            )
+        logger.info("[manimgen] Resuming from cached plan: %s", _PLAN_CACHE)
         if not current_topic_hash:
             logger.warning(
                 "[manimgen] Cached plan has no _topic_hash — all renders will be treated as stale"
@@ -655,20 +732,14 @@ def main():
         current_topic_hash = _topic_hash(os.path.abspath(args.pdf))
         lesson_plan = plan_lesson_from_pdf(args.pdf)
         lesson_plan["_topic_hash"] = current_topic_hash
-        os.makedirs(os.path.dirname(_PLAN_CACHE), exist_ok=True)
-        with open(_PLAN_CACHE, "w", encoding="utf-8") as f:
-            json.dump(lesson_plan, f, indent=2)
-        logger.info("[manimgen] Plan saved to %s", _PLAN_CACHE)
+        _save_plan(lesson_plan)
     else:
         logger.info("[manimgen] Input: %s", args.topic)
         topic = parse_input(args.topic)
         current_topic_hash = _topic_hash(topic)
         lesson_plan = plan_lesson(topic)
         lesson_plan["_topic_hash"] = current_topic_hash
-        os.makedirs(os.path.dirname(_PLAN_CACHE), exist_ok=True)
-        with open(_PLAN_CACHE, "w", encoding="utf-8") as f:
-            json.dump(lesson_plan, f, indent=2)
-        logger.info("[manimgen] Plan saved to %s", _PLAN_CACHE)
+        _save_plan(lesson_plan)
 
     logger.info("[manimgen] Planned %d sections", len(lesson_plan["sections"]))
     logger.info("[manimgen] TTS: %s", "enabled" if tts_on else "disabled")
@@ -744,9 +815,10 @@ def main():
     else:
         logger.info("[manimgen] A/V sync: all cues matched within threshold")
 
-    logger.info("[manimgen] Done: %s", output)
+    # print() so the path shows on stdout even when a host app mutes logging.
+    print(f"[manimgen] Done: {output}")
+    logger.debug("[manimgen] Done: %s", output)
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
     main()
