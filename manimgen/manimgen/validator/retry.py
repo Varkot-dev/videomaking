@@ -5,6 +5,7 @@ import re
 
 from manimgen import paths
 from manimgen.llm import chat
+from manimgen.probes.overlap_report import overlap_issues
 from manimgen.utils import strip_fencing
 from manimgen.validator.codeguard import (
     apply_error_aware_fixes,
@@ -353,6 +354,18 @@ def retry_scene(
             combined_issues = list(frame_issues)
             defective_frames: list[str] = []
 
+            # #97: text drawn over text, measured inside the render by the
+            # zero-cost overlap probe. A hard defect like the ones above, so it
+            # goes through the same bounded visual fix (budget, signature
+            # dedup, best-render acceptance).
+            overlaps = result.get("overlaps") or ()
+            if overlaps:
+                print(
+                    f"[retry] Attempt {attempt}/{MAX_RETRIES} has "
+                    f"{len(overlaps)} text overlap(s) (render probe)."
+                )
+                combined_issues.extend(overlap_issues(overlaps))
+
             if freezes:
                 print(
                     f"[retry] Attempt {attempt}/{MAX_RETRIES} has "
@@ -643,7 +656,12 @@ def _run_and_capture(scene_path: str, class_name: str) -> dict:
     # never see success with video_path None.
     result = run_manimgl(scene_path, class_name)
     if result.ok:
-        return {"success": True, "video_path": result.video_path, "stderr": ""}
+        return {
+            "success": True,
+            "video_path": result.video_path,
+            "stderr": "",
+            "overlaps": tuple(result.overlaps),
+        }
     return {"success": False, "video_path": None, "stderr": result.stderr}
 
 

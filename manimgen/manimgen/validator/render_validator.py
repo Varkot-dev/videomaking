@@ -5,8 +5,13 @@ Runs after every successful manimgl render (first attempt and retries alike).
 Combines frame_checker (zero-cost PIL) and layout_checker (LLM vision) into a
 single interface so callers don't need to wire them separately.
 
+A third, zero-cost source is the render-side overlap probe (#97,
+``manimgen.probes``): text drawn on top of other text, measured from the
+mobjects' own geometry inside manimgl. Its findings arrive as ``OVERLAP:``
+lines and are hard.
+
 Severity:
-  "hard" — ok=False: black screen, frozen animation.
+  "hard" — ok=False: black screen, frozen animation, text over text.
            Caller must block muxing and trigger retry.
   "soft" — ok=True, issues non-empty: layout overlaps, edge clipping.
            Caller logs issues and injects them into the next LLM retry prompt.
@@ -20,6 +25,7 @@ import os
 from dataclasses import dataclass
 from typing import Literal
 
+from manimgen.probes import overlap_report
 from manimgen.validator.frame_checker import check_frames
 from manimgen.validator.layout_checker import check_layout
 from manimgen.validator.timing_verifier import (
@@ -50,6 +56,7 @@ def validate_render(
     code: str,
     scene_path: str,
     cue_durations: list[float] | None,
+    overlaps: list | tuple | None = None,
 ) -> ValidationResult:
     """Run post-render visual validation on a successfully rendered video.
 
@@ -60,6 +67,9 @@ def validate_render(
         scene_path:    Path to the .py scene file (reserved for future use).
         cue_durations: Per-cue durations from TTS segmenter. When None, TTS
                        is disabled and layout_checker is skipped (saves tokens).
+        overlaps:      Text overlaps reported by the render probe for this
+                       render. None reads the report saved next to the video
+                       (``<video>.overlaps.json``); a missing report means none.
 
     Returns:
         ValidationResult with ok, issues, and severity.
@@ -92,6 +102,13 @@ def validate_render(
             all_issues.append(issue)
             if any(kw in issue for kw in _HARD_KEYWORDS):
                 has_hard_failure = True
+
+    # --- Tier 1b: render-side text overlap probe (zero cost, #97) ---
+    if overlaps is None:
+        overlaps = overlap_report.load_for_video(video_path).overlaps
+    if overlaps:
+        all_issues.extend(overlap_report.overlap_issues(overlaps))
+        has_hard_failure = True
 
     # --- Tier 2: layout_checker (LLM vision, only when TTS is on) ---
     # #33: a skipped layout (LLM down/empty) is UNVERIFIED, not clean. It is

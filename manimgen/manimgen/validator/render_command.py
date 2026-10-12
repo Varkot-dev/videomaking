@@ -16,9 +16,13 @@ configured fps. See docs/KNOWN_ISSUES.md.
 from __future__ import annotations
 
 import logging
+import shutil
+import tempfile
+from pathlib import Path
 from typing import NamedTuple
 
 from manimgen import paths
+from manimgen.probes import overlap_report
 from manimgen.validator.scene_ast_gate import format_gate_error, inspect_scene_file
 
 logger = logging.getLogger(__name__)
@@ -66,6 +70,11 @@ class RenderResult(NamedTuple):
     of the render was found; ``video_path`` is then set. On any failure
     ``stderr`` explains why (manimgl's own stderr, a timeout note, or the folders
     searched for a missing video).
+
+    ``overlaps`` lists text drawn on top of other text, as seen by the
+    render-side probe (#97, ``manimgen.probes``); ``probe_error`` is set when
+    the probe itself failed. Neither ever turns a render into a failure here:
+    callers decide what an overlap means.
     """
 
     ok: bool
@@ -74,6 +83,8 @@ class RenderResult(NamedTuple):
     stderr: str
     returncode: int | None
     timed_out: bool
+    overlaps: tuple = ()
+    probe_error: str | None = None
 
 
 def _scene_timeout(scene_path: str) -> float:
@@ -126,11 +137,38 @@ def run_manimgl(
     # Freshness floor: a video older than this cannot be this render's output,
     # so a stale file from an earlier attempt is never mistaken for it.
     started_at = _render_floor()
-    returncode, stdout, stderr, timed_out = procutil.run_tree(
-        build_manimgl_command(scene_path, class_name),
-        timeout=timeout,
-        env=with_utf8_io(get_render_env()),
-    )
+    env = with_utf8_io(get_render_env())
+    probe_dir = None
+    report_path = None
+    if overlap_report.probe_enabled():
+        probe_dir = tempfile.mkdtemp(prefix="manimgen_probe_")
+        report_path = str(Path(probe_dir) / "overlaps.json")
+        env = overlap_report.with_probe_env(env, report_path)
+    try:
+        returncode, stdout, stderr, timed_out = procutil.run_tree(
+            build_manimgl_command(scene_path, class_name),
+            timeout=timeout,
+            env=env,
+        )
+        report = (
+            overlap_report.read_report(report_path)
+            if probe_dir
+            else overlap_report.OverlapReport()
+        )
+        video = None
+        if not timed_out and returncode == 0:
+            video = _find_rendered_video(class_name, newer_than=started_at)
+            if video is not None:
+                # Without a report (probe off or silent) a stale sidecar from an
+                # earlier render of this class is removed, never re-read.
+                overlap_report.save_sidecar(video, report_path)
+    finally:
+        if probe_dir:
+            shutil.rmtree(probe_dir, ignore_errors=True)
+    if report.probe_error:
+        logger.warning(
+            "[render] overlap probe error for %s: %s", class_name, report.probe_error
+        )
     if timed_out:
         note = (
             f"TimeoutExpired: scene rendering exceeded {timeout:g} seconds "
@@ -140,7 +178,6 @@ def run_manimgl(
     if returncode != 0:
         return RenderResult(False, None, stdout, stderr, returncode, False)
 
-    video = _find_rendered_video(class_name, newer_than=started_at)
     if video is None:
         searched = ", ".join(_video_search_dirs())
         note = (
@@ -150,4 +187,19 @@ def run_manimgl(
         return RenderResult(
             False, None, stdout, (stderr + "\n" + note).strip(), 0, False
         )
-    return RenderResult(True, video, stdout, stderr, 0, False)
+    if report.overlaps:
+        logger.warning(
+            "[render] %s: %d text overlap(s) found by the render probe",
+            class_name,
+            len(report.overlaps),
+        )
+    return RenderResult(
+        True,
+        video,
+        stdout,
+        stderr,
+        0,
+        False,
+        overlaps=report.overlaps,
+        probe_error=report.probe_error,
+    )
