@@ -1,12 +1,10 @@
 import logging
 import os
 import re
-import subprocess
 
 from manimgen import paths
 from manimgen.utils import safe_section_id
-from manimgen.validator.env import get_render_env
-from manimgen.validator.render_command import build_manimgl_command, with_utf8_io
+from manimgen.validator.render_command import run_manimgl
 
 logger = logging.getLogger(__name__)
 
@@ -70,28 +68,18 @@ def fallback_scene(section: dict) -> str | None:
     with open(scene_path, "w", encoding="utf-8") as f:
         f.write(code)
 
-    try:
-        result = subprocess.run(
-            build_manimgl_command(scene_path, class_name),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=180,
-            env=with_utf8_io(get_render_env()),
-        )
-        if result.returncode == 0:
-            from manimgen.validator.runner import _find_rendered_video
+    result = run_manimgl(
+        scene_path, class_name, timeout=paths.render_timeout("fallback")
+    )
+    if result.ok:
+        return result.video_path
 
-            return _find_rendered_video(class_name)
-
-        # deterministic fallback has no second strategy; fail fast
-        logger.warning(
-            "[fallback] manimgl exited %d for %s", result.returncode, class_name
-        )
-    except subprocess.TimeoutExpired:
-        logger.warning("[fallback] %s timed out after 180s", class_name)
-
+    # deterministic fallback has no second strategy; fail fast
+    logger.warning(
+        "[fallback] render failed for %s: %s",
+        class_name,
+        (result.stderr or "").strip()[-300:],
+    )
     return None
 
 
