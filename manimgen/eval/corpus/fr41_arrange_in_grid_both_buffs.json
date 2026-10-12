@@ -1,0 +1,13 @@
+{
+  "case_id": "fr41_arrange_in_grid_both_buffs",
+  "failure_mode": "wrong_kwarg_names_arrange_in_grid",
+  "error_class": "TypeError",
+  "provenance": {
+    "source": "derived-from-fix-rule",
+    "ref": "manimgen/validator/codeguard.py:_KWARG_NORMALIZATION_REGISTRY",
+    "evidence": "The registry mapped row_buff and col_buff to the same buff kwarg, so a call with both became 'buff=0.5, buff=0.3' (SyntaxError: keyword argument repeated). ManimGL arrange_in_grid takes h_buff and v_buff."
+  },
+  "stderr": "TypeError: arrange_in_grid() got an unexpected keyword argument 'row_buff'",
+  "expected_outcome": "repairable",
+  "notes": "Both row_buff and col_buff on one call must map to v_buff and h_buff and still compile."
+}

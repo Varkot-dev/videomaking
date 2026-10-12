@@ -2,7 +2,9 @@ import hashlib
 import json
 import logging
 import os
+import re
 
+from manimgen import techniques
 from manimgen.llm import chat
 from manimgen.planner.cue_parser import parse_cues
 from manimgen.utils import sanitize_section_id
@@ -17,52 +19,185 @@ _MAX_SECTIONS_PDF = 8
 _SELF_CORRECT_LIMIT = 1  # number of critic passes per plan
 
 
+_TECHNIQUE_NAME = re.compile(r"^\s*Technique:\s*`?([A-Za-z0-9_]+)")
+
+# A critic rewrite whose narration shrinks below this fraction of the original
+# is treated as damage, not an edit (the critic is asked to expand, not trim).
+_CRITIC_MIN_NARRATION_RATIO = 0.6
+
+
+def _technique_menu() -> frozenset[str]:
+    """Technique names the planner may use (the shared registry)."""
+    return techniques.TECHNIQUE_NAMES
+
+
 def _load_critic_system_prompt() -> str:
     here = os.path.dirname(__file__)
-    with open(os.path.join(here, "prompts", "storyboard_critic_system.md")) as f:
-        return f.read()
+    with open(
+        os.path.join(here, "prompts", "storyboard_critic_system.md"), encoding="utf-8"
+    ) as f:
+        text = f.read()
+    return text.replace(
+        "{{TECHNIQUES}}", ", ".join(f"`{t}`" for t in sorted(_technique_menu()))
+    )
+
+
+def _check_plan_shape(plan: dict) -> None:
+    """Raise ValueError unless ``plan`` has a usable non-empty ``sections`` list.
+
+    Every section must be an object with a non-empty string ``narration``.
+    A missing ``id`` is tolerated because ``_sanitize_section_ids`` repairs it.
+    """
+    sections = plan.get("sections")
+    if not isinstance(sections, list) or not sections:
+        raise ValueError("plan has no non-empty 'sections' list")
+    for i, sec in enumerate(sections, start=1):
+        if not isinstance(sec, dict):
+            raise ValueError(f"plan 'sections' entry {i} is not an object")
+        narration = sec.get("narration")
+        if not isinstance(narration, str) or not narration.strip():
+            raise ValueError(f"plan 'sections' entry {i} has no narration")
+
+
+def _technique_names(section: dict) -> set[str]:
+    names = set()
+    for cue in section.get("cues") or []:
+        visual = cue.get("visual") if isinstance(cue, dict) else None
+        m = _TECHNIQUE_NAME.match(visual) if isinstance(visual, str) else None
+        if m:
+            names.add(m.group(1))
+    return names
+
+
+def _critic_rejection(original: dict, candidate: dict) -> str | None:
+    """Why the critic's plan must not replace the original, or None to accept.
+
+    The critic is told to keep the same sections and fix quality problems, but
+    only the prompt enforces that. Accept it only when it keeps the section
+    count and ids, does not gut the narration, keeps cues consistent with the
+    [CUE] markers, and introduces no technique outside the planner menu.
+    """
+    try:
+        _check_plan_shape(candidate)
+    except ValueError as e:
+        return str(e)
+    old, new = original["sections"], candidate["sections"]
+    if len(new) != len(old):
+        return f"section count changed from {len(old)} to {len(new)}"
+    menu = _technique_menu()
+    for i, (o, n) in enumerate(zip(old, new), start=1):
+        if n.get("id") != o.get("id"):
+            return f"section {i} id changed from {o.get('id')!r} to {n.get('id')!r}"
+        old_words = len(o.get("narration", "").split())
+        new_words = len(n["narration"].split())
+        if new_words < _CRITIC_MIN_NARRATION_RATIO * old_words:
+            return f"section {i} narration shrank from {old_words} to {new_words} words"
+        cues = n.get("cues")
+        if o.get("cues") and not cues:
+            return f"section {i} cues were dropped"
+        if cues is not None:
+            if not isinstance(cues, list):
+                return f"section {i} cues is not a list"
+            expected = n["narration"].count("[CUE]") + 1
+            if len(cues) != expected:
+                return f"section {i} has {len(cues)} cues for {expected} segments"
+        unknown = (_technique_names(n) - menu) - _technique_names(o)
+        if unknown:
+            return f"section {i} uses unknown technique(s) {sorted(unknown)}"
+    return None
 
 
 def _self_correct(plan: dict, limit: int = _SELF_CORRECT_LIMIT) -> dict:
     critic_system = _load_critic_system_prompt()
     for _ in range(limit):
         raw = chat(
-            system=critic_system, user=json.dumps(plan, indent=2), json_mode=True
+            system=critic_system,
+            user=json.dumps(plan, indent=2),
+            json_mode=True,
+            role="critic",
         )
-        stripped = _strip_fencing(raw)
         try:
-            plan = _safe_json_loads(stripped)
+            candidate = _parse_plan_json(raw)
         except Exception:
             logger.warning(
-                "[planner] Self-correction returned non-JSON — keeping original plan"
+                "[planner] Storyboard critic returned non-JSON - keeping original plan"
             )
             break
+        reason = _critic_rejection(plan, candidate)
+        if reason:
+            logger.warning(
+                "[planner] Storyboard critic output rejected (%s) - keeping original plan",
+                reason,
+            )
+            break
+        plan = candidate
     return plan
 
 
 def _load_system_prompt() -> str:
     here = os.path.dirname(__file__)
-    with open(os.path.join(here, "prompts", "planner_system.md")) as f:
+    with open(
+        os.path.join(here, "prompts", "planner_system.md"), encoding="utf-8"
+    ) as f:
         return f.read()
+
+
+def _planner_section(text: str, heading: str) -> str:
+    """The ``## heading`` section of the planner prompt, up to the next rule or ``## ``."""
+    start = text.index(heading)
+    ends = [
+        i
+        for i in (text.find("\n## ", start + 1), text.find("\n---", start + 1))
+        if i != -1
+    ]
+    return text[start : min(ends) if ends else len(text)].strip()
 
 
 def _load_pdf_system_prompt() -> str:
+    """PDF planner prompt plus the topic planner's technique menu and visual rules.
+
+    Both planners emit the same schema, so the menu and visual rules live in
+    one place (planner_system.md) and are appended here rather than copied.
+    """
     here = os.path.dirname(__file__)
-    with open(os.path.join(here, "prompts", "planner_pdf_system.md")) as f:
-        return f.read()
+    with open(
+        os.path.join(here, "prompts", "planner_pdf_system.md"), encoding="utf-8"
+    ) as f:
+        pdf_prompt = f.read()
+    with open(
+        os.path.join(here, "prompts", "planner_system.md"), encoding="utf-8"
+    ) as f:
+        topic_prompt = f.read()
+    shared = "\n\n".join(
+        _planner_section(topic_prompt, h)
+        for h in (
+            "## Technique menu",
+            "## Rules for the `visual` field",
+        )
+    )
+    return f"{pdf_prompt.rstrip()}\n\n---\n\n{shared}\n"
 
 
 def _load_researcher_system_prompt() -> str:
     here = os.path.dirname(__file__)
-    with open(os.path.join(here, "prompts", "researcher_system.md")) as f:
+    with open(
+        os.path.join(here, "prompts", "researcher_system.md"), encoding="utf-8"
+    ) as f:
         return f.read()
 
 
 def _cap_sections(plan: dict, limit: int) -> dict:
     sections = plan.get("sections", [])
     if len(sections) > limit:
+        dropped = [
+            str(sec.get("title", "?")) if isinstance(sec, dict) else "?"
+            for sec in sections[limit:]
+        ]
         logger.warning(
-            "[planner] LLM returned %d sections, capping to %d", len(sections), limit
+            "[planner] LLM returned %d sections, capping to %d - dropped: %s",
+            len(sections),
+            limit,
+            ", ".join(repr(t) for t in dropped),
         )
         plan["sections"] = sections[:limit]
     return plan
@@ -267,7 +402,9 @@ def _refill_cues_via_llm(
         f"LaTeX backslashes inside Tex() only."
     )
     try:
-        raw = chat(system=_load_system_prompt(), user=user, json_mode=True)
+        raw = chat(
+            system=_load_system_prompt(), user=user, json_mode=True, role="cue_refill"
+        )
         # This path INTENTIONALLY accepts a top-level JSON array (the cue list),
         # so use the lenient parser rather than the dict-guaranteeing wrapper.
         parsed = _safe_json_loads_any(_strip_fencing(raw))
@@ -389,6 +526,114 @@ def _is_valid_unicode_escape(s: str, backslash_idx: int) -> bool:
     return all(c in _HEX_DIGITS for c in s[hex_start:hex_end])
 
 
+# LaTeX commands that start with a letter JSON also accepts as an escape
+# (\b \f \n \r \t). A reply like "\theta" or "\nabla" parses "successfully"
+# into a tab or newline plus text, silently corrupting the Tex() string, so a
+# backslash starting one of these is doubled before the first parse. Names are
+# matched whole, so a real "\nNext line" escape is left alone.
+_LATEX_ESCAPE_CLASH = frozenset(
+    """neq ne nabla nu not notin neg newline nolimits ni
+    rho right rightarrow rangle rceil rfloor rm rightleftharpoons
+    text textbf textit textrm theta tau tan times to top triangle tilde tfrac
+    therefore thinspace tag tiny tanh""".split()
+)
+_LETTER_RUN = re.compile(r"[A-Za-z]+")
+
+
+def _protect_latex_backslashes(s: str) -> str:
+    """Double backslashes that start LaTeX commands so JSON keeps them.
+
+    Walks the text so an already-valid ``\\\\`` pair is never touched. A
+    backslash followed by two or more letters is always a LaTeX command unless
+    it is a JSON ``\\n``/``\\r``/``\\t`` escape glued to a word, which is told
+    apart by matching the whole letter run against known commands.
+    """
+    out = []
+    i = 0
+    n = len(s)
+    while i < n:
+        ch = s[i]
+        if ch != "\\":
+            out.append(ch)
+            i += 1
+            continue
+        nxt = s[i + 1] if i + 1 < n else ""
+        if nxt == "\\":
+            out.append("\\\\")  # keep a valid escaped backslash as-is
+            i += 2
+            continue
+        run = _LETTER_RUN.match(s, i + 1)
+        word = run.group(0) if run else ""
+        if len(word) >= 2 and (word[0] not in "nrt" or word in _LATEX_ESCAPE_CLASH):
+            out.append("\\\\")  # LaTeX command: double the backslash
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _parse_plan_json(raw: str) -> dict:
+    """Parse a planner reply into a plan dict, tolerating chatty replies.
+
+    Takes the first JSON object found (``raw_decode`` from a ``{``), so prose
+    before or after it, or around a code fence, is ignored. LaTeX backslashes
+    are protected before the first parse. Raises ValueError when no object
+    can be read.
+    """
+    text = _protect_latex_backslashes(raw)
+    decoder = json.JSONDecoder()
+    last_err: Exception | None = None
+    pos = text.find("{")
+    while pos != -1:
+        try:
+            obj, _ = decoder.raw_decode(text, pos)
+        except json.JSONDecodeError as e:
+            last_err = e
+            pos = text.find("{", pos + 1)
+            continue
+        if isinstance(obj, dict):
+            return obj
+        pos = text.find("{", pos + 1)
+    raise ValueError(
+        f"no JSON object found in the reply ({last_err or 'no opening brace'})"
+    )
+
+
+def _checked_plan(raw: str) -> dict:
+    plan = _parse_plan_json(raw)
+    _check_plan_shape(plan)
+    return plan
+
+
+def _chat_plan(
+    system: str,
+    user: str,
+    images: list[str] | None = None,
+    role: str = "planner",
+) -> dict:
+    """Ask for a plan and parse it, re-asking exactly once on a bad reply.
+
+    A reply is bad when it holds no JSON object or no usable ``sections``.
+
+    Both calls go through ``chat`` so the usage guard and budget apply.
+    """
+    raw = chat(system=system, user=user, images=images, json_mode=True, role=role)
+    try:
+        return _checked_plan(raw)
+    except ValueError as e:
+        logger.warning(
+            "[planner] Plan reply was not usable JSON (%s) - re-asking once", e
+        )
+        retry_user = (
+            f"{user}\n\nYour previous reply could not be used: {e}. "
+            "Return ONLY the complete JSON object, with no text before or after it."
+        )
+        raw = chat(
+            system=system, user=retry_user, images=images, json_mode=True, role=role
+        )
+        return _checked_plan(raw)
+
+
 def research_topic(topic: str) -> dict:
     """Call LLM with researcher prompt to build a structured knowledge brief.
 
@@ -400,6 +645,7 @@ def research_topic(topic: str) -> dict:
         system=system,
         user=f"Research this topic for an educational video: {topic}",
         json_mode=True,
+        role="researcher",
     )
     try:
         brief = _safe_json_loads(_strip_fencing(raw))
@@ -511,8 +757,7 @@ def plan_lesson(topic: str) -> dict:
     else:
         user_message = f"Create a visual storyboard for: {topic}"
 
-    raw = chat(system=system, user=user_message, json_mode=True)
-    plan = _cap_sections(_safe_json_loads(_strip_fencing(raw)), _MAX_SECTIONS_TOPIC)
+    plan = _cap_sections(_chat_plan(system, user_message), _MAX_SECTIONS_TOPIC)
     plan = _self_correct(plan)
     # _self_correct wholesale-replaces `plan` with the critic LLM's output,
     # which can re-inflate section count past the cap. Re-assert the
@@ -542,6 +787,7 @@ def plan_lesson_from_pdf(pdf_path: str) -> dict:
     MAX_CHARS = 24_000
     content_parts = []
     total = 0
+    chunks_sent = 0
     for i, chunk in enumerate(parsed["chunks"]):
         entry = f"[Chunk {i + 1}]\n{chunk}"
         if total + len(entry) > MAX_CHARS:
@@ -551,6 +797,18 @@ def plan_lesson_from_pdf(pdf_path: str) -> dict:
             break
         content_parts.append(entry)
         total += len(entry)
+        chunks_sent += 1
+    chunks_total = len(parsed["chunks"])
+    if chunks_sent < chunks_total:
+        logger.warning(
+            "[planner] PDF text truncated: only chunks 1-%d of %d were sent to the "
+            "planner (%d char limit); chunks %d-%d were NOT seen",
+            chunks_sent,
+            chunks_total,
+            MAX_CHARS,
+            chunks_sent + 1,
+            chunks_total,
+        )
 
     source_content = "\n\n".join(content_parts)
 
@@ -567,23 +825,41 @@ def plan_lesson_from_pdf(pdf_path: str) -> dict:
         )
 
     MAX_IMAGES = 10
-    if len(images) > MAX_IMAGES:
+    images_total = len(images)
+    if images_total > MAX_IMAGES:
+        logger.warning(
+            "[planner] PDF has %d rendered pages: only pages 1-%d were sent as "
+            "images; pages %d-%d were NOT seen",
+            images_total,
+            MAX_IMAGES,
+            MAX_IMAGES + 1,
+            images_total,
+        )
         images = images[:MAX_IMAGES]
 
     system = _load_pdf_system_prompt()
     logger.info(
         "[planner] Calling LLM for PDF lesson plan (images: %d)...", len(images)
     )
-    raw = chat(
-        system=system,
-        user=user_message,
-        images=images if images else None,
-        json_mode=True,
+    plan = _chat_plan(
+        system, user_message, images if images else None, role="planner_pdf"
     )
-    plan = _cap_sections(_safe_json_loads(_strip_fencing(raw)), _MAX_SECTIONS_PDF)
+    titles = [
+        str(sec.get("title", "?")) if isinstance(sec, dict) else "?"
+        for sec in plan["sections"]
+    ]
+    plan = _cap_sections(plan, _MAX_SECTIONS_PDF)
     plan = _self_correct(plan)
     # Same invariant as the topic path: _self_correct wholesale-replaces
     # `plan` with the critic LLM's output and can re-inflate section count
     # past the cap. Re-assert it.
     plan = _cap_sections(plan, _MAX_SECTIONS_PDF)
-    return _extract_cues(plan)
+    plan = _extract_cues(plan)
+    plan["source_coverage"] = {
+        "chunks_total": chunks_total,
+        "chunks_sent": chunks_sent,
+        "images_total": images_total,
+        "images_sent": len(images),
+        "sections_dropped": titles[_MAX_SECTIONS_PDF:],
+    }
+    return plan

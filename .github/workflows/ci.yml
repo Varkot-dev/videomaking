@@ -8,7 +8,13 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
+    # claude/** lets a working branch be tested without opening a PR (a branch
+    # with an open PR runs twice, once per event; the concurrency group below
+    # only de-duplicates runs of the same ref).
+    branches: [main, "claude/**"]
+  # Manual run from the Actions tab or the API (needs no local tooling, so it
+  # works from a machine where you have no admin rights).
+  workflow_dispatch:
 
 # Cancel superseded runs on the same ref to save CI minutes.
 concurrency:
@@ -23,6 +29,7 @@ jobs:
   lint:
     name: Lint (ruff)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -36,13 +43,22 @@ jobs:
         run: ruff format --check manimgen/
 
   test:
-    name: Full test suite (no ignores)
+    name: Full test suite (no ignores, Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      # Report every interpreter's result instead of cancelling the rest on
+      # the first failure: a 3.11-only break is the signal this matrix exists for.
+      fail-fast: false
+      matrix:
+        # 3.11 is the oldest supported interpreter (and what the Windows job
+        # pins); 3.13 is the development interpreter.
+        python-version: ["3.11", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python-version }}
       - name: System libs — manim native build deps (pangocairo) + GL + FFmpeg (ffprobe)
         # manimgl pulls OpenGL/GLU; tests don't render but DO import manimlib.
         run: >
@@ -56,8 +72,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest pytest-mock hypothesis
+          pip install -r requirements-dev.txt
           pip install -e .
       - name: Run the ENTIRE suite — zero --ignore flags
         # This is the core of the hardening: the previously-hidden
@@ -67,11 +82,28 @@ jobs:
         # No --maxfail: report a change's FULL blast radius, not just the
         # first failure. --strict-markers is also set in pyproject.toml so a
         # bare local `pytest` matches this invocation (local == CI).
+        if: matrix.python-version != '3.13'
         run: python3 -m pytest tests/ -q --strict-markers
+
+      - name: Run the ENTIRE suite with a coverage report (3.13 only)
+        # Same suite, same flags, plus a coverage table in the job summary so
+        # a reader can see how much of cli.py and renderer/ the tests execute.
+        # Report only: there is deliberately no --cov-fail-under until a
+        # baseline exists.
+        if: matrix.python-version == '3.13'
+        run: >
+          python3 -m pytest tests/ -q --strict-markers
+          --cov=manimgen --cov-report=term
+          --cov-report=markdown-append:$GITHUB_STEP_SUMMARY
 
   smoke:
     name: Mocked-LLM pipeline smoke
+    # Kept although these three files also run in the full suite: this exact
+    # job name is a REQUIRED status check in docs/BRANCH_PROTECTION.md, and
+    # deleting it would leave main's protection waiting on a check that never
+    # reports. Remove it only together with that branch protection rule.
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -89,8 +121,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest pytest-mock hypothesis
+          pip install -r requirements-dev.txt
           pip install -e .
       - name: Pipeline contract + Director smoke (mocked LLM, zero API cost)
         # The real behavioral signal here is test_pipeline_contracts (A/V
@@ -100,3 +131,37 @@ jobs:
         # mocked — zero API key, zero render, zero network. A wiring
         # regression in any of these fails here without any API cost.
         run: python3 -m pytest tests/test_pipeline_contracts.py tests/test_pipeline_e2e.py tests/test_director.py -q --strict-markers
+
+  windows:
+    name: Full test suite (Windows, Python 3.11)
+    # The primary user runs manimgen on a Windows 11 PC without admin rights,
+    # so Windows-only breakage (cp1252 default text encoding, backslash paths,
+    # files that cannot be deleted while open, reserved filename characters)
+    # must fail CI rather than surface on that machine. PYTHONUTF8 is
+    # deliberately NOT set here: the job has to run under Windows' real
+    # default encoding to catch a missing encoding="utf-8".
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: FFmpeg (ffprobe)
+        # Chocolatey is preinstalled on the hosted runner; its shims land in
+        # C:\ProgramData\chocolatey\bin, which is already on PATH.
+        run: choco install ffmpeg -y --no-progress
+      - name: Install dependencies
+        # No apt equivalent is needed: on Python 3.11 every native manimgl
+        # dependency (manimpango, skia-pathops, moderngl, mapbox-earcut) ships
+        # a prebuilt win_amd64 wheel, so nothing compiles. If a future manimgl
+        # or dependency bump drops one of those wheels, this step fails with a
+        # "Microsoft Visual C++ 14.0 or greater is required" build error; pin
+        # the dependency to the last version with a Windows wheel rather than
+        # removing this job.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install -e .
+      - name: Run the ENTIRE suite on Windows
+        run: python -m pytest tests/ -q --strict-markers

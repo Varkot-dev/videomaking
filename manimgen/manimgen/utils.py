@@ -1,10 +1,14 @@
 """Shared utilities used across multiple manimgen modules."""
 
 import base64
+import contextlib
 import glob
 import os
 import re
 import subprocess
+import time
+import uuid
+from collections.abc import Iterator
 from typing import Any
 
 # A section id must be safe to interpolate into a filesystem path AND into a
@@ -15,6 +19,64 @@ from typing import Any
 # "_". (See sanitize_section_id.)
 _SECTION_ID_ALLOWED = re.compile(r"[^a-z0-9_]")
 _MAX_SECTION_ID_LEN = 64
+
+
+# os.replace onto a file another process holds open (a video player, an
+# antivirus scan) raises PermissionError on Windows. The lock is usually brief,
+# so retry a few times before giving up.
+_REPLACE_ATTEMPTS = 5
+_REPLACE_DELAY_SECONDS = 0.2
+
+
+def replace_with_retry(src: str, dst: str) -> None:
+    """``os.replace`` that retries briefly on PermissionError (Windows locks)."""
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == _REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(_REPLACE_DELAY_SECONDS)
+
+
+@contextlib.contextmanager
+def atomic_output(final_path: str) -> Iterator[str]:
+    """Yield a unique temp path next to ``final_path``; publish it on success.
+
+    A killed or timed-out encoder leaves only the temp file, never a partial
+    file at ``final_path`` that a later run could trust. On a clean exit the
+    temp file is moved over ``final_path`` with ``os.replace`` (atomic, and
+    replaces an existing file on Windows too); on any exception it is removed.
+    The temp name keeps the final extension so ffmpeg still infers the muxer,
+    and carries a random token so concurrent writers never share a name.
+    """
+    directory, name = os.path.split(final_path)
+    stem, ext = os.path.splitext(name)
+    tmp = os.path.join(directory, f"{stem}.{uuid.uuid4().hex[:8]}.part{ext}")
+    try:
+        yield tmp
+        if not os.path.exists(tmp):
+            raise FileNotFoundError(f"encoder produced no output file for {final_path}")
+        replace_with_retry(tmp, final_path)
+    finally:
+        with contextlib.suppress(OSError):
+            if os.path.exists(tmp):
+                os.remove(tmp)
+
+
+def ffmpeg_concat_line(path: str) -> str:
+    """Return one ffmpeg concat-demuxer ``file '...'`` line for ``path``.
+
+    The path is made absolute and written with forward slashes, which ffmpeg
+    accepts on every platform, so Windows paths such as ``C:\\Users\\...``
+    never reach the demuxer's backslash-escape parser. A single quote inside the
+    path is escaped as ``'\\''`` (close quote, escaped quote, reopen), which is
+    the quoting the concat demuxer documents. Write the list file as UTF-8 so
+    non-ASCII directory names survive on Windows (whose default is cp1252).
+    """
+    p = os.path.abspath(path).replace("\\", "/").replace("'", "'\\''")
+    return f"file '{p}'\n"
 
 
 def safe_probe_duration(data: Any) -> float | None:
@@ -69,6 +131,8 @@ def probe_video_duration(video_path: str, timeout: int = 15) -> float | None:
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
         if result.returncode == 0:
@@ -85,6 +149,29 @@ def strip_fencing(raw: str) -> str:
         raw = raw.split("\n", 1)[1]
         raw = raw.rsplit("```", 1)[0]
     return raw.strip()
+
+
+# How llm.py reports a used-up allowance from `claude -p` (its fatal markers).
+_USAGE_LIMIT_MARKERS = ("usage limit", "limit reached", "credit balance")
+
+
+def is_usage_stop(exc: BaseException) -> bool:
+    """True when an LLM error means "stop the run now, resume later" (#72).
+
+    That is the plan or paid-API guard (PaidApiBlockedError) or a `claude -p`
+    call refused because the plan's usage limit is reached. Retrying either
+    inside the run cannot help, so callers must re-raise it, not swallow it.
+    """
+    from manimgen.llm import PaidApiBlockedError
+
+    if isinstance(exc, PaidApiBlockedError):
+        return True
+    text = str(exc).lower()
+    return (
+        isinstance(exc, RuntimeError)
+        and "claude -p failed" in text
+        and any(marker in text for marker in _USAGE_LIMIT_MARKERS)
+    )
 
 
 def sanitize_section_id(raw_id: Any, idx: int = 0) -> str:
@@ -152,7 +239,7 @@ def load_reference_frames() -> list[str]:
 
     An empty list is a supported state, not an error: both the layout checker
     and the retry path treat "no reference frames" as "skip style comparison".
-    To restore the capability, render your own frames from ``examples/`` and
+    To restore the capability, render your own frames from ``manimgen/examples/`` and
     drop the PNGs here — which also yields exemplars matching this project's own
     visual conventions rather than someone else's.
     """

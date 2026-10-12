@@ -1,23 +1,38 @@
 """Tests for the deterministic frame checker (Tier 1 visual validation)."""
 from __future__ import annotations
 
+import time
+
+import numpy as np
 import pytest
 
 # Frame checker functions are tested at the unit level — we create fake PIL
 # images instead of rendering real video (that would require manimgl + ffmpeg).
 try:
-    from PIL import Image
+    from PIL import Image, ImageDraw
     _HAS_PIL = True
 except ImportError:
     _HAS_PIL = False
 
+from manimgen.validator import frame_checker
 from manimgen.validator.frame_checker import (
+    _changed_fraction,
+    _small_array,
     FrameCheckResult,
     _check_black_frame,
     _check_edge_clipping,
     _check_frozen_frames,
     _BACKGROUND_COLOR,
 )
+
+def _text_supports_size() -> bool:
+    """ImageDraw.text(font_size=) needs Pillow >= 10.1 with FreeType."""
+    try:
+        ImageDraw.Draw(Image.new("RGB", (10, 10))).text((0, 0), "x", font_size=12)
+        return True
+    except Exception:
+        return False
+
 
 pytestmark = pytest.mark.skipif(not _HAS_PIL, reason="PIL not installed")
 
@@ -81,11 +96,27 @@ class TestBlackFrame:
         issue = _check_black_frame(img, 1.0)
         assert issue is not None
 
-    def test_background_color_not_flagged(self):
-        """The pipeline's #1C1C1C background (28,28,28) should NOT be flagged."""
-        img = _solid_image(_BACKGROUND_COLOR)
-        issue = _check_black_frame(img, 1.0)
-        assert issue is None
+    def test_flat_background_frame_is_flagged_as_empty(self):
+        """R30: a flat #1C1C1C frame is an empty scene. The mean-brightness test
+        alone could never fire on it (28 > threshold), so it shipped."""
+        for size in ((320, 180), (1920, 1080)):
+            issue = _check_black_frame(_solid_image(_BACKGROUND_COLOR, size), 1.0)
+            assert issue is not None
+            assert "Black/empty frame" in issue
+
+    def test_background_with_compression_noise_still_empty(self):
+        rng = np.random.default_rng(1)
+        arr = np.full((180, 320, 3), _BACKGROUND_COLOR, dtype=np.int16)
+        arr += rng.integers(-2, 3, arr.shape)
+        img = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
+        assert _check_black_frame(img, 1.0) is not None
+
+    def test_sparse_legitimate_frame_not_flagged(self):
+        """A single short line of text on the background is real content."""
+        img = Image.new("RGB", (1920, 1080), _BACKGROUND_COLOR)
+        ImageDraw.Draw(img).text((200, 500), "Hello world", fill=(255, 255, 255), font_size=48) \
+            if _text_supports_size() else ImageDraw.Draw(img).rectangle((200, 500, 700, 540), fill=(255, 255, 255))
+        assert _check_black_frame(img, 1.0) is None
 
     def test_bright_image_not_flagged(self):
         img = _solid_image((200, 200, 200))
@@ -163,6 +194,84 @@ class TestFrozenFrames:
                 img_b.putpixel((x, y), (min(255, r + 50), g, b))
         issue = _check_frozen_frames(img_a, img_b, 1.0, 3.0)
         assert issue is None
+
+
+def _text_like_frame(size: tuple[int, int] = (1920, 1080)) -> Image.Image:
+    """Sparse white-on-dark strokes, like the pipeline's text scenes."""
+    img = Image.new("RGB", size, _BACKGROUND_COLOR)
+    d = ImageDraw.Draw(img)
+    for i in range(8):
+        d.line((300, 300 + i * 60, 1500 - i * 40, 300 + i * 60), fill=(235, 235, 235), width=4)
+    return img
+
+
+class TestFrozenCalibration:
+    """R30: numbers behind _FROZEN_MAX_CHANGED, measured on 1080p synthetic frames.
+
+    identical / +-2 noise: 0.0 changed; one 120px stroke: ~0.0005; the real
+    Section01Scene pair (sparse text appearing): 0.0039; a 100px dot moving: ~0.008.
+    """
+
+    def test_static_pair_is_frozen_even_with_compression_noise(self):
+        a = _text_like_frame()
+        rng = np.random.default_rng(0)
+        noisy = np.asarray(a, dtype=np.int16) + rng.integers(-2, 3, (1080, 1920, 3))
+        b = Image.fromarray(np.clip(noisy, 0, 255).astype(np.uint8))
+        assert _check_frozen_frames(a, a.copy(), 1.0, 3.0) is not None
+        assert _check_frozen_frames(a, b, 1.0, 3.0) is not None
+
+    def test_sparse_text_animation_is_not_frozen(self):
+        """Section01Scene regression: 0.39% of pixels changed was flagged at 0.98."""
+        a = _text_like_frame()
+        b = a.copy()
+        d = ImageDraw.Draw(b)
+        # one 4px-thick, 1000px-long stroke is about 0.4% of a 1080p frame
+        d.line((200, 850, 1200, 850), fill=(255, 255, 255), width=4)
+        frac = _changed_fraction(_small_array(a), _small_array(b))
+        assert 0.003 < frac < 0.006
+        assert _check_frozen_frames(a, b, 1.5, 3.0) is None
+
+    def test_tiny_deliberate_stroke_is_not_frozen(self):
+        a = _text_like_frame()
+        b = a.copy()
+        ImageDraw.Draw(b).line((300, 800, 420, 800), fill=(255, 255, 255), width=4)
+        assert _check_frozen_frames(a, b, 1.0, 3.0) is None
+
+    def test_moving_dot_is_not_frozen(self):
+        a = _text_like_frame()
+        b, c = a.copy(), a.copy()
+        ImageDraw.Draw(b).ellipse((900, 500, 1000, 600), fill=(255, 200, 0))
+        ImageDraw.Draw(c).ellipse((1000, 500, 1100, 600), fill=(255, 200, 0))
+        assert _check_frozen_frames(b, c, 1.0, 3.0) is None
+
+    def test_size_mismatch_is_ignored(self):
+        assert _check_frozen_frames(_solid_image((9, 9, 9), (10, 10)), _solid_image((9, 9, 9), (20, 20)), 0, 1) is None
+
+    def test_1080p_pair_is_fast(self):
+        """The old pure-Python loop took 1.3-1.9s per 1080p pair; numpy is ~tens of ms."""
+        a, b = _text_like_frame(), _text_like_frame()
+        start = time.perf_counter()
+        for _ in range(5):
+            _check_frozen_frames(a, b, 1.0, 3.0)
+            _check_edge_clipping(a, 1.0)
+            _check_black_frame(a, 1.0)
+        assert time.perf_counter() - start < 2.0
+
+
+class TestNumpyUnavailable:
+    def test_pixel_check_raises_clear_error(self, monkeypatch):
+        monkeypatch.setattr(frame_checker, "_HAS_NUMPY", False)
+        with pytest.raises(RuntimeError, match="numpy"):
+            _check_frozen_frames(_solid_image((1, 1, 1)), _solid_image((1, 1, 1)), 0, 1)
+
+    def test_check_frames_skips_with_warning(self, monkeypatch, tmp_path, caplog):
+        monkeypatch.setattr(frame_checker, "_HAS_NUMPY", False)
+        video = tmp_path / "v.mp4"
+        video.write_bytes(b"\x00")
+        with caplog.at_level("WARNING"):
+            result = frame_checker.check_frames(str(video))
+        assert result.skipped is True and result.ok is True
+        assert "numpy" in caplog.text
 
 
 # -----------------------------------------------------------------------

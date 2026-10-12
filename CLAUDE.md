@@ -6,12 +6,14 @@ The active project is **manimgen** — an automated pipeline that converts topic
 See `manimgen/CLAUDE.md` — all pipeline context, API rules, known issues, and session state lives there. **Do not duplicate content here.**
 
 ## Repo
-`https://github.com/Varkot-dev/videomaking.git` — branch `main` (active work on `antigravity`)
+`https://github.com/Varkot-dev/videomaking.git`, branch `main` (the active branch; `antigravity` is historical)
 
 ## Project layout
 ```
-3Blue1Brown/
-├── manimgen/   ← active project (pipeline, tests, scenes)
-├── manim/      ← ManimGL install (read-only)
+videomaking/          ← git root
+├── README.md         ← public docs (setup for macOS/Linux and Windows, LLM providers)
+├── manimgen/         ← active project (pipeline, tests, scenes); run pip/pytest from here
+├── manim/            ← ManimGL source submodule (read-only reference)
 └── MASTER GUIDELINES.md
 ```
+

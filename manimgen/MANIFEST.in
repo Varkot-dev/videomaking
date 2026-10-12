@@ -1,0 +1,8 @@
+include requirements.txt requirements-dev.txt config.yaml
+recursive-include manimgen/planner/prompts *.md
+recursive-include manimgen/generator/prompts *.md
+recursive-include manimgen/validator/prompts *.md
+recursive-include manimgen/validator *.json
+recursive-include manimgen/editor/templates *.html
+recursive-include manimgen/examples *.py
+recursive-include manimgen/probes/bootstrap *.py

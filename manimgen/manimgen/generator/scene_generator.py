@@ -8,11 +8,13 @@ The generated scene contains self.wait() pauses at each cue boundary so the full
 renders as a single continuous mp4. The assembler/muxer then cuts it at cue timestamps.
 """
 
+import logging
 import math
 import os
 import re
+from pathlib import Path
 
-from manimgen import paths
+from manimgen import paths, techniques
 from manimgen.llm import chat
 from manimgen.utils import (
     load_reference_frames,
@@ -21,14 +23,31 @@ from manimgen.utils import (
     strip_fencing,
 )
 from manimgen.validator.codeguard import precheck_and_autofix, precheck_and_autofix_file
+from manimgen.validator.scene_ast_gate import format_gate_error, inspect_scene_code
+
+logger = logging.getLogger(__name__)
+
+
+class ScenePrecheckError(ValueError):
+    """The generated scene was written to disk but failed codeguard's precheck.
+
+    Carries the saved draft so the caller can route it into the retry/repair path
+    (whose first attempt re-runs precheck and hands the errors to the fixes)
+    instead of aborting the run. Subclasses ValueError for existing callers.
+    """
+
+    def __init__(self, message: str, code: str, class_name: str, scene_path: str):
+        super().__init__(message)
+        self.code = code
+        self.class_name = class_name
+        self.scene_path = scene_path
+
 
 _WORDS_PER_MINUTE = 130
 _MAX_EXAMPLES = 6
 
-# Technique tags that require a 3D scene. A cue visual mentioning any of these
-# promotes the generated `class X(Scene)` to `class X(ThreeDScene)`. Built once
-# at module load — previously rebuilt on every generate_scenes() call.
-_3D_TECHNIQUES = frozenset({"3d_surface", "camera_rotation"})
+# 3D technique tags come from the shared registry (manimgen/techniques.py): a cue
+# visual mentioning any promotes the generated `class X(Scene)` to ThreeDScene.
 
 # Negation words that, when they directly precede a 3D tag, mean the tag is
 # being ruled out rather than requested ("no 3d_surface needed").
@@ -42,7 +61,7 @@ def _requests_3d(cue_visuals: str) -> bool:
     `\\b3d_surface\\b` matches the full tag and not a fragment of a longer
     word) and rejects matches immediately preceded by a negation word.
     """
-    for tag in _3D_TECHNIQUES:
+    for tag in sorted(techniques.THREE_D_TECHNIQUES):
         for m in re.finditer(rf"\b{re.escape(tag)}\b", cue_visuals):
             preceding = cue_visuals[: m.start()].rstrip().split()
             if preceding and preceding[-1] in _NEGATION_PREFIXES:
@@ -53,8 +72,15 @@ def _requests_3d(cue_visuals: str) -> bool:
 
 def _load_director_prompt() -> str:
     here = os.path.dirname(__file__)
-    with open(os.path.join(here, "prompts", "director_system.md")) as f:
+    with open(
+        os.path.join(here, "prompts", "director_system.md"), encoding="utf-8"
+    ) as f:
         return f.read()
+
+
+def _examples_dir() -> Path:
+    """The few-shot examples folder, shipped inside the package."""
+    return Path(__file__).resolve().parent.parent / "examples"
 
 
 def _index_examples() -> dict[str, list[str]]:
@@ -66,49 +92,63 @@ def _index_examples() -> dict[str, list[str]]:
         techniques: technique_a, technique_b
     as the first line inside the class docstring.
     """
-    here = os.path.dirname(__file__)
-    examples_dir = os.path.normpath(os.path.join(here, "..", "..", "examples"))
+    examples_dir = _examples_dir()
     index: dict[str, list[str]] = {}
-    if not os.path.isdir(examples_dir):
+    if not examples_dir.is_dir():
+        logger.warning(
+            "examples folder not found at %s: the Director gets no few-shot examples",
+            examples_dir,
+        )
         return index
 
     tag_re = re.compile(r"techniques:\s*(.+)", re.IGNORECASE)
-    for fname in sorted(os.listdir(examples_dir)):
-        if not fname.endswith(".py"):
-            continue
-        path = os.path.join(examples_dir, fname)
-        with open(path) as f:
+    for path in sorted(examples_dir.glob("*.py")):
+        with open(path, encoding="utf-8") as f:
             head = f.read(512)  # tag always near the top
         m = tag_re.search(head)
         if not m:
             continue
         for technique in [t.strip() for t in m.group(1).split(",")]:
-            index.setdefault(technique, []).append(path)
+            index.setdefault(technique, []).append(str(path))
 
     return index
 
 
 def _select_examples(section: dict, index: dict[str, list[str]]) -> list[str]:
-    """Return up to _MAX_EXAMPLES full example file paths relevant to this section."""
-    # Always include these two as baseline context
-    here = os.path.dirname(__file__)
-    examples_dir = os.path.normpath(os.path.join(here, "..", "..", "examples"))
-    baseline = [
-        os.path.join(examples_dir, "graph_scene.py"),
-        os.path.join(examples_dir, "stagger_build_scene.py"),
-    ]
-    selected: list[str] = [p for p in baseline if os.path.isfile(p)]
+    """Return up to _MAX_EXAMPLES example paths, covering requested techniques first.
 
-    # Add technique-specific examples from cue visual fields
-    for cue in section.get("cues", []):
-        visual = cue.get("visual", "").lower()
-        for technique, paths_list in index.items():
-            if technique in visual:
-                for p in paths_list:
-                    if p not in selected:
-                        selected.append(p)
+    Greedy cover: repeatedly take the example that matches the most techniques
+    the section's cues still lack an example for (ties go to the technique that
+    appears first in the cues, then file name). The two baseline scenes only
+    fill slots left over, so late cues are never squeezed out by cue order.
+    """
+    visuals = " ".join(c.get("visual", "").lower() for c in section.get("cues", []))
+    wanted = sorted(
+        (t for t in index if t in visuals), key=lambda t: (visuals.index(t), t)
+    )
+    selected: list[str] = []
+    uncovered = list(wanted)
+    while uncovered and len(selected) < _MAX_EXAMPLES:
+        candidates = {p for t in uncovered for p in index[t] if p not in selected}
+        if not candidates:
+            break
 
-    return selected[:_MAX_EXAMPLES]
+        def gain(p: str) -> tuple[int, int, str]:
+            hits = [i for i, t in enumerate(uncovered) if p in index[t]]
+            return (-len(hits), hits[0], p)
+
+        best = min(candidates, key=gain)
+        selected.append(best)
+        uncovered = [t for t in uncovered if best not in index[t]]
+
+    examples_dir = _examples_dir()
+    for name in ("graph_scene.py", "stagger_build_scene.py"):
+        path = str(examples_dir / name)
+        if len(selected) < _MAX_EXAMPLES and path not in selected:
+            if os.path.isfile(path):
+                selected.append(path)
+
+    return selected
 
 
 def _load_examples_text(section: dict) -> str:
@@ -118,7 +158,7 @@ def _load_examples_text(section: dict) -> str:
         return ""
     blocks = []
     for path in selected:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             content = f.read().strip()
         blocks.append(f"### {os.path.basename(path)}\n```python\n{content}\n```")
     return "\n\n".join(blocks)
@@ -188,6 +228,9 @@ def generate_scenes(
 
     Returns:
         (code, class_name, scene_path)
+
+    Raises:
+        ScenePrecheckError: the saved scene failed precheck validation.
     """
     class_name = section_class_name(section)
 
@@ -216,7 +259,7 @@ def generate_scenes(
         )
 
     ref_frames = load_reference_frames()
-    raw = chat(system=system, user=user_message, images=ref_frames)
+    raw = chat(system=system, user=user_message, images=ref_frames, role="director")
     code = strip_fencing(raw)
 
     if not code.startswith("from manimlib"):
@@ -237,21 +280,44 @@ def generate_scenes(
     # Defense in depth: sanitize the id again at this filesystem sink — the
     # written file is executed by manimgl, so a traversal id here is RCE.
     scene_path = os.path.join(scenes_dir, f"{safe_section_id(section)}.py")
-    with open(scene_path, "w") as f:
+    with open(scene_path, "w", encoding="utf-8") as f:
         f.write(code)
 
     # Run file-based full validation (layout smells, timing smells, banned patterns)
     # AFTER saving — the string-only precheck above skips these checks. Surface
     # a non-ok result instead of discarding it and proceeding to a render that
     # is already known to be doomed (mirrors runner.py's precheck["ok"] gate).
+    # The draft stays on disk and rides on the exception so the caller can send
+    # it through retry_scene rather than lose the section.
     precheck = precheck_and_autofix_file(scene_path)
-    with open(scene_path) as f:
+    with open(scene_path, encoding="utf-8") as f:
         code = f.read()
 
     if not precheck["ok"]:
-        raise ValueError(
+        raise ScenePrecheckError(
             f"Generated scene {os.path.basename(scene_path)} failed precheck "
-            f"validation:\n{precheck['stderr']}"
+            f"validation:\n{precheck['stderr']}",
+            code,
+            class_name,
+            scene_path,
+        )
+
+    # Scene safety gate (#87). A rejected scene is never rendered: it takes the
+    # same route as a precheck failure, so the first render is skipped and the
+    # retry loop (whose renders are also gated) gets the findings to fix.
+    gate = inspect_scene_code(code)
+    if not gate.ok:
+        logger.warning(
+            "[generator] scene safety gate rejected %s: %s",
+            os.path.basename(scene_path),
+            "; ".join(gate.findings),
+        )
+        raise ScenePrecheckError(
+            f"Generated scene {os.path.basename(scene_path)} was rejected by "
+            f"the scene safety gate:\n{format_gate_error(gate)}",
+            code,
+            class_name,
+            scene_path,
         )
 
     return code, class_name, scene_path

@@ -33,7 +33,7 @@ REQUIRED_TECHNIQUES = [
 
 
 def _read():
-    with open(PROMPT_PATH) as f:
+    with open(PROMPT_PATH, encoding="utf-8") as f:
         return f.read()
 
 

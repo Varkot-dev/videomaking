@@ -36,9 +36,9 @@ Every shape (Circle, Arrow, SurroundingRectangle, Brace, Rectangle…) must be w
 # ✗ wrong — rect stays old size
 self.play(scan_rect.animate.move_to(boxes[i]))
 # ✗ wrong — become() returns self (a Mobject), not an Animation → CRASH
-self.play(scan_rect.become(SurroundingRectangle(boxes[i], color=YELLOW, buff=0.05)))
+self.play(scan_rect.become(SurroundingRectangle(boxes[i], color=TEAL_A, buff=0.05)))
 # ✓ correct — become() first (mutates in place), then animate it
-scan_rect.become(SurroundingRectangle(boxes[i], color=YELLOW, buff=0.05))
+scan_rect.become(SurroundingRectangle(boxes[i], color=TEAL_A, buff=0.05))
 self.play(ShowCreation(scan_rect), run_time=0.2)
 ```
 
@@ -51,7 +51,7 @@ self.play(ShowCreation(scan_rect), run_time=0.2)
 # WRONG — crashes
 highlight = SurroundingRectangle(gradient_eq.get_parts_by_tex_expression(r"\nabla J")[0])
 # RIGHT — create separate label and position it
-nabla_label = Tex(r"\nabla J", font_size=36, color=YELLOW)
+nabla_label = Tex(r"\nabla J", font_size=36, color=TEAL_A)
 nabla_label.move_to(gradient_eq).shift(LEFT * 1.5)  # position manually
 ```
 
@@ -67,7 +67,7 @@ If the error says "X.XXs short — animations sum to Y.YYs", the cue has a freez
 - A `SurroundingRectangle` highlight on the key element
 - A `Brace` with annotation
 - A label appearing/fading
-- `self.play(Indicate(obj, color=YELLOW))` on the key object
+- `self.play(Indicate(obj, color=TEAL_A))` on the key object
 - A new object fading in or moving
 
 Loop timing bug — the most common cause:
@@ -104,7 +104,7 @@ equation.next_to(title, DOWN, buff=0.4)   # never .center() when title exists
 
 **3D text rotating/tilted (ThreeDScene):** All Text/Tex objects in a ThreeDScene MUST call `.fix_in_frame()` immediately after creation, or they rotate with the 3D camera and appear diagonal on screen. Fix: add `.fix_in_frame()` after every text creation in ThreeDScene:
 ```python
-title = Text("Title", font_size=42).to_edge(UP)
+title = Text("Title", font_size=44).to_edge(UP, buff=0.8)
 title.fix_in_frame()   # ADD THIS — prevents 3D camera rotation affecting text
 self.play(FadeIn(title))
 

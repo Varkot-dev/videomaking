@@ -9,8 +9,6 @@ concatenation rather than as source literals, so static scanners do not flag
 the test file itself as containing the very patterns it asserts are rejected.
 """
 
-import logging
-
 import pytest
 
 from manimgen.utils import safe_section_id, sanitize_section_id, section_class_name
@@ -161,23 +159,24 @@ class TestSceneAstGate:
         assert any("SyntaxError" in f for f in r.findings)
 
 
-# ── #29 — config-load failures are logged, not silently swallowed ────────────
+# ── #29 / #83 — config-load failures are loud, not silently swallowed ───────
 
 
 class TestConfigLoadLogging:
-    def test_malformed_config_warns(self, tmp_path, monkeypatch, caplog):
-        from manimgen import cli
+    def test_malformed_config_is_a_clear_error(self, tmp_path, monkeypatch):
+        from manimgen import cli, config
 
-        pkg_dir = tmp_path / "manimgen"
-        pkg_dir.mkdir()
         bad = tmp_path / "config.yaml"
-        bad.write_text("this: : : not valid yaml\n  - broken")
-        # _load_config reads ../config.yaml relative to its own __file__ dir,
-        # so point dirname at the temp package dir.
-        monkeypatch.setattr(cli.os.path, "dirname", lambda _: str(pkg_dir))
-        with caplog.at_level(logging.WARNING):
-            cfg = cli._load_config()
-        assert cfg == {}  # fallback behavior preserved
-        assert any(
-            "config" in rec.message.lower() for rec in caplog.records
-        ), "expected a WARNING when config.yaml is unreadable"
+        bad.write_text("this: : : not valid yaml\n  - broken", encoding="utf-8")
+        monkeypatch.setenv(config.ENV_VAR, str(bad))
+        config.reload()
+        try:
+            # Formerly this logged a warning and returned {} (TTS silently off,
+            # defaults applied). It now stops and names the file (#83).
+            with pytest.raises(config.ConfigError) as ei:
+                cli._load_config()
+        finally:
+            monkeypatch.delenv(config.ENV_VAR)
+            config.reload()
+        assert str(bad) in str(ei.value)
+        assert "not valid YAML" in str(ei.value)

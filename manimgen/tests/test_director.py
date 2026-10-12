@@ -319,7 +319,7 @@ class TestCodeguardPrecheck(unittest.TestCase):
     def test_precheck_file_returns_dict(self):
         from manimgen.validator.codeguard import precheck_and_autofix_file
         path = "/tmp/test_codeguard_scene.py"
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write("from manimlib import *\nclass S(Scene):\n    def construct(self): self.wait(1)\n")
         result = precheck_and_autofix_file(path)
         self.assertIsInstance(result, dict)

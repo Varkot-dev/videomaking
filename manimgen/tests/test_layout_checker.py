@@ -12,6 +12,8 @@ import pytest
 from manimgen.utils import probe_video_duration
 from manimgen.validator.layout_checker import (
     check_layout,
+    first_pass_layout_enabled,
+    parse_layout_verdict,
     _extract_frame,
     _sample_frames,
 )
@@ -162,6 +164,102 @@ class TestCheckLayout:
         assert kwargs["images"] == ref_frames + frames
 
 
+# ── R10: verdict parser and prompt wording ───────────────────────────────────
+
+class TestParseLayoutVerdict:
+
+    @pytest.mark.parametrize("reply", ["OK", "OK.", "**OK**", "ok", "  OK\n", "`OK`", "OK, nothing wrong"])
+    def test_ok_variants_are_clean(self, reply):
+        assert parse_layout_verdict(reply) == ("ok", "")
+
+    @pytest.mark.parametrize("reply", ["No defects found", "Looks fine to me.", "OKAY then", "Cannot tell"])
+    def test_unparseable_is_unverified_not_a_defect(self, reply):
+        assert parse_layout_verdict(reply) == ("unverified", "")
+
+    def test_prose_plus_issue_lines_keeps_only_issue_lines(self):
+        reply = (
+            "Here is my review:\n"
+            "ISSUE: title overlaps axes | CAUSE: shift | FIX: move\n"
+            "Overall the frames look fine otherwise.\n"
+            "- ISSUE: label clipped | CAUSE: edge | FIX: buff"
+        )
+        verdict, issues = parse_layout_verdict(reply)
+        assert verdict == "issues"
+        assert issues.splitlines() == [
+            "ISSUE: title overlaps axes | CAUSE: shift | FIX: move",
+            "- ISSUE: label clipped | CAUSE: edge | FIX: buff",
+        ]
+
+    def test_issue_lines_win_over_leading_ok(self):
+        assert parse_layout_verdict("OK\nISSUE: a | CAUSE: b | FIX: c")[0] == "issues"
+
+    def test_empty_reply_is_unverified(self):
+        assert parse_layout_verdict("   ")[0] == "unverified"
+
+
+class TestCheckLayoutVerdicts:
+
+    def _run(self, reply):
+        with patch("os.path.exists", return_value=True), \
+             patch("manimgen.validator.layout_checker._sample_frames", return_value=["f"]), \
+             patch("manimgen.validator.layout_checker.load_reference_frames", return_value=[]), \
+             patch("manimgen.validator.layout_checker.chat", return_value=reply):
+            return check_layout("/fake/video.mp4")
+
+    def test_ok_with_period_is_clean(self):
+        result = self._run("OK.")
+        assert result["ok"] is True and result["skipped"] is False
+
+    def test_unparseable_reply_is_unverified_not_defect(self):
+        result = self._run("No defects found")
+        assert result["ok"] is True
+        assert result["skipped"] is True
+        assert result["unverified"] is True
+        assert result["issues"] == ""
+
+    def test_prose_is_stripped_from_issues(self):
+        result = self._run("Review:\nISSUE: a | CAUSE: b | FIX: c\nThanks")
+        assert result["ok"] is False
+        assert result["issues"] == "ISSUE: a | CAUSE: b | FIX: c"
+
+
+class TestNoGoldStandardWording:
+
+    def _user_prompt(self, ref_frames):
+        with patch("os.path.exists", return_value=True), \
+             patch("manimgen.validator.layout_checker._sample_frames", return_value=["f1", "f2"]), \
+             patch("manimgen.validator.layout_checker.load_reference_frames", return_value=ref_frames), \
+             patch("manimgen.validator.layout_checker.chat", return_value="OK") as mock_chat:
+            check_layout("/fake/video.mp4")
+        return mock_chat.call_args.kwargs
+
+    def test_no_references_means_no_reference_wording(self):
+        kwargs = self._user_prompt([])
+        text = (kwargs["user"] + kwargs["system"]).lower()
+        assert "gold standard" not in text
+        assert "amateurish" not in text
+        assert "first 0" not in text
+        assert kwargs["images"] == ["f1", "f2"]
+
+    def test_with_references_they_are_style_only(self):
+        kwargs = self._user_prompt(["r1"])
+        assert "FIRST 1 images" in kwargs["user"]
+        assert "gold standard" not in (kwargs["user"] + kwargs["system"]).lower()
+        assert kwargs["images"] == ["r1", "f1", "f2"]
+
+
+class TestFirstPassFlag:
+
+    def test_default_off(self, monkeypatch):
+        monkeypatch.delenv("MANIMGEN_FIRST_PASS_LAYOUT", raising=False)
+        assert first_pass_layout_enabled() is False
+
+    @pytest.mark.parametrize("value,expected", [("1", True), ("true", True), ("0", False), ("off", False)])
+    def test_values(self, monkeypatch, value, expected):
+        monkeypatch.setenv("MANIMGEN_FIRST_PASS_LAYOUT", value)
+        assert first_pass_layout_enabled() is expected
+
+
 # ── retry.py visual feedback loop ────────────────────────────────────────────
 
 class TestRetryVisualLoop:
@@ -179,7 +277,7 @@ class TestRetryVisualLoop:
 
     def test_accepts_video_when_layout_ok(self, tmp_path):
         scene_path = str(tmp_path / "scene.py")
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write("from manimlib import *\nclass TestScene(Scene):\n    def construct(self): pass\n")
 
         with patch("manimgen.validator.retry._run_and_capture",
@@ -196,7 +294,7 @@ class TestRetryVisualLoop:
         """When layout check fails and budget allows, LLM is called with structured visual issues."""
         scene_path = str(tmp_path / "scene.py")
         original_code = "from manimlib import *\nclass TestScene(Scene):\n    def construct(self): pass\n"
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(original_code)
 
         issues = "ISSUE: ghost element | CAUSE: Transform point mismatch | FIX: use FadeOut/FadeIn"
@@ -228,7 +326,7 @@ class TestRetryVisualLoop:
     def test_accepts_video_when_budget_exhausted_despite_layout_issues(self, tmp_path):
         scene_path = str(tmp_path / "scene.py")
         original_code = "from manimlib import *\nclass TestScene(Scene):\n    def construct(self): pass\n"
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(original_code)
 
         issues = "ISSUE: overlap | CAUSE: stale rect | FIX: recreate rect"
@@ -258,7 +356,7 @@ class TestRetryVisualLoop:
         not spin idle render iterations until MAX_RETRIES is exhausted."""
         scene_path = str(tmp_path / "scene.py")
         original_code = "from manimlib import *\nclass TestScene(Scene):\n    BROKEN\n"
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(original_code)
 
         stderr = "AttributeError: 'Scene' object has no attribute 'frobnicate'"
@@ -291,7 +389,7 @@ class TestRetryVisualLoop:
         frame_checker already found concrete (non-frozen) defects."""
         scene_path = str(tmp_path / "scene.py")
         original_code = "from manimlib import *\nclass TestScene(Scene):\n    def construct(self): pass\n"
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(original_code)
 
         from manimgen.validator.frame_checker import FrameCheckResult
@@ -315,7 +413,7 @@ class TestRetryVisualLoop:
         versa). The two budgets are tracked separately."""
         scene_path = str(tmp_path / "scene.py")
         original_code = "from manimlib import *\nclass TestScene(Scene):\n    def construct(self): pass\n"
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(original_code)
 
         issues = "ISSUE: ghost | CAUSE: stale | FIX: recreate"
@@ -366,7 +464,7 @@ class TestRetryVisualLoop:
             "        self.play(Write(Text('hi')), run_time=1.0)\n"
             "        self.wait(0.5)\n"
         )
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(frozen_code)
 
         from manimgen.validator.frame_checker import FrameCheckResult
@@ -395,7 +493,7 @@ class TestRetryVisualLoop:
         # The scene file on disk now has the corrected wait (~9.0s) and the
         # render was accepted.
         from manimgen.validator.timing_verifier import blocking_freezes, verify_timing
-        with open(scene_path) as f:
+        with open(scene_path, encoding="utf-8") as f:
             final_code = f.read()
         assert "self.wait(9.00)" in final_code
         assert blocking_freezes(verify_timing(final_code, [10.0])) == []
@@ -420,7 +518,7 @@ class TestRetryVisualLoop:
             "class TestScene(Scene):\n"
             "    def construct(self): pass\n"
         )
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(code)
 
         fixed = (
@@ -481,7 +579,7 @@ class TestRetryVisualLoop:
             "class TestScene(Scene):\n"
             "    def construct(self): pass\n"
         )
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(code)
 
         from manimgen.validator.frame_checker import FrameCheckResult
@@ -542,7 +640,7 @@ class TestRetryVisualLoop:
             "        self.play(Write(Text('hi')), run_time=1.0)\n"
             "        self.wait(9.0)\n"
         )
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(code)
 
         from manimgen.validator.frame_checker import FrameCheckResult
@@ -599,7 +697,7 @@ class TestRetryVisualLoop:
             "        self.play(Write(Text('hi')), run_time=1.0)\n"
             "        self.wait(9.0)\n"
         )
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(code)
 
         from manimgen.validator.frame_checker import FrameCheckResult
@@ -634,3 +732,67 @@ class TestRetryVisualLoop:
         layout_mock.assert_called_once()
         mock_chat.assert_not_called()
         assert success is True
+
+
+class TestAcceptedIssuesAreReported:
+    """A render shipped with known visual defects must say so (run 2 printed
+    "ok" for a section the vision check had flagged three times)."""
+
+    _CODE = "from manimlib import *\nclass TestScene(Scene):\n    def construct(self): pass\n"
+
+    def _run(self, tmp_path, layout):
+        from manimgen.validator.frame_checker import FrameCheckResult
+        from manimgen.validator import retry as retry_module
+
+        scene_path = str(tmp_path / "scene.py")
+        with open(scene_path, "w", encoding="utf-8") as f:
+            f.write(self._CODE)
+        with patch("manimgen.validator.retry._run_and_capture",
+                   return_value={"success": True, "video_path": "/fake/v.mp4", "stderr": ""}), \
+             patch("manimgen.validator.frame_checker.check_frames",
+                   return_value=FrameCheckResult(ok=True)), \
+             patch("manimgen.validator.retry.check_layout", return_value=layout), \
+             patch("manimgen.validator.retry.chat"), \
+             patch.object(retry_module, "MAX_VISUAL_LLM_FIX_CALLS", 0):
+            ok, video = retry_module.retry_scene(
+                {"title": "t", "narration": "n", "cues": []}, self._CODE, "TestScene", scene_path
+            )
+        return ok, video, retry_module.accepted_issues(video)
+
+    def test_issues_recorded_when_accepted_despite_defects(self, tmp_path):
+        issue = "ISSUE: saddle is tiny | CAUSE: scale | FIX: scale up"
+        ok, video, issues = self._run(
+            tmp_path, {"ok": False, "issues": issue, "skipped": False}
+        )
+        assert ok and video == "/fake/v.mp4"
+        assert issues == [issue]
+
+    def test_clean_render_has_no_recorded_issues(self, tmp_path):
+        self._run(tmp_path, {"ok": False, "issues": "ISSUE: x", "skipped": False})
+        ok, video, issues = self._run(tmp_path, {"ok": True, "issues": "", "skipped": False})
+        assert ok and issues == []
+
+    def test_cli_reports_accepted_visual_defects(self, monkeypatch, tmp_path):
+        import logging
+
+        from manimgen import cli
+        from manimgen.types import GateResult, SectionStatus
+        from manimgen.validator import retry as retry_module
+
+        video = str(tmp_path / "S.mp4")
+        with open(video, "wb") as f:
+            f.write(b"\x00")
+        monkeypatch.setitem(
+            retry_module._accepted_issues, video, ["ISSUE: saddle is tiny"]
+        )
+        monkeypatch.setattr(cli, "run_scene", lambda p, c: (False, None))
+        monkeypatch.setattr(cli, "retry_scene", lambda *a, **k: (True, video))
+        monkeypatch.setattr(cli, "_scene_file_blocking_freezes", lambda p, d: [])
+        gate = GateResult(
+            code="CODE", class_name="S", scene_path="/tmp/s.py", timing_blocked=False
+        )
+
+        result = cli._render_with_retry({}, gate, None, logging.getLogger("t"))
+
+        assert result.status == SectionStatus.ACCEPTED_WITH_DEFECTS
+        assert "saddle is tiny" in result.reason
