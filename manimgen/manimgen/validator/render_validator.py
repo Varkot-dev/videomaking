@@ -2,8 +2,11 @@
 Render validator — unified post-render quality gate.
 
 Runs after every successful manimgl render (first attempt and retries alike).
-Combines frame_checker (zero-cost PIL) and layout_checker (LLM vision) into a
-single interface so callers don't need to wire them separately.
+Combines frame_checker (zero-cost PIL) and, when opted in, layout_checker (LLM
+vision) into a single interface so callers don't need to wire them separately.
+The first-pass vision check is OFF by default (set MANIMGEN_FIRST_PASS_LAYOUT=1):
+nothing enforced its verdict, so it only cost a vision call per section. The
+retry path (retry.py) still runs check_layout.
 
 A third, zero-cost source is the render-side overlap probe (#97,
 ``manimgen.probes``): text drawn on top of other text, measured from the
@@ -13,8 +16,9 @@ lines and are hard.
 Severity:
   "hard" — ok=False: black screen, frozen animation, text over text.
            Caller must block muxing and trigger retry.
-  "soft" — ok=True, issues non-empty: layout overlaps, edge clipping.
-           Caller logs issues and injects them into the next LLM retry prompt.
+  "soft" — ok=True, issues non-empty: layout overlaps, edge clipping (layout
+           issues only appear when the first-pass vision check is opted in).
+           The verdict is advisory; callers act only on "hard".
   "none" — ok=True, issues empty: fully clean.
 """
 
@@ -27,7 +31,10 @@ from typing import Literal
 
 from manimgen.probes import overlap_report
 from manimgen.validator.frame_checker import check_frames
-from manimgen.validator.layout_checker import check_layout
+from manimgen.validator.layout_checker import (
+    check_layout,
+    first_pass_layout_enabled,
+)
 from manimgen.validator.timing_verifier import (
     blocking_freezes,
     join_frozen_with_timing,
@@ -67,6 +74,7 @@ def validate_render(
         scene_path:    Path to the .py scene file (reserved for future use).
         cue_durations: Per-cue durations from TTS segmenter. When None, TTS
                        is disabled and layout_checker is skipped (saves tokens).
+                       layout_checker also needs MANIMGEN_FIRST_PASS_LAYOUT.
         overlaps:      Text overlaps reported by the render probe for this
                        render. None reads the report saved next to the video
                        (``<video>.overlaps.json``); a missing report means none.
@@ -110,13 +118,15 @@ def validate_render(
         all_issues.extend(overlap_report.overlap_issues(overlaps))
         has_hard_failure = True
 
-    # --- Tier 2: layout_checker (LLM vision, only when TTS is on) ---
+    # --- Tier 2: layout_checker (LLM vision, opt-in, only when TTS is on) ---
+    # Default off: the verdict was never enforced (R10), so each call was a
+    # wasted vision request. Re-enable with MANIMGEN_FIRST_PASS_LAYOUT=1.
     # #33: a skipped layout (LLM down/empty) is UNVERIFIED, not clean. It is
     # NOT downgraded into a silent "none" pass here — callers treat a soft
     # result as "inspect/retry", and the cli path additionally runs the timing
     # freeze gate. We surface the unverified state as a soft issue so it is
     # never mistaken for a verified-clean render.
-    if cue_durations is not None:
+    if cue_durations is not None and first_pass_layout_enabled():
         layout = check_layout(video_path)
         if layout.get("skipped"):
             all_issues.append(

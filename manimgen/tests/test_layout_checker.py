@@ -12,6 +12,8 @@ import pytest
 from manimgen.utils import probe_video_duration
 from manimgen.validator.layout_checker import (
     check_layout,
+    first_pass_layout_enabled,
+    parse_layout_verdict,
     _extract_frame,
     _sample_frames,
 )
@@ -160,6 +162,102 @@ class TestCheckLayout:
 
         _, kwargs = mock_chat.call_args
         assert kwargs["images"] == ref_frames + frames
+
+
+# ── R10: verdict parser and prompt wording ───────────────────────────────────
+
+class TestParseLayoutVerdict:
+
+    @pytest.mark.parametrize("reply", ["OK", "OK.", "**OK**", "ok", "  OK\n", "`OK`", "OK, nothing wrong"])
+    def test_ok_variants_are_clean(self, reply):
+        assert parse_layout_verdict(reply) == ("ok", "")
+
+    @pytest.mark.parametrize("reply", ["No defects found", "Looks fine to me.", "OKAY then", "Cannot tell"])
+    def test_unparseable_is_unverified_not_a_defect(self, reply):
+        assert parse_layout_verdict(reply) == ("unverified", "")
+
+    def test_prose_plus_issue_lines_keeps_only_issue_lines(self):
+        reply = (
+            "Here is my review:\n"
+            "ISSUE: title overlaps axes | CAUSE: shift | FIX: move\n"
+            "Overall the frames look fine otherwise.\n"
+            "- ISSUE: label clipped | CAUSE: edge | FIX: buff"
+        )
+        verdict, issues = parse_layout_verdict(reply)
+        assert verdict == "issues"
+        assert issues.splitlines() == [
+            "ISSUE: title overlaps axes | CAUSE: shift | FIX: move",
+            "- ISSUE: label clipped | CAUSE: edge | FIX: buff",
+        ]
+
+    def test_issue_lines_win_over_leading_ok(self):
+        assert parse_layout_verdict("OK\nISSUE: a | CAUSE: b | FIX: c")[0] == "issues"
+
+    def test_empty_reply_is_unverified(self):
+        assert parse_layout_verdict("   ")[0] == "unverified"
+
+
+class TestCheckLayoutVerdicts:
+
+    def _run(self, reply):
+        with patch("os.path.exists", return_value=True), \
+             patch("manimgen.validator.layout_checker._sample_frames", return_value=["f"]), \
+             patch("manimgen.validator.layout_checker.load_reference_frames", return_value=[]), \
+             patch("manimgen.validator.layout_checker.chat", return_value=reply):
+            return check_layout("/fake/video.mp4")
+
+    def test_ok_with_period_is_clean(self):
+        result = self._run("OK.")
+        assert result["ok"] is True and result["skipped"] is False
+
+    def test_unparseable_reply_is_unverified_not_defect(self):
+        result = self._run("No defects found")
+        assert result["ok"] is True
+        assert result["skipped"] is True
+        assert result["unverified"] is True
+        assert result["issues"] == ""
+
+    def test_prose_is_stripped_from_issues(self):
+        result = self._run("Review:\nISSUE: a | CAUSE: b | FIX: c\nThanks")
+        assert result["ok"] is False
+        assert result["issues"] == "ISSUE: a | CAUSE: b | FIX: c"
+
+
+class TestNoGoldStandardWording:
+
+    def _user_prompt(self, ref_frames):
+        with patch("os.path.exists", return_value=True), \
+             patch("manimgen.validator.layout_checker._sample_frames", return_value=["f1", "f2"]), \
+             patch("manimgen.validator.layout_checker.load_reference_frames", return_value=ref_frames), \
+             patch("manimgen.validator.layout_checker.chat", return_value="OK") as mock_chat:
+            check_layout("/fake/video.mp4")
+        return mock_chat.call_args.kwargs
+
+    def test_no_references_means_no_reference_wording(self):
+        kwargs = self._user_prompt([])
+        text = (kwargs["user"] + kwargs["system"]).lower()
+        assert "gold standard" not in text
+        assert "amateurish" not in text
+        assert "first 0" not in text
+        assert kwargs["images"] == ["f1", "f2"]
+
+    def test_with_references_they_are_style_only(self):
+        kwargs = self._user_prompt(["r1"])
+        assert "FIRST 1 images" in kwargs["user"]
+        assert "gold standard" not in (kwargs["user"] + kwargs["system"]).lower()
+        assert kwargs["images"] == ["r1", "f1", "f2"]
+
+
+class TestFirstPassFlag:
+
+    def test_default_off(self, monkeypatch):
+        monkeypatch.delenv("MANIMGEN_FIRST_PASS_LAYOUT", raising=False)
+        assert first_pass_layout_enabled() is False
+
+    @pytest.mark.parametrize("value,expected", [("1", True), ("true", True), ("0", False), ("off", False)])
+    def test_values(self, monkeypatch, value, expected):
+        monkeypatch.setenv("MANIMGEN_FIRST_PASS_LAYOUT", value)
+        assert first_pass_layout_enabled() is expected
 
 
 # ── retry.py visual feedback loop ────────────────────────────────────────────
