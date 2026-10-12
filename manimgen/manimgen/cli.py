@@ -14,10 +14,17 @@ from manimgen.input.parser import parse_input
 from manimgen.planner.lesson_planner import plan_lesson, plan_lesson_from_pdf
 from manimgen.renderer.assembler import assemble_video
 from manimgen.renderer.muxer import clear_mismatch_log, get_mismatch_log
-from manimgen.types import CueMuxResult, GateResult, MuxStatus
-from manimgen.utils import safe_section_id
+from manimgen.types import (
+    CueMuxResult,
+    GateResult,
+    MuxStatus,
+    RenderResult,
+    SectionOutcome,
+    SectionStatus,
+)
+from manimgen.utils import is_usage_stop, safe_section_id
 from manimgen.validator.fallback import fallback_scene
-from manimgen.validator.retry import retry_scene
+from manimgen.validator.retry import accepted_issues, retry_scene
 from manimgen.validator.runner import _find_rendered_video, run_scene
 
 logger = logging.getLogger(__name__)
@@ -35,7 +42,11 @@ def _tts_enabled(cfg: dict) -> bool:
 
 
 def _run_tts_for_section(section: dict, idx: int) -> tuple[str, list, float] | None:
-    """Run TTS for a section. Returns (audio_path, timestamps, audio_duration) or None."""
+    """Run TTS for a section. Returns (audio_path, timestamps, audio_duration).
+
+    Returns None when the section has no narration text. A TTS failure raises,
+    so the caller can record why the section has no voice (#71).
+    """
     from manimgen.renderer.tts import (
         check_audio_not_silent,
         generate_narration,
@@ -52,33 +63,35 @@ def _run_tts_for_section(section: dict, idx: int) -> tuple[str, list, float] | N
     os.makedirs(audio_dir, exist_ok=True)
     audio_path = os.path.join(audio_dir, f"{section_id}.mp3")
 
-    try:
-        logger.info("[manimgen] TTS: %s", section["title"])
+    logger.info("[manimgen] TTS: %s", section["title"])
+    _, timestamps = generate_narration(narration, audio_path)
+    ts_path = audio_path.replace(".mp3", "_timestamps.json")
+    save_timestamps(timestamps, ts_path)
+    audio_duration = get_audio_duration(audio_path)
+
+    energy = check_audio_not_silent(audio_path)
+    if not energy["ok"]:
+        logger.warning(
+            "[manimgen] TTS audio for '%s' is %.0f%% silent, retrying once.",
+            section["title"],
+            energy["silent_ratio"] * 100,
+        )
         _, timestamps = generate_narration(narration, audio_path)
-        ts_path = audio_path.replace(".mp3", "_timestamps.json")
         save_timestamps(timestamps, ts_path)
         audio_duration = get_audio_duration(audio_path)
 
-        energy = check_audio_not_silent(audio_path)
-        if not energy["ok"]:
-            logger.warning(
-                "[manimgen] TTS audio for '%s' is %.0f%% silent — retrying once.",
-                section["title"],
-                energy["silent_ratio"] * 100,
-            )
-            _, timestamps = generate_narration(narration, audio_path)
-            save_timestamps(timestamps, ts_path)
-            audio_duration = get_audio_duration(audio_path)
+    logger.info(
+        "[manimgen] %d word timestamps, %.1fs audio",
+        len(timestamps),
+        audio_duration,
+    )
+    return audio_path, timestamps, audio_duration
 
-        logger.info(
-            "[manimgen] %d word timestamps, %.1fs audio",
-            len(timestamps),
-            audio_duration,
-        )
-        return audio_path, timestamps, audio_duration
-    except Exception as e:
-        logger.warning("[manimgen] TTS failed for '%s': %s", section["title"], e)
-        return None
+
+def _error_text(exc: BaseException) -> str:
+    """One-line description of an exception for the summary and manifest."""
+    text = " ".join(str(exc).split())
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
 
 
 def _muxed_path_for(section: dict, idx: int, cue_index: int) -> str:
@@ -263,11 +276,7 @@ def _render_is_fresh(video_path: str, key: str) -> bool:
             os.path.basename(video_path),
         )
         return False
-    try:
-        with open(sidecar, encoding="utf-8") as f:
-            stored = f.read().strip()
-    except (OSError, UnicodeDecodeError):
-        stored = ""
+    stored = _read_sidecar(video_path)[0]
     if stored != key:
         logger.warning(
             "[manimgen] Stale file detected: %s was built for content key %s, current is %s; rebuilding",
@@ -279,12 +288,48 @@ def _render_is_fresh(video_path: str, key: str) -> bool:
     return True
 
 
-def _write_hash_sidecar(video_path: str, key: str) -> None:
+def _read_sidecar(video_path: str) -> list[str]:
+    """Lines of a sidecar: [key] or [key, status, reason]; [""] if unreadable."""
+    try:
+        with open(_sidecar_hash_path(video_path), encoding="utf-8") as f:
+            lines = f.read().strip().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return [""]
+    return [line.strip() for line in lines] or [""]
+
+
+def _write_hash_sidecar(
+    video_path: str,
+    key: str,
+    status: SectionStatus = SectionStatus.OK,
+    reason: str = "",
+) -> None:
+    """Record the content key, plus the status when it is not OK (#71).
+
+    A fallback card or a render accepted with defects is still cached, so a
+    later --resume must report it as such, not as a clean section. Line 1 is
+    the content key, line 2 the status, line 3 the reason. The write is atomic
+    (tmp then os.replace) so a crash never leaves a half-written sidecar.
+    """
+    text = key
+    if status != SectionStatus.OK:
+        text += f"\n{status.value}\n{' '.join(reason.split())}"
     sidecar = _sidecar_hash_path(video_path)
     tmp = sidecar + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        f.write(key)
+        f.write(text)
     os.replace(tmp, sidecar)
+
+
+def _cached_outcome(video_path: str) -> tuple[SectionStatus, str]:
+    """Status and reason recorded with a cached file (OK when none was)."""
+    lines = _read_sidecar(video_path)
+    try:
+        status = SectionStatus(lines[1]) if len(lines) > 1 else SectionStatus.OK
+    except ValueError:
+        status = SectionStatus.OK
+    reason = lines[2] if len(lines) > 2 else ""
+    return status, f"cached; {reason}" if reason else "cached"
 
 
 def _code_blocking_freezes(code: str, cue_durations: list[float]) -> list[str]:
@@ -314,16 +359,10 @@ def _cached_scene_blocking_freezes(
     durations are never reported as freezes.
     """
     section_id = section.get("id", "")
+    if not section_id:
+        return []
     scene_path = os.path.join(paths.scenes_dir(), f"{section_id}.py")
-    if not section_id or not os.path.exists(scene_path):
-        return []
-    try:
-        with open(scene_path, encoding="utf-8") as f:
-            code = f.read()
-    except (OSError, UnicodeDecodeError):
-        return []
-
-    return _code_blocking_freezes(code, cue_durations)
+    return _scene_file_blocking_freezes(scene_path, cue_durations)
 
 
 # ---------------------------------------------------------------------------
@@ -334,7 +373,7 @@ def _cached_scene_blocking_freezes(
 # now decomposed into three pure-ish seams with explicit signatures:
 #
 #   _generate_and_gate  — codegen + zero-cost timing gate  → GateResult
-#   _render_with_retry  — first render + validate + retry + fallback → (ok, path)
+#   _render_with_retry  : first render + validate + retry + fallback → RenderResult
 #   _cut_and_mux        — cut into per-cue clips + mux narration → [clip paths]
 #
 # Behavior is identical to the prior inline version; the cache freeze check and
@@ -388,14 +427,15 @@ def _render_with_retry(
     gate: GateResult,
     cue_durations: list[float] | None,
     log: logging.LoggerAdapter | logging.Logger,
-) -> tuple[bool, str | None]:
+) -> RenderResult:
     """Render a gated scene, forcing the retry/fallback path on any failure.
 
     The first render is skipped entirely when ``gate.timing_blocked`` is set.
     A successful first render is still re-checked for hard visual failures
     (validate_render) and blocking freeze-frame tails — either forces the retry
-    path. If retries fail, the styled fallback scene is used. Returns
-    (success, video_path); video_path is None only if the fallback also failed.
+    path. If retries fail, the styled fallback scene is used. The result says
+    which of these shipped (#71); its path is None only if the fallback also
+    failed.
     """
     if gate.timing_blocked:
         success, video_path = False, None
@@ -428,21 +468,60 @@ def _render_with_retry(
                 )
                 success = False
 
-    if not success:
-        success, video_path = retry_scene(
-            section,
-            gate.code,
-            gate.class_name,
-            gate.scene_path,
-            cue_durations=cue_durations,
+    if success and video_path:
+        return RenderResult(video_path, SectionStatus.OK, "first render")
+
+    success, video_path = retry_scene(
+        section,
+        gate.code,
+        gate.class_name,
+        gate.scene_path,
+        cue_durations=cue_durations,
+    )
+    if success and video_path:
+        # retry_scene accepts a render with known freeze-frame tails on its
+        # last attempt; re-run the same zero-cost check on the final source.
+        freezes = _scene_file_blocking_freezes(gate.scene_path, cue_durations)
+        # Visual defects retry_scene shipped anyway (budget or attempt limit).
+        defects = freezes + [i[:160] for i in accepted_issues(video_path)]
+        if defects:
+            return RenderResult(
+                video_path,
+                SectionStatus.ACCEPTED_WITH_DEFECTS,
+                "accepted after retries with " + "; ".join(defects),
+            )
+        return RenderResult(video_path, SectionStatus.OK, "repaired by retry")
+
+    log.warning(
+        "[manimgen] Render and all retries failed for %s, using the fallback "
+        "title card (see the retry log in %s)",
+        gate.class_name,
+        paths.logs_dir(),
+    )
+    video_path = fallback_scene(section)
+    if video_path:
+        return RenderResult(
+            video_path,
+            SectionStatus.FALLBACK,
+            "render and retries failed; a title card stands in",
         )
+    return RenderResult(
+        None, SectionStatus.DROPPED, "render, retries and the fallback card failed"
+    )
 
-    if not success:
-        log.info("[manimgen] All retries failed, using fallback")
-        video_path = fallback_scene(section)
-        success = bool(video_path)
 
-    return success, video_path
+def _scene_file_blocking_freezes(
+    scene_path: str, cue_durations: list[float] | None
+) -> list[str]:
+    """Blocking freeze-frame tails in a scene file on disk ([] if unreadable)."""
+    if not cue_durations:
+        return []
+    try:
+        with open(scene_path, encoding="utf-8") as f:
+            code = f.read()
+    except (OSError, UnicodeDecodeError):
+        return []
+    return _code_blocking_freezes(code, cue_durations)
 
 
 def _cut_and_mux(
@@ -454,6 +533,8 @@ def _cut_and_mux(
     cue_durations: list[float],
     log: logging.LoggerAdapter | logging.Logger,
     key: str,
+    status: SectionStatus = SectionStatus.OK,
+    reason: str = "",
 ) -> list[str]:
     """Cut a rendered section into per-cue clips and mux narration onto each.
 
@@ -461,7 +542,8 @@ def _cut_and_mux(
     narration, the whole section is dropped (returns []) and logged loudly — a
     silent clip must never reach the assembler (#28). A FAILED cue's silent
     video is deliberately never appended to the produced list. On success each
-    muxed clip gets a ``.hash`` sidecar holding ``key`` (#66).
+    muxed clip gets a ``.hash`` sidecar holding the content ``key`` (#66) and,
+    when it is not OK, the render's status and reason (#71).
     """
     from manimgen.renderer.cutter import (
         cue_start_times_from_durations,
@@ -511,7 +593,7 @@ def _cut_and_mux(
         )
         return []
     for path in produced:
-        _write_hash_sidecar(path, key)
+        _write_hash_sidecar(path, key, status, reason)
     return produced
 
 
@@ -598,11 +680,12 @@ def _run_section(
     current_topic_hash: str,
     section_audio: dict | None = None,
     overview: dict | None = None,
-) -> list[str]:
-    """Run the full pipeline for one section and return a list of video paths to assemble.
+) -> SectionOutcome:
+    """Run the full pipeline for one section and report what happened (#71).
 
-    Handles TTS, codegen, render, retry, fallback, audio-slice, and per-cue muxing.
-    Returns the ordered list of clip paths produced (may be empty if section is skipped).
+    Handles TTS, codegen, render, retry, fallback, audio-slice, and per-cue
+    muxing. Returns a SectionOutcome: its status, a short reason, and the
+    ordered clip paths to assemble (empty when the section is dropped).
     """
     section_id = safe_section_id(section, idx)
     log = logging.LoggerAdapter(logger, {"section": section_id})
@@ -611,42 +694,43 @@ def _run_section(
     # --- TTS + segmentation ---
     segments = None
     audio_slices: list[str] = []
+    tts_error = ""
 
     if section_audio is not None:
         # Use precomputed audio from global TTS phase
         segments = section_audio.get("segments") or None
         audio_slices = section_audio.get("audio_slices") or []
+        tts_error = section_audio.get("tts_error", "")
         if segments:
             log.info(
                 "[manimgen] Using precomputed audio: %d cue segment(s)", len(segments)
             )
-            key = _section_key(
-                section, current_topic_hash, [s.duration for s in segments]
-            )
-            if _all_cues_muxed(section, idx, len(segments), key):
-                log.info("[manimgen] All cues already muxed, skipping section")
-                return [_muxed_path_for(section, idx, i) for i in range(len(segments))]
     elif tts_on:
-        tts_result = _run_tts_for_section(section, idx)
+        try:
+            tts_result = _run_tts_for_section(section, idx)
+        except Exception as e:
+            tts_error = _error_text(e)
+            log.warning("[manimgen] TTS failed for '%s': %s", section["title"], e)
+            tts_result = None
         if tts_result:
             segments, audio_slices = _segment_and_slice(section, tts_result, section_id)
             log.info("[manimgen] %d cue segment(s) for this section", len(segments))
-
-            key = _section_key(
-                section, current_topic_hash, [s.duration for s in segments]
-            )
-            if _all_cues_muxed(section, idx, len(segments), key):
-                log.info("[manimgen] All cues already muxed, skipping section")
-                return [_muxed_path_for(section, idx, i) for i in range(len(segments))]
-
             log.info(
                 "[manimgen] Audio slices: %s",
                 [os.path.basename(p) for p in audio_slices],
             )
 
-    # --- Generate ONE scene for the whole section ---
+    # Content key for every cached artifact of this section (#66).
     cue_durations = [seg.duration for seg in segments] if segments else None
     key = _section_key(section, current_topic_hash, cue_durations)
+
+    if segments and _all_cues_muxed(section, idx, len(segments), key):
+        log.info("[manimgen] All cues already muxed, skipping section")
+        clips = [_muxed_path_for(section, idx, i) for i in range(len(segments))]
+        status, reason = _cached_outcome(clips[0])
+        return SectionOutcome(status, clips, reason)
+
+    # --- Generate ONE scene for the whole section ---
 
     from manimgen.utils import section_class_name
 
@@ -675,27 +759,61 @@ def _run_section(
         log.info(
             "[manimgen] Render exists and is fresh, skipping codegen: %s", found_video
         )
-        video_path = found_video
-        success = True
+        render = RenderResult(found_video, *_cached_outcome(found_video))
     else:
         gate = _generate_and_gate(section, cue_durations, overview)
-        success, video_path = _render_with_retry(section, gate, cue_durations, log)
-        # Write hash sidecar after any successful render (including fallback)
-        if success and video_path and os.path.exists(video_path):
-            _write_hash_sidecar(video_path, key)
+        render = _render_with_retry(section, gate, cue_durations, log)
+        # The sidecar records the status too, so a cached fallback card or a
+        # render with known defects is still reported as such on --resume.
+        if render.ok and os.path.exists(render.path):
+            _write_hash_sidecar(render.path, key, render.status, render.reason)
 
-    if not video_path:
+    if not render.ok:
         log.warning("[manimgen] No video for section %d, skipping", idx)
-        return []
+        return SectionOutcome(SectionStatus.DROPPED, [], render.reason)
 
     # --- Cut + mux per cue ---
-    if segments and audio_slices and success:
-        return _cut_and_mux(
-            section, idx, video_path, segments, audio_slices, cue_durations, log, key
-        )
+    if segments and audio_slices:
+        try:
+            clips = _cut_and_mux(
+                section,
+                idx,
+                render.path,
+                segments,
+                audio_slices,
+                cue_durations,
+                log,
+                key,
+                render.status,
+                render.reason,
+            )
+        except Exception as e:
+            # cut_video_at_cues re-raises the first failed ffmpeg cut (#72).
+            log.error("[manimgen] Section %d: cutting into cues failed: %s", idx, e)
+            return SectionOutcome(
+                SectionStatus.DROPPED, [], f"cutting into cues failed: {_error_text(e)}"
+            )
+        if not clips:
+            return SectionOutcome(
+                SectionStatus.DROPPED,
+                [],
+                "narration could not be muxed onto every cue (see the log)",
+            )
+        return SectionOutcome(render.status, clips, render.reason)
 
-    # TTS off — use the full section video directly
-    return [video_path]
+    if not tts_on:
+        # TTS off: the full section video is the clip, silent by choice.
+        return SectionOutcome(render.status, [render.path], render.reason)
+
+    # TTS is on but this section has no narration audio: it ships silent.
+    if not section.get("narration", "").strip():
+        why = "the plan has no narration for this section"
+    else:
+        why = f"narration failed: {tts_error or 'see the log'}"
+    log.warning("[manimgen] Section %d ships with no narration: %s", idx, why)
+    if render.status.degraded:
+        return SectionOutcome(render.status, [render.path], f"{render.reason}; {why}")
+    return SectionOutcome(SectionStatus.SILENT, [render.path], why)
 
 
 # ---------------------------------------------------------------------------
@@ -733,6 +851,210 @@ def _configure_logging() -> None:
         logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     )
     root.addHandler(run_log)
+
+
+# Exit codes of the `manimgen` command (documented in the README).
+EXIT_OK = 0  # every section is ok (or accepted with defects, listed in the summary)
+EXIT_FAILED = 1  # refused to run, or no video was produced
+EXIT_DEGRADED = 3  # a video was produced, but a section is degraded
+EXIT_USAGE_LIMIT = 4  # stopped cleanly on a usage limit; resume after the reset
+
+_MANIFEST_NAME = "run_manifest.json"
+
+
+def _section_record(
+    idx: int, section: dict, outcome: SectionOutcome, seconds: float
+) -> dict:
+    """One section's line in the run summary and manifest (#71)."""
+    return {
+        "index": idx,
+        "id": safe_section_id(section, idx),
+        "title": section.get("title", ""),
+        "status": outcome.status.value,
+        "reason": outcome.reason,
+        "clips": len(outcome.clips),
+        "seconds": round(seconds, 1),
+    }
+
+
+def _next_steps(records: list[dict]) -> list[str]:
+    """What the user can do about the sections that did not come out clean."""
+    statuses = {r["status"] for r in records}
+    steps = []
+    if statuses & {"dropped", "errored", "silent", "not_run"}:
+        steps.append(
+            "Fix the cause shown above (details in the run log under "
+            f"{paths.logs_dir()}), then run: manimgen --resume. Finished "
+            "sections are reused, the others are built again."
+        )
+    if "fallback" in statuses:
+        steps.append(
+            "Fallback title cards are reused by --resume. To try one again, "
+            f"delete its clips ({paths.muxed_dir()}/<section id>_cue*.mp4) "
+            "and run: manimgen --resume."
+        )
+    return steps
+
+
+def _write_manifest(manifest: dict, directory: str) -> str | None:
+    """Write run_manifest.json atomically (utf-8); return its path or None."""
+    path = os.path.join(directory, _MANIFEST_NAME)
+    tmp = path + ".tmp"
+    try:
+        os.makedirs(directory, exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, path)
+    except OSError as e:
+        logger.warning("[manimgen] Could not write %s: %s", path, e)
+        return None
+    return path
+
+
+def _finish_run(
+    title: str,
+    topic_hash: str,
+    records: list[dict],
+    output: str | None,
+    exit_code: int,
+    result: str,
+    started: float,
+    stop_reason: str = "",
+    next_steps: list[str] | None = None,
+) -> None:
+    """Write the run manifest and print the run summary (#71).
+
+    The manifest goes next to the final video (or into the videos folder when
+    there is none), so a script can read what the exit code summarizes.
+    """
+    steps = _next_steps(records) if next_steps is None else next_steps
+    manifest = {
+        "title": title,
+        "topic_hash": topic_hash,
+        "result": result,
+        "exit_code": exit_code,
+        "output": output,
+        "stop_reason": stop_reason or None,
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(started)),
+        "seconds": round(time.time() - started, 1),
+        "sections": records,
+        "next_steps": steps,
+    }
+    directory = os.path.dirname(output) if output else paths.videos_dir()
+    manifest_path = _write_manifest(manifest, directory or ".")
+
+    counts: dict[str, int] = {}
+    for r in records:
+        counts[r["status"]] = counts.get(r["status"], 0) + 1
+    tally = ", ".join(f"{n} {status}" for status, n in counts.items())
+    # print(), not logging: the summary must show even when a host mutes logs.
+    print(f'\n[manimgen] Run summary for "{title}": {len(records)} sections ({tally})')
+    for r in records:
+        line = f"  {r['index']:>2}  {r['id']:<12} {r['status']:<22} {r['title']}"
+        if r["status"] != "ok" and r["reason"]:
+            line += f"\n      {r['reason']}"
+        print(line)
+    if stop_reason:
+        print(f"[manimgen] Stopped: {stop_reason}")
+    print(f"[manimgen] Video: {output or 'none (no video was produced)'}")
+    if manifest_path:
+        print(f"[manimgen] Manifest: {manifest_path}")
+    for step in steps:
+        print(f"[manimgen] Next: {step}")
+
+
+def _plan_reset_hint() -> str:
+    """' (around <time> local time)' when llm.py has seen the plan's reset."""
+    from manimgen import llm
+
+    now = time.time()
+    windows = [w for w in getattr(llm, "_plan_windows", {}).values() if w[1] > now]
+    if not windows:
+        return ""
+    _, resets_at = max(windows)  # the fullest window is the one that blocks
+    return time.strftime(
+        " (around %Y-%m-%d %H:%M local time)", time.localtime(resets_at)
+    )
+
+
+def _stop_for_usage_limit(
+    exc: BaseException,
+    title: str,
+    topic_hash: str,
+    records: list[dict],
+    started: float,
+    resumable: bool,
+):
+    """Stop the run cleanly on a usage limit: manifest, summary, exit 4 (#72).
+
+    Nothing is assembled; sections that finished stay cached for --resume.
+    """
+    logger.debug("[manimgen] Usage-limit stop", exc_info=exc)
+    wait = (
+        f"Wait until the limit resets{_plan_reset_hint()} (or change the "
+        "setting named above), then "
+    )
+    if resumable:
+        step = wait + "run: manimgen --resume. Finished sections are reused."
+    else:
+        step = wait + "rerun the same command (no plan was saved yet)."
+    _finish_run(
+        title,
+        topic_hash,
+        records,
+        None,
+        EXIT_USAGE_LIMIT,
+        "usage_limit",
+        started,
+        stop_reason=" ".join(str(exc).split()),
+        next_steps=[step],
+    )
+    raise SystemExit(EXIT_USAGE_LIMIT)
+
+
+def _stop_for_narration(
+    lesson_plan: dict, topic_hash: str, failed: dict[str, str], started: float
+):
+    """Stop before any scene is generated when narration failed (#73).
+
+    Only the planning LLM calls were spent at this point. Shipping on would
+    spend every codegen and render call on a video with silent sections.
+    """
+    records = []
+    for idx, section in enumerate(lesson_plan["sections"], start=1):
+        error = failed.get(safe_section_id(section, idx))
+        outcome = (
+            SectionOutcome(SectionStatus.ERRORED, [], f"narration failed: {error}")
+            if error
+            else SectionOutcome(SectionStatus.NOT_RUN)
+        )
+        records.append(_section_record(idx, section, outcome, 0.0))
+    logger.error(
+        "[manimgen] Narration failed for %d section(s) after retries; stopping "
+        "before scene generation.",
+        len(failed),
+    )
+    _finish_run(
+        lesson_plan["title"],
+        topic_hash,
+        records,
+        None,
+        EXIT_FAILED,
+        "narration_failed",
+        started,
+        stop_reason=(
+            f"text to speech failed for {len(failed)} section(s) after retries. "
+            "No scene was generated, so only the planning calls were used."
+        ),
+        next_steps=[
+            "Check the network: edge-tts must reach Microsoft's speech "
+            "service (behind a proxy, set HTTPS_PROXY or tts.proxy in "
+            "config.yaml). Then run: manimgen --resume",
+            "To make the video anyway, with those sections silent, run: "
+            "manimgen --resume --allow-silent",
+        ],
+    )
+    raise SystemExit(EXIT_FAILED)
 
 
 def _die(message: str):
@@ -791,11 +1113,26 @@ def main():
             "run is refused."
         ),
     )
+    parser.add_argument(
+        "--allow-silent",
+        action="store_true",
+        help=(
+            "If narration (text to speech) still fails after its retries, "
+            "make those sections without a voice instead of stopping. They are "
+            "flagged in the summary and the run exits 3."
+        ),
+    )
     args = parser.parse_args()
     if not (args.topic or args.pdf or args.resume):
         parser.error("one of the arguments topic, --pdf or --resume is required")
 
     _configure_logging()
+    started = time.time()
+
+    from manimgen.validator.retry import reset_run_budget
+
+    # The retry LLM budget is per run; nothing else resets it (#71).
+    reset_run_budget()
 
     cfg = _load_config()
     tts_on = _tts_enabled(cfg)
@@ -836,17 +1173,25 @@ def main():
             logger.warning(
                 "[manimgen] Cached plan has no _topic_hash — all renders will be treated as stale"
             )
-    elif args.pdf:
-        logger.info("[manimgen] PDF input: %s", args.pdf)
-        current_topic_hash = _file_hash(args.pdf)
-        lesson_plan = plan_lesson_from_pdf(args.pdf)
-        lesson_plan["_topic_hash"] = current_topic_hash
-        _save_plan(lesson_plan)
     else:
-        logger.info("[manimgen] Input: %s", args.topic)
-        topic = parse_input(args.topic)
-        current_topic_hash = _topic_hash(topic)
-        lesson_plan = plan_lesson(topic)
+        try:
+            if args.pdf:
+                logger.info("[manimgen] PDF input: %s", args.pdf)
+                # Hash the file's bytes, not its path: a PDF edited in
+                # place must not reuse the old plan's renders (#66).
+                current_topic_hash = _file_hash(args.pdf)
+                lesson_plan = plan_lesson_from_pdf(args.pdf)
+            else:
+                logger.info("[manimgen] Input: %s", args.topic)
+                topic = parse_input(args.topic)
+                current_topic_hash = _topic_hash(topic)
+                lesson_plan = plan_lesson(topic)
+        except Exception as e:
+            if not is_usage_stop(e):
+                raise
+            _stop_for_usage_limit(
+                e, args.pdf or args.topic, "", [], started, resumable=False
+            )
         lesson_plan["_topic_hash"] = current_topic_hash
         _save_plan(lesson_plan)
 
@@ -863,12 +1208,20 @@ def main():
         )
         for idx, section in enumerate(lesson_plan["sections"], start=1):
             section_id = safe_section_id(section, idx)
-            tts_result = _run_tts_for_section(section, idx)
+            try:
+                tts_result = _run_tts_for_section(section, idx)
+                if tts_result:
+                    segments, audio_slices = _segment_and_slice(
+                        section, tts_result, section_id
+                    )
+            except Exception as e:
+                logger.warning(
+                    "[manimgen] TTS failed for '%s': %s", section.get("title"), e
+                )
+                all_section_audio[section_id] = {"tts_error": _error_text(e)}
+                continue
             if tts_result:
                 audio_path, timestamps, audio_duration = tts_result
-                segments, audio_slices = _segment_and_slice(
-                    section, tts_result, section_id
-                )
                 all_section_audio[section_id] = {
                     "audio_path": audio_path,
                     "timestamps": timestamps,
@@ -878,11 +1231,21 @@ def main():
                     "cue_durations": [seg.duration for seg in segments],
                 }
 
+    tts_failed = {
+        sid: audio["tts_error"]
+        for sid, audio in all_section_audio.items()
+        if "tts_error" in audio
+    }
+    if tts_failed and not args.allow_silent:
+        _stop_for_narration(lesson_plan, current_topic_hash, tts_failed, started)
+
     overview = _build_overview(lesson_plan, all_section_audio)
     logger.info("[manimgen] Overview: %s", overview["pacing_notes"])
 
     # --- Phase 2: codegen + render for all sections ---
+    title = lesson_plan["title"]
     rendered_videos: list[str] = []
+    records: list[dict] = []
     for idx, section in enumerate(lesson_plan["sections"], start=1):
         section_id = safe_section_id(section, idx)
         # When tts_on, always pass section_audio (even {} for failed TTS) so
@@ -891,8 +1254,9 @@ def main():
             section_audio = all_section_audio.get(section_id, {})
         else:
             section_audio = None
-        rendered_videos.extend(
-            _run_section(
+        section_started = time.time()
+        try:
+            outcome = _run_section(
                 section,
                 idx,
                 tts_on,
@@ -900,9 +1264,39 @@ def main():
                 section_audio=section_audio,
                 overview=overview,
             )
+        except Exception as e:
+            outcome = SectionOutcome(SectionStatus.ERRORED, [], _error_text(e))
+            if is_usage_stop(e):
+                records.append(_section_record(idx, section, outcome, 0.0))
+                not_run = SectionOutcome(SectionStatus.NOT_RUN)
+                records.extend(
+                    _section_record(i, s, not_run, 0.0)
+                    for i, s in enumerate(lesson_plan["sections"], start=1)
+                    if i > idx
+                )
+                _stop_for_usage_limit(
+                    e, title, current_topic_hash, records, started, resumable=True
+                )
+            # One failed section must not cost the others (#72): report it,
+            # keep the traceback in the run log, and go on.
+            logger.error("[manimgen] Section %d (%s) failed: %s", idx, section_id, e)
+            logger.debug("[manimgen] Section %d traceback", idx, exc_info=True)
+        rendered_videos.extend(outcome.clips)
+        records.append(
+            _section_record(idx, section, outcome, time.time() - section_started)
         )
 
-    output = assemble_video(rendered_videos, lesson_plan["title"])
+    def no_video(message: str):
+        _finish_run(
+            title, current_topic_hash, records, None, EXIT_FAILED, "no_video", started
+        )
+        _die(message)
+
+    if not rendered_videos:
+        no_video("No video was produced: no section rendered. See the log above.")
+    output = assemble_video(rendered_videos, title)
+    if not output or not os.path.exists(output):
+        no_video(f"No video was produced: expected the final output at {output}.")
 
     # --- A/V mismatch summary ---
     mismatches = get_mismatch_log()
@@ -926,9 +1320,22 @@ def main():
     else:
         logger.info("[manimgen] A/V sync: all cues matched within threshold")
 
+    degraded = any(SectionStatus(r["status"]).degraded for r in records)
+    exit_code = EXIT_DEGRADED if degraded else EXIT_OK
+    _finish_run(
+        title,
+        current_topic_hash,
+        records,
+        output,
+        exit_code,
+        "degraded" if degraded else "ok",
+        started,
+    )
     # print() so the path shows on stdout even when a host app mutes logging.
     print(f"[manimgen] Done: {output}")
     logger.debug("[manimgen] Done: %s", output)
+    if exit_code != EXIT_OK:
+        raise SystemExit(exit_code)
 
 
 if __name__ == "__main__":

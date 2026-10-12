@@ -21,7 +21,7 @@ import pytest
 
 import manimgen.cli as cli
 from manimgen.cli import _mux_one_cue
-from manimgen.types import CueMuxResult, MuxStatus
+from manimgen.types import CueMuxResult, MuxStatus, SectionStatus
 
 SECTION = {"id": "section_01", "title": "Intro"}
 
@@ -183,9 +183,10 @@ class TestRunSectionDropsFailedSection:
             )
 
         # Section dropped — NO silent clips reach the assembler.
-        assert produced == []
-        assert str(clip0) not in produced
-        assert str(clip1) not in produced
+        assert produced.clips == []
+        assert produced.status == SectionStatus.DROPPED
+        assert str(clip0) not in produced.clips
+        assert str(clip1) not in produced.clips
         # Failure is loud and names the section.
         assert "Section 1" in caplog.text
         assert "FAILED" in caplog.text

@@ -25,6 +25,7 @@ import inspect
 import pytest
 
 import manimgen.cli as cli
+from manimgen.types import SectionStatus
 from manimgen.validator import fallback as fallback_mod
 from manimgen.validator import runner as runner_mod
 
@@ -200,7 +201,8 @@ def test_run_section_uses_fallback_when_render_and_retry_fail(mocker):
     section = {"id": "section_01", "title": "Scan", "narration": "scan."}
     out = cli._run_section(section, 1, tts_on=False, current_topic_hash="deadbeef")
 
-    assert out == ["/tmp/fallback.mp4"]
+    assert out.clips == ["/tmp/fallback.mp4"]
+    assert out.status == SectionStatus.FALLBACK
     retry.assert_called_once()
     fb.assert_called_once_with(section)
 
@@ -220,7 +222,8 @@ def test_run_section_returns_empty_when_fallback_also_fails(mocker):
     section = {"id": "section_01", "title": "Scan", "narration": "scan."}
     out = cli._run_section(section, 1, tts_on=False, current_topic_hash="deadbeef")
 
-    assert out == []
+    assert out.clips == []
+    assert out.status == SectionStatus.DROPPED
 
 
 # ── Regression: the xfail reason's dead symbol claim is now accurate ─────────

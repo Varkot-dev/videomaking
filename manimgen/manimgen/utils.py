@@ -151,6 +151,29 @@ def strip_fencing(raw: str) -> str:
     return raw.strip()
 
 
+# How llm.py reports a used-up allowance from `claude -p` (its fatal markers).
+_USAGE_LIMIT_MARKERS = ("usage limit", "limit reached", "credit balance")
+
+
+def is_usage_stop(exc: BaseException) -> bool:
+    """True when an LLM error means "stop the run now, resume later" (#72).
+
+    That is the plan or paid-API guard (PaidApiBlockedError) or a `claude -p`
+    call refused because the plan's usage limit is reached. Retrying either
+    inside the run cannot help, so callers must re-raise it, not swallow it.
+    """
+    from manimgen.llm import PaidApiBlockedError
+
+    if isinstance(exc, PaidApiBlockedError):
+        return True
+    text = str(exc).lower()
+    return (
+        isinstance(exc, RuntimeError)
+        and "claude -p failed" in text
+        and any(marker in text for marker in _USAGE_LIMIT_MARKERS)
+    )
+
+
 def sanitize_section_id(raw_id: Any, idx: int = 0) -> str:
     """Coerce an untrusted section id into a path/class-name-safe slug.
 

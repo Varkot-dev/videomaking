@@ -5,7 +5,7 @@ fast-path bypassed the timing freeze gate the codegen path ran. #31 decomposes
 it into three pure-ish seams without changing behavior:
 
   _generate_and_gate  → GateResult        (codegen + timing gate)
-  _render_with_retry  → (success, path)    (render + validate + retry + fallback)
+  _render_with_retry  → RenderResult       (render + validate + retry + fallback)
   _cut_and_mux        → [clip paths]       (cut + per-cue mux)
 
 These tests pin the contract that makes the cache-bypass fix real: a timing
@@ -19,7 +19,7 @@ Zero LLM calls, zero subprocess calls — every external call is monkeypatched.
 import logging
 
 from manimgen import cli
-from manimgen.types import GateResult
+from manimgen.types import GateResult, SectionStatus
 
 
 class TestGenerateAndGate:
@@ -86,12 +86,13 @@ class TestRenderWithRetrySkipsBlockedRender:
             timing_blocked=True,
         )
         log = logging.getLogger("test")
-        success, path = cli._render_with_retry({}, gate, [3.0], log)
+        result = cli._render_with_retry({}, gate, [3.0], log)
 
         assert calls["run_scene"] == 0  # expensive render skipped
         assert calls["retry"] == 1  # routed straight to retry
-        assert success is True
-        assert path == "/tmp/retried.mp4"
+        assert result.ok is True
+        assert result.path == "/tmp/retried.mp4"
+        assert result.status == SectionStatus.OK
 
     def test_not_blocked_runs_first_render(self, monkeypatch):
         calls = {"run_scene": 0, "retry": 0}
@@ -121,12 +122,13 @@ class TestRenderWithRetrySkipsBlockedRender:
         gate = GateResult(
             code="CODE", class_name="Demo", scene_path="/tmp/d.py", timing_blocked=False
         )
-        success, path = cli._render_with_retry({}, gate, [3.0], logging.getLogger("t"))
+        result = cli._render_with_retry({}, gate, [3.0], logging.getLogger("t"))
 
         assert calls["run_scene"] == 1
         assert calls["retry"] == 0  # clean render → no retry
-        assert success is True
-        assert path == "/tmp/v.mp4"
+        assert result.ok is True
+        assert result.path == "/tmp/v.mp4"
+        assert result.status == SectionStatus.OK
 
     def test_post_render_freeze_forces_retry(self, monkeypatch):
         """A real freeze on the first render routes into retry (cache-bypass fix
@@ -154,10 +156,10 @@ class TestRenderWithRetrySkipsBlockedRender:
         gate = GateResult(
             code="CODE", class_name="Demo", scene_path="/tmp/d.py", timing_blocked=False
         )
-        success, path = cli._render_with_retry({}, gate, [3.0], logging.getLogger("t"))
+        result = cli._render_with_retry({}, gate, [3.0], logging.getLogger("t"))
 
         assert calls["retry"] == 1
-        assert path == "/tmp/r.mp4"
+        assert result.path == "/tmp/r.mp4"
 
 
 class TestSharedFreezeSeam:
@@ -182,3 +184,4 @@ class TestSharedFreezeSeam:
         out = cli._cached_scene_blocking_freezes({"id": "section_01"}, [10.0])
         assert seen.get("called") is True
         assert out == ["cue 0: 6.0s freeze tail"]
+

@@ -6,7 +6,7 @@ anthropic
 google-genai
 python-dotenv
 pyyaml
-edge-tts
+edge-tts>=7.2,<8
 pypdf
 pymupdf
 flask

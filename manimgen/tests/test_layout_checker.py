@@ -732,3 +732,67 @@ class TestRetryVisualLoop:
         layout_mock.assert_called_once()
         mock_chat.assert_not_called()
         assert success is True
+
+
+class TestAcceptedIssuesAreReported:
+    """A render shipped with known visual defects must say so (run 2 printed
+    "ok" for a section the vision check had flagged three times)."""
+
+    _CODE = "from manimlib import *\nclass TestScene(Scene):\n    def construct(self): pass\n"
+
+    def _run(self, tmp_path, layout):
+        from manimgen.validator.frame_checker import FrameCheckResult
+        from manimgen.validator import retry as retry_module
+
+        scene_path = str(tmp_path / "scene.py")
+        with open(scene_path, "w", encoding="utf-8") as f:
+            f.write(self._CODE)
+        with patch("manimgen.validator.retry._run_and_capture",
+                   return_value={"success": True, "video_path": "/fake/v.mp4", "stderr": ""}), \
+             patch("manimgen.validator.frame_checker.check_frames",
+                   return_value=FrameCheckResult(ok=True)), \
+             patch("manimgen.validator.retry.check_layout", return_value=layout), \
+             patch("manimgen.validator.retry.chat"), \
+             patch.object(retry_module, "MAX_VISUAL_LLM_FIX_CALLS", 0):
+            ok, video = retry_module.retry_scene(
+                {"title": "t", "narration": "n", "cues": []}, self._CODE, "TestScene", scene_path
+            )
+        return ok, video, retry_module.accepted_issues(video)
+
+    def test_issues_recorded_when_accepted_despite_defects(self, tmp_path):
+        issue = "ISSUE: saddle is tiny | CAUSE: scale | FIX: scale up"
+        ok, video, issues = self._run(
+            tmp_path, {"ok": False, "issues": issue, "skipped": False}
+        )
+        assert ok and video == "/fake/v.mp4"
+        assert issues == [issue]
+
+    def test_clean_render_has_no_recorded_issues(self, tmp_path):
+        self._run(tmp_path, {"ok": False, "issues": "ISSUE: x", "skipped": False})
+        ok, video, issues = self._run(tmp_path, {"ok": True, "issues": "", "skipped": False})
+        assert ok and issues == []
+
+    def test_cli_reports_accepted_visual_defects(self, monkeypatch, tmp_path):
+        import logging
+
+        from manimgen import cli
+        from manimgen.types import GateResult, SectionStatus
+        from manimgen.validator import retry as retry_module
+
+        video = str(tmp_path / "S.mp4")
+        with open(video, "wb") as f:
+            f.write(b"\x00")
+        monkeypatch.setitem(
+            retry_module._accepted_issues, video, ["ISSUE: saddle is tiny"]
+        )
+        monkeypatch.setattr(cli, "run_scene", lambda p, c: (False, None))
+        monkeypatch.setattr(cli, "retry_scene", lambda *a, **k: (True, video))
+        monkeypatch.setattr(cli, "_scene_file_blocking_freezes", lambda p, d: [])
+        gate = GateResult(
+            code="CODE", class_name="S", scene_path="/tmp/s.py", timing_blocked=False
+        )
+
+        result = cli._render_with_retry({}, gate, None, logging.getLogger("t"))
+
+        assert result.status == SectionStatus.ACCEPTED_WITH_DEFECTS
+        assert "saddle is tiny" in result.reason
