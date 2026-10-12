@@ -24,6 +24,13 @@ from manimgen.renderer.muxer import (
 )
 
 
+
+def _touch_output(cmd):
+    """Simulate ffmpeg writing its output (the muxer publishes it atomically)."""
+    with open(cmd[-1], "wb") as f:
+        f.write(b"x")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -39,6 +46,7 @@ def _mock_subprocess(video_dur: float, audio_dur: float):
     calls_made = []
 
     def fake_run(cmd, **kwargs):
+        _touch_output(cmd)
         calls_made.append(cmd)
         m = MagicMock()
         m.returncode = 0
@@ -164,7 +172,9 @@ class TestOutputEncoding:
         with p1, p2, patch("os.makedirs"), \
              patch("manimgen.renderer.muxer._has_video_stream", return_value=True):
             mux_audio_video("v.mp4", "a.mp3", out)
-        assert out in " ".join(calls[0])
+        # ffmpeg writes a temp sibling (<stem>.<token>.part.mp4); the muxer
+        # publishes it over `out` atomically.
+        assert str(tmp_path / "out.") in " ".join(calls[0])
 
     def test_aac_always_used_for_audio(self, tmp_path):
         for vd, ad in [(10, 8), (8, 10), (10, 10)]:
@@ -268,6 +278,7 @@ class TestErrorHandling:
         captured = {}
 
         def fake_run(cmd, **kwargs):
+            _touch_output(cmd)
             captured.update(kwargs)
             m = MagicMock()
             m.returncode = 0
@@ -316,6 +327,7 @@ class TestEmptyVideoStreamGuard:
         cmds = []
 
         def fake_run(cmd, **kwargs):
+            _touch_output(cmd)
             cmds.append(cmd)
             return MagicMock(returncode=0, stdout="", stderr="")
 
@@ -337,6 +349,7 @@ class TestEmptyVideoStreamGuard:
         cmds = []
 
         def fake_run(cmd, **kwargs):
+            _touch_output(cmd)
             cmds.append(cmd)
             return MagicMock(returncode=0, stdout="video\n", stderr="")
 
