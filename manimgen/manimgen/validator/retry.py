@@ -332,7 +332,16 @@ def retry_scene(
             for w in initial_timing_warnings:
                 print(f"[retry]   {w}")
 
-    for attempt in range(1, MAX_RETRIES + 1):
+    # An attempt is a render that actually ran. A scene rejected before manimgl
+    # started (precheck or safety gate) and a crash a token-free local fix
+    # repairs are re-run without using one up, so the LLM fixes that follow
+    # still get rendered. Bounded by free_steps_left so the loop always ends.
+    attempt = 0
+    step = 0
+    free_steps_left = MAX_RETRIES
+    while attempt < MAX_RETRIES:
+        attempt += 1
+        step += 1
         result = _run_and_capture(scene_path, class_name)
         if result["success"]:
             from manimgen.validator.frame_checker import check_frames
@@ -504,7 +513,17 @@ def retry_scene(
         error_type = _classify_error(result["stderr"])
         guidance = _fix_guidance(error_type, result["stderr"])
         error_signature = _build_error_signature(error_type, result["stderr"])
-        _write_attempt_artifacts(logs_dir, class_name, attempt, code, result["stderr"])
+        _write_attempt_artifacts(logs_dir, class_name, step, code, result["stderr"])
+
+        def _refund(reason: str) -> None:
+            nonlocal attempt, free_steps_left
+            if free_steps_left > 0:
+                free_steps_left -= 1
+                attempt -= 1
+                print(f"[retry] {reason}: attempt not counted.")
+
+        if not result.get("rendered", True):
+            _refund("Rejected before rendering")
 
         # Token-free deterministic fixes first.
         local_fixed, local_applied = apply_error_aware_fixes(code, result["stderr"])
@@ -520,6 +539,8 @@ def retry_scene(
             print(
                 f"[retry] Attempt {attempt}/{MAX_RETRIES} applied local fixes: {', '.join(local_applied)}"
             )
+            if result.get("rendered", True):
+                _refund("Token-free local fix")
             continue
 
         print(
@@ -669,7 +690,12 @@ def _run_and_capture(scene_path: str, class_name: str) -> dict:
             stderr += "\nLayout warnings:\n- " + "\n- ".join(
                 precheck["layout_warnings"]
             )
-        return {"success": False, "video_path": None, "stderr": stderr}
+        return {
+            "success": False,
+            "video_path": None,
+            "stderr": stderr,
+            "rendered": False,
+        }
 
     # Shared entry point (tree-kill timeout, configurable budget, fresh-video
     # check). Exit 0 without a fresh video comes back as a failure, so callers
@@ -682,7 +708,15 @@ def _run_and_capture(scene_path: str, class_name: str) -> dict:
             "stderr": "",
             "overlaps": tuple(result.overlaps),
         }
-    return {"success": False, "video_path": None, "stderr": result.stderr}
+    # No exit code and no timeout: the safety gate refused the file, so
+    # manimgl never ran.
+    rendered = result.returncode is not None or result.timed_out
+    return {
+        "success": False,
+        "video_path": None,
+        "stderr": result.stderr,
+        "rendered": rendered,
+    }
 
 
 _retry_system_prompt_cache: str | None = None
