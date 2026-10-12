@@ -46,12 +46,13 @@ class ValueTrackerScene(Scene):
             dash_length=0.1, color=GREY_B, stroke_width=2,
         ))
 
-        # Coordinate label tracking the dot — clamped to stay in frame
+        # Coordinate label tracking the dot, placed to its RIGHT: above the dot it would
+        # sit on the x-axis tick numbers whenever the dot is below the axis
         coord_label = always_redraw(lambda: Tex(
             rf"({t.get_value():.1f},\ {t.get_value()**2 - 1:.1f})",
             font_size=28, color=WHITE
         ).next_to(
-            axes.input_to_graph_point(t.get_value(), curve), UP, buff=0.2
+            axes.input_to_graph_point(t.get_value(), curve), RIGHT, buff=0.25
         ))
 
         self.play(FadeIn(dot), FadeIn(v_line), FadeIn(coord_label))

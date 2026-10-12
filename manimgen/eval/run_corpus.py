@@ -141,7 +141,8 @@ _DEFECT_PROBES: dict[str, Callable[[str], bool]] = {
     ),
     "zero_length_arrow": _absent(r"Arrow\(\s*ORIGIN\s*,\s*ORIGIN\s*[,)]"),
     "multi_arg_fade": _absent(r"FadeOut\(\s*\w+\s*,\s*\w+\s*\)"),
-    "become_passed_to_play": _absent(r"self\.play\([^)]*\w+\.become\("),
+    # obj.animate.become(...) is the valid form and must not count as the defect.
+    "become_passed_to_play": _absent(r"self\.play\([^)]*\b(?!animate\b)\w+\.become\("),
     "bare_rect_in_play": _absent(
         r"self\.play\(\s*(?:Surrounding|Background)Rectangle\s*\("
     ),

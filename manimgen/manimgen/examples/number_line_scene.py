@@ -21,7 +21,7 @@ class NumberLineScene(Scene):
 
         nl = NumberLine(
             x_range=[-1, 6, 1],
-            length=10,
+            width=10,
             include_numbers=True,
             decimal_number_config={"font_size": 28},
             color=GREY_B,
@@ -32,7 +32,8 @@ class NumberLineScene(Scene):
 
         # Mark a point
         point = Dot(nl.n2p(3), color=YELLOW, radius=0.12)
-        point_label = Text("a = 3", font_size=30, color=YELLOW).next_to(nl.n2p(3), UP, buff=0.4)
+        # Raised above the row where the moving "x" label travels, so the two never collide
+        point_label = Text("a = 3", font_size=30, color=YELLOW).next_to(nl.n2p(3), UP, buff=0.95)
         self.play(FadeIn(point), Write(point_label))
         self.wait(0.3)
 
