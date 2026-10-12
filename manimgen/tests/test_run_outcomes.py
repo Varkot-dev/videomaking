@@ -166,7 +166,7 @@ class TestDegradedRuns:
             return real_tts(text, output_path, voice)
 
         monkeypatch.setattr(tts, "generate_narration", gen)
-        rc = _main(fakes, monkeypatch, TWO, "outcomes")
+        rc = _main(fakes, monkeypatch, TWO, "outcomes", "--allow-silent")
         assert rc == 3
         m = _manifest(fakes)
         assert _statuses(fakes) == ["ok", "silent"]
