@@ -21,7 +21,7 @@ class BraceAnnotationScene(Scene):
 
         number_line = NumberLine(
             x_range=[-1, 7, 1],
-            length=10,
+            width=10,
             include_numbers=True,
             decimal_number_config={"font_size": 24},
             color=GREY_B,

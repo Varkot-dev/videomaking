@@ -8,9 +8,9 @@ class SweepHighlightScene(Scene):
 
     KEY RULES shown here:
     - SurroundingRectangle is a Mobject — always wrap in ShowCreation() for self.play()
-    - To move+resize the rect: use rect.become(SurroundingRectangle(target, ...))
+    - To move+resize the rect: use rect.animate.become(SurroundingRectangle(target, ...))
     - Never use rect.animate.move_to() — that only translates, never resizes
-    - Correct pattern for highlighting during narration: ShowCreation then become() loop
+    - Correct pattern for highlighting during narration: ShowCreation then an animate.become() loop
     """
 
     def construct(self):
@@ -39,13 +39,13 @@ class SweepHighlightScene(Scene):
         self.wait(1.0)  # 0.6 + 0.8 + 0.6 + 1.0 = 3.0 ✓
 
         # CUE 1 — 5.0s: Scan rectangle across all elements
-        # CORRECT pattern: ShowCreation to introduce, then become() to move+resize
+        # CORRECT pattern: ShowCreation to introduce, then animate.become() to move+resize
         scan_rect = SurroundingRectangle(boxes[0], color=YELLOW, buff=0.06)
         self.play(ShowCreation(scan_rect), run_time=0.3)
 
         for i in range(1, len(boxes)):
             self.play(
-                scan_rect.become(SurroundingRectangle(boxes[i], color=YELLOW, buff=0.06)),
+                scan_rect.animate.become(SurroundingRectangle(boxes[i], color=YELLOW, buff=0.06)),
                 run_time=0.25,
             )
         self.wait(5.0 - 0.3 - 0.25 * (len(boxes) - 1))  # fill to 5.0s

@@ -58,8 +58,7 @@ self.wait(3.4)
 > # CUE k — D seconds, animation runs inside a loop
 > anim_time = 0.0
 > for i in range(n - 1):
->     scan_rect.become(SurroundingRectangle(boxes[i], color=TEAL_A, buff=0.05))
->     self.play(ShowCreation(scan_rect), run_time=0.2)
+>     self.play(scan_rect.animate.become(SurroundingRectangle(boxes[i], color=TEAL_A, buff=0.05)), run_time=0.2)
 >     anim_time += 0.2                       # ← accumulate EVERY iteration
 > self.wait(max(0.01, D - anim_time))        # ← subtract the ACCUMULATED total
 > ```
@@ -341,8 +340,7 @@ anim_time += 0.3
 for i in range(len(box_list) - 1):
     j = i + 1
     # Move scan cursor to position i
-    scan_rect.become(SurroundingRectangle(box_list[i], color=TEAL_A, buff=0.06, stroke_width=2.5))
-    self.play(ShowCreation(scan_rect), run_time=0.2)
+    self.play(scan_rect.animate.become(SurroundingRectangle(box_list[i], color=TEAL_A, buff=0.06, stroke_width=2.5)), run_time=0.2)
     anim_time += 0.2
 
     if current_values[i] > current_values[j]:
@@ -398,6 +396,9 @@ self.wait(max(0.01, D - anim_time))
 | `FlashAround(obj)` | `Circumscribe(obj)` |
 | `width=W, height=H` in Axes | `x_length=W, y_length=H` |
 | `TransformMatchingTex(a, b)` | `TransformMatchingShapes(a, b)` |
+| `NumberLine(x_range=[a, b, step], width=W)` | `NumberLine(..., length=W)` |
+| `RegularPolygon(5)`, or a `Polygon(...)` through 10 points of alternating radius for a star | `Star(...)` (does not exist in ManimGL) |
+| `TrueDot(point)` or `Sphere(radius=0.08).move_to(point)` in 3D | `Dot3D(...)` (does not exist in ManimGL) |
 
 ### self.frame — complete API (ThreeDScene only)
 `self.frame` is a `CameraFrame`. These are the ONLY valid methods. Do not invent others.
@@ -505,6 +506,7 @@ self.play(GrowFromCenter(obj))
 self.play(LaggedStart(*[FadeIn(item) for item in items], lag_ratio=0.15))
 self.play(FlashAround(obj, color=TEAL_A))
 self.play(Indicate(obj, color=TEAL_A))
+# Indicate takes scale_factor (default 1.2, e.g. scale_factor=1.05 for a gentle pulse). FadeIn/FadeOut do NOT: use scale= there.
 self.play(FadeTransform(a, b))
 self.play(grid.animate.apply_matrix([[a, b], [c, d]]), run_time=2.5)
 self.wait(seconds)
@@ -516,15 +518,17 @@ self.wait(seconds)
 scan_rect = SurroundingRectangle(boxes[0], color=TEAL_A, buff=0.05)
 self.play(scan_rect.animate.move_to(boxes[1]))  # still same size as boxes[0]
 
-# WRONG — become() returns self (a Mobject), not an Animation — CRASH
+# WRONG - bare become() returns self (a Mobject), not an Animation - CRASH
+# (the validator rewrites it to .animate.become(...), but write the right form yourself)
 self.play(scan_rect.become(SurroundingRectangle(boxes[i], color=TEAL_A, buff=0.05)))
 
-# RIGHT — call become() before self.play(), then animate with FadeIn or ShowCreation
+# RIGHT - .animate.become(...) morphs the rectangle to the new target inside self.play()
 scan_rect = SurroundingRectangle(boxes[0], color=TEAL_A, buff=0.05)
 self.play(ShowCreation(scan_rect), run_time=0.3)
 for i in range(1, len(boxes)):
-    scan_rect.become(SurroundingRectangle(boxes[i], color=TEAL_A, buff=0.05))
-    self.play(ShowCreation(scan_rect), run_time=0.2)
+    self.play(scan_rect.animate.become(SurroundingRectangle(boxes[i], color=TEAL_A, buff=0.05)), run_time=0.2)
+# Equivalent: self.play(Transform(scan_rect, SurroundingRectangle(boxes[i], color=TEAL_A, buff=0.05)))
+# A bare become() line followed by ShowCreation(scan_rect) snaps the box and re-draws it; avoid.
 ```
 
 ### Array swap — correct pattern for exchange animations (bubble sort, selection sort, etc.)
@@ -594,8 +598,8 @@ obj.get_tex_string()                  → NEVER read values back from mobjects; 
 obj.set_fill_color(RED)               → use obj.set_fill(RED) or obj.set_fill(RED, opacity=1)
 text_obj.animate.set_text("new")      → Text has no set_text(). Create new_label = Text("new"); self.play(FadeOut(old_label), FadeIn(new_label))
 Transform(text_a, text_b)             → crashes if glyphs differ; use FadeOut(a) then FadeIn(b)
-scan_rect.animate.move_to(x)          → only moves, never resizes; call scan_rect.become(SurroundingRectangle(x, ...)) BEFORE self.play, then self.play(ShowCreation(scan_rect))
-self.play(obj.become(SurroundingRectangle(...)))  → CRASH — become() returns self (a Mobject), not an Animation; call become() first, then self.play(ShowCreation(obj))
+scan_rect.animate.move_to(x)          → only moves, never resizes; use self.play(scan_rect.animate.become(SurroundingRectangle(x, ...)))
+self.play(obj.become(SurroundingRectangle(...)))  → CRASH - bare become() returns self (a Mobject), not an Animation; write self.play(obj.animate.become(SurroundingRectangle(...))) or self.play(Transform(obj, SurroundingRectangle(...)))
 boxes[i], boxes[j] = boxes[j], boxes[i]  → CRASH: VGroup does not support item assignment; use a parallel Python list: box_list = list(boxes), then swap box_list[i], box_list[j]
 tex_obj.get_parts_by_tex_expression(r"\symbol")  → DOES NOT EXIST in ManimGL Tex. To highlight a sub-expression, create a separate Tex() object and position it with .move_to() or .next_to(). For a single token, try get_part_by_tex(r"\symbol") instead.
 ```
