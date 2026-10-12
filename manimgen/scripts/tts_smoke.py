@@ -9,8 +9,8 @@ Run it on any machine with internet access (Windows, macOS, Linux):
 
 It never calls an LLM. It does call Microsoft's online speech service through
 the pipeline's own narration function (manimgen.renderer.tts.generate_narration,
-the one cli._run_tts_for_section uses), so it honours tts.voice, tts.speed and
-tts.proxy from config.yaml, and HTTPS_PROXY. The unit tests fake that service;
+the one cli._run_tts_for_section uses), so it honours tts.voice and tts.speed
+from config.yaml. The unit tests fake that service;
 this script is the only thing that checks the real one.
 
 Checks on a three sentence narration with two [CUE] markers (it contains a
@@ -366,8 +366,9 @@ def network_hint(error_text: str) -> str:
     if any(w in low for w in network_words):
         return (
             "edge-tts could not reach Microsoft's speech service. This machine is "
-            "probably offline or behind a proxy that blocks it. Set HTTPS_PROXY or "
-            "tts.proxy in config.yaml, or set tts.enabled: false for silent drafts."
+            "probably offline, behind a proxy that blocks it, or the service is "
+            "refusing this network (HTTP 403). Set tts.enabled: false in "
+            "config.yaml for silent drafts."
         )
     return "Unexpected narration error; see the text above."
 
@@ -475,14 +476,10 @@ def _one_line(text: str, limit: int = 300) -> str:
 
 
 def print_config(emit) -> None:
-    from manimgen import config
+    from manimgen.renderer import tts
 
-    cfg = config.section("tts")
-    proxy = (
-        cfg.get("proxy")
-        or os.environ.get("HTTPS_PROXY")
-        or os.environ.get("https_proxy")
-    )
+    cfg = tts._TTS_CFG
+    proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
     emit(f"edge-tts version: {edge_tts_version()}")
     emit(f"voice: {cfg.get('voice', 'en-US-AndrewMultilingualNeural')}")
     emit(f"speed: {cfg.get('speed', '+5%')}")
