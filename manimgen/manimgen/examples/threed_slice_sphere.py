@@ -3,6 +3,10 @@ import numpy as np
 
 
 class SlicedSphereScene(ThreeDScene):
+    """
+    techniques: 3d_surface
+    """
+
     def construct(self):
         self.frame.reorient(-30, 70)
 

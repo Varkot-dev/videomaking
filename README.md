@@ -184,7 +184,7 @@ manimgen/
 │   └── editor/
 │       ├── server.py             # Flask clip editor server
 │       └── templates/editor.html # browser-based trim/reorder/export UI
-├── examples/                     # 32 hand-written verified ManimGL scenes (Director few-shot)
+├── manimgen/examples/            # 31 hand-written verified ManimGL scenes (Director few-shot, shipped as package data)
 │                                 # Each has `techniques: <name>` in class docstring
 ├── tests/                        # unit + integration tests, zero LLM or subprocess calls
 ├── docs/

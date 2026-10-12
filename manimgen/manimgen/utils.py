@@ -168,7 +168,7 @@ def load_reference_frames() -> list[str]:
 
     An empty list is a supported state, not an error: both the layout checker
     and the retry path treat "no reference frames" as "skip style comparison".
-    To restore the capability, render your own frames from ``examples/`` and
+    To restore the capability, render your own frames from ``manimgen/examples/`` and
     drop the PNGs here — which also yields exemplars matching this project's own
     visual conventions rather than someone else's.
     """

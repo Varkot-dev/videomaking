@@ -2,6 +2,10 @@ from manimlib import *
 
 
 class ThreeDIntermediate(ThreeDScene):
+    """
+    techniques: camera_rotation
+    """
+
     def construct(self):
         self.frame.reorient(-20, 75)
 
