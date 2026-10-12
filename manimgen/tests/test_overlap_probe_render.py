@@ -25,7 +25,10 @@ FIXTURES = Path(__file__).parent / "fixtures" / "overlap"
 def _has_display() -> bool:
     if sys.platform.startswith("linux"):
         return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-    return True
+    # GitHub's Windows runner has no OpenGL driver (manimgl fails with
+    # "wglCreateContextAttribsARB not found"). A real render on Windows is
+    # covered by the nightly render workflow and the library PC checklist.
+    return sys.platform != "win32"
 
 
 pytestmark = [

@@ -439,8 +439,11 @@ def test_pythonpath_is_joined_with_os_pathsep(monkeypatch):
         env = overlap_report.with_probe_env(
             {"PYTHONPATH": f"{first}{sep}{second}", "PATH": "x"}, "r.json"
         )
-        parts = env["PYTHONPATH"].split(sep)
-        assert parts == [overlap_report.bootstrap_dir(), first, second]
+        # Compare the whole string: the bootstrap folder of a Windows checkout
+        # starts with a drive letter, so splitting on ":" would cut it in two.
+        assert env["PYTHONPATH"] == sep.join(
+            [overlap_report.bootstrap_dir(), first, second]
+        )
         assert env[overlap_report.REPORT_ENV] == "r.json"
         assert env["PATH"] == "x"
 
