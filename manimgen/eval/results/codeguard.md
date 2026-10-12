@@ -113,7 +113,7 @@ This split matters: cases written by hand against the fix rules partly determine
 | `wrapped bare SurroundingRectangle/BackgroundRectangle in ShowCreation` | 1 |
 | `stripped outer \text{} wrapper from Tex()` | 1 |
 | `TransformMatchingTex(Text, ...) -> FadeOut/FadeIn` | 1 |
-| `self.play(obj.become(...)) -> become()+ShowCreation` | 1 |
+| `self.play(obj.become(...)) -> obj.animate.become(...)` | 1 |
 | `fixed reorient kwarg names: theta_deg= -> theta_degrees= (1), phi_deg= -> phi_degrees=` | 1 |
 | `removed label= from NumberLine` | 1 |
 | `color_gradient int cast` | 1 |
