@@ -1,12 +1,14 @@
 name: CI
 
-# Hardened gate: every PR to main and every push to main must pass ALL jobs.
+# Hardened gate: every PR and every push to main must pass ALL jobs.
 # Designed so a regression cannot land silently — the failures this repo used
 # to hide behind a curated `--ignore` pytest command now fail the build.
+#
+# Pull requests run for ANY base branch, not only main: a stacked pull request
+# (one whose base is another PR's branch) would otherwise get no test run at all.
 
 on:
   pull_request:
-    branches: [main]
   push:
     branches: [main]
 
