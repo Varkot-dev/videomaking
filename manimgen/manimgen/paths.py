@@ -4,8 +4,6 @@
 # All pipeline modules import from here instead of hardcoding strings.
 # Override any path by editing the output: block in config.yaml.
 
-import os
-
 from manimgen import config
 
 _RENDER_DEFAULTS = config.DEFAULTS["rendering"]
