@@ -2,7 +2,6 @@ import enum
 import logging
 import os
 import re
-import subprocess
 
 from manimgen import paths
 from manimgen.llm import chat
@@ -11,14 +10,9 @@ from manimgen.validator.codeguard import (
     apply_error_aware_fixes,
     precheck_and_autofix_file,
 )
-from manimgen.validator.env import get_render_env
 from manimgen.validator.layout_checker import check_layout
-from manimgen.validator.render_command import build_manimgl_command, with_utf8_io
-from manimgen.validator.runner import (
-    _find_rendered_video,
-    _is_3d_scene,
-    _render_floor,
-)
+from manimgen.validator.render_command import run_manimgl
+from manimgen.validator.scene_ast_gate import inspect_scene_code
 from manimgen.validator.timing_verifier import auto_fix_timing, verify_timing
 
 logger = logging.getLogger(__name__)
@@ -454,6 +448,7 @@ def retry_scene(
                 return True, best_video_path or result["video_path"]
 
             print("[retry] Requesting visual fix from LLM...")
+            previous_code = code
             code = _request_visual_fix(
                 code, "\n".join(combined_issues), system_prompt, defective_frames
             )
@@ -465,6 +460,8 @@ def retry_scene(
             # Always reload — precheck may have applied auto-fixes in-place
             with open(scene_path, encoding="utf-8") as f:
                 code = f.read()
+            if _discard_unsafe_fix(scene_path, code, previous_code, "visual"):
+                return True, best_video_path or result["video_path"]
             # Timing pass — catch timing bugs in the LLM's visual fix
             if cue_durations:
                 code, tw = apply_timing_gate(code, scene_path, cue_durations)
@@ -553,6 +550,7 @@ Original code:
 
         fixed = strip_fencing(fixed)
 
+        previous_code = code
         code = fixed
         with open(scene_path, "w", encoding="utf-8") as f:
             f.write(code)
@@ -562,6 +560,8 @@ Original code:
         precheck_and_autofix_file(scene_path)
         with open(scene_path, encoding="utf-8") as f:
             code = f.read()
+        if _discard_unsafe_fix(scene_path, code, previous_code, "error"):
+            break
 
         # Timing pass — auto-fix self.wait() values and inject remaining
         # timing warnings into the next attempt's error context.
@@ -601,6 +601,33 @@ def _breaks_compile(before: str, after: str) -> bool:
     return False
 
 
+def _discard_unsafe_fix(
+    scene_path: str, code: str, previous_code: str, kind: str
+) -> bool:
+    """Discard an LLM fix that the scene safety gate rejects (#87).
+
+    A rejected fix is never rendered: the previous code is written back to
+    ``scene_path`` and True is returned so the caller stops asking for fixes
+    (it then ships the best earlier render or falls back). run_manimgl would
+    refuse the file anyway; discarding here also keeps the unsafe text off disk.
+    """
+    gate = inspect_scene_code(code)
+    if gate.ok:
+        return False
+    logger.warning(
+        "[retry] %s fix rejected by the scene safety gate and discarded: %s",
+        kind,
+        "; ".join(gate.findings),
+    )
+    print(
+        f"[retry] LLM {kind} fix rejected by the scene safety gate; discarded "
+        f"({len(gate.findings)} finding(s)). Not rendering it."
+    )
+    with open(scene_path, "w", encoding="utf-8") as f:
+        f.write(previous_code)
+    return True
+
+
 def _run_and_capture(scene_path: str, class_name: str) -> dict:
     precheck = precheck_and_autofix_file(scene_path)
     if not precheck["ok"]:
@@ -611,33 +638,13 @@ def _run_and_capture(scene_path: str, class_name: str) -> dict:
             )
         return {"success": False, "video_path": None, "stderr": stderr}
 
-    # Director scenes can be long; avoid false timeout-driven fallbacks.
-    timeout = 360 if _is_3d_scene(scene_path) else 240
-    # Freshness floor: without it, an attempt whose render silently produced no
-    # file would pick up the PREVIOUS attempt's video and validate that instead
-    # — shipping the pre-fix render while we pay for a fix that never landed.
-    render_started_at = _render_floor()
-    try:
-        result = subprocess.run(
-            build_manimgl_command(scene_path, class_name),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            env=with_utf8_io(get_render_env()),
-        )
-        if result.returncode == 0:
-            return {
-                "success": True,
-                "video_path": _find_rendered_video(
-                    class_name, newer_than=render_started_at
-                ),
-                "stderr": "",
-            }
-        return {"success": False, "video_path": None, "stderr": result.stderr}
-    except subprocess.TimeoutExpired:
-        return {"success": False, "video_path": None, "stderr": "TimeoutExpired"}
+    # Shared entry point (tree-kill timeout, configurable budget, fresh-video
+    # check). Exit 0 without a fresh video comes back as a failure, so callers
+    # never see success with video_path None.
+    result = run_manimgl(scene_path, class_name)
+    if result.ok:
+        return {"success": True, "video_path": result.video_path, "stderr": ""}
+    return {"success": False, "video_path": None, "stderr": result.stderr}
 
 
 _retry_system_prompt_cache: str | None = None
