@@ -1,3 +1,6 @@
+# Runtime dependencies. setup.py reads this file for install_requires, so
+# `pip install -e .` and `pip install -r requirements.txt` stay in lockstep.
+# Only plain requirement lines and comments belong here (no -r / -e / URLs).
 manimgl==1.7.2
 anthropic
 google-genai
@@ -7,5 +10,9 @@ edge-tts
 pypdf
 pymupdf
 flask
-setuptools<70.0.0
-audioop-lts
+requests
+pillow
+# manimgl 1.7.2 imports pkg_resources, which setuptools 81 removed.
+setuptools<81
+# pydub (pulled in by manimgl) imports audioop, which Python 3.13 removed.
+audioop-lts; python_version >= "3.13"

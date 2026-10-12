@@ -123,10 +123,10 @@ def check_no_broken_fps_flag() -> None:
             if fn.endswith(".py"):
                 path = os.path.join(root, fn)
                 try:
-                    with open(path) as f:
+                    with open(path, encoding="utf-8") as f:
                         if '"--fps"' in f.read():
                             hits.append(os.path.relpath(path, PROJECT_ROOT))
-                except OSError:
+                except (OSError, UnicodeDecodeError):
                     continue
     if hits:
         _fail(
@@ -142,9 +142,9 @@ def check_planner_uses_json_mode() -> None:
     """Landmine #4: planner crashed on malformed LLM JSON; json_mode prevents it."""
     planner = os.path.join(PROJECT_ROOT, "manimgen", "planner", "lesson_planner.py")
     try:
-        with open(planner) as f:
+        with open(planner, encoding="utf-8") as f:
             src = f.read()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return  # planner moved; not this check's job to report
     if "json_mode=True" not in src:
         _warn(
@@ -157,12 +157,64 @@ def check_planner_uses_json_mode() -> None:
 
 
 def check_render_toolchain() -> None:
-    """ffmpeg/manimgl binaries must be on PATH for rendering."""
-    for tool in ("manimgl", "ffmpeg"):
+    """manimgl renders, ffmpeg muxes audio/video, ffprobe measures durations.
+
+    shutil.which honours PATHEXT, so this finds ffmpeg.exe etc. on Windows too.
+    """
+    for tool in ("manimgl", "ffmpeg", "ffprobe"):
         if shutil.which(tool) is None:
-            _warn(tool, "not found on PATH", f"install {tool} / ensure it is on PATH")
+            fix = (
+                "pip install 'manimgl==1.7.2'"
+                if tool == "manimgl"
+                else "install ffmpeg (it ships ffprobe) and put its bin/ directory on PATH"
+            )
+            _warn(tool, "not found on PATH", fix)
         else:
             _ok(f"{tool} on PATH")
+
+
+def _llm_settings() -> tuple[str, str]:
+    """(provider, claude_cli_path) resolved the same way manimgen/llm.py does.
+
+    LLM_PROVIDER in the environment wins, then config.yaml, then the defaults.
+    """
+    provider, cli_path = "claude_cli", "claude"
+    try:
+        # llm.py calls load_dotenv() at import, so a LLM_PROVIDER set in .env
+        # applies to real runs and must apply to this check too.
+        from dotenv import load_dotenv
+
+        load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
+    except ImportError:
+        pass
+    try:
+        import yaml
+
+        with open(os.path.join(PROJECT_ROOT, "config.yaml"), encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        provider = str(cfg.get("llm_provider", provider))
+        cli_path = str((cfg.get("llm") or {}).get("claude_cli_path", cli_path))
+    except Exception:
+        pass  # missing yaml/config: fall back to the llm.py defaults
+    env = os.environ.get("LLM_PROVIDER", "").strip().lower()
+    return (env or provider.strip().lower()), cli_path
+
+
+def check_claude_cli() -> None:
+    """The default claude_cli provider shells out to `claude -p`; it must be on PATH."""
+    provider, cli_path = _llm_settings()
+    if provider != "claude_cli":
+        _ok(f"llm_provider is {provider!r} (Claude Code CLI not required)")
+        return
+    if shutil.which(cli_path) is None:
+        _warn(
+            "claude CLI",
+            f"llm_provider is claude_cli but {cli_path!r} was not found on PATH",
+            "install Claude Code (https://claude.com/claude-code) and run `claude` once to "
+            "log in, or set llm.claude_cli_path in config.yaml to the full path",
+        )
+    else:
+        _ok(f"{cli_path} (Claude Code CLI) on PATH")
 
 
 def main() -> int:
@@ -173,6 +225,7 @@ def main() -> int:
     check_no_broken_fps_flag()
     check_planner_uses_json_mode()
     check_render_toolchain()
+    check_claude_cli()
 
     if _blocking_failures:
         print(
