@@ -92,7 +92,10 @@ def _extract_frame_pil(video_path: str, timestamp: float) -> "Image.Image | None
         )
         if result.returncode != 0 or not os.path.exists(tmp_path):
             return None
-        return Image.open(tmp_path).convert("RGB")
+        # Close the handle before the finally block unlinks the file: Windows
+        # refuses to delete a file that is still open.
+        with Image.open(tmp_path) as img:
+            return img.convert("RGB")
     except Exception as exc:
         # Warning, not debug. A missing import here raised NameError on every
         # call, which this handler swallowed and logged below the CLI's INFO
@@ -242,7 +245,14 @@ def _scene_guided_timestamps(video_path: str, duration: float) -> list[float]:
             "null",
             "-",
         ]
-        result = _sp.run(cmd, capture_output=True, text=True, timeout=30)
+        result = _sp.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        )
         pts_times = [float(m) for m in _re.findall(r"pts_time:([\d.]+)", result.stderr)]
         if not pts_times:
             return fallback

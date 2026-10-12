@@ -96,7 +96,7 @@ def test_run_scene_invokes_manimgl_subprocess(mocker, tmp_path):
     a returncode==0 yields the discovered video path. No real render.
     """
     scene_path = tmp_path / "section_01.py"
-    scene_path.write_text("from manimlib import *\n\n\nclass S(Scene):\n    pass\n")
+    scene_path.write_text("from manimlib import *\n\n\nclass S(Scene):\n    pass\n", encoding="utf-8")
 
     fake_proc = mocker.MagicMock(returncode=0, stdout="ok", stderr="")
     run_mock = mocker.patch(
@@ -126,7 +126,7 @@ def test_run_scene_invokes_manimgl_subprocess(mocker, tmp_path):
 def test_run_scene_returns_failure_on_nonzero_exit(mocker, tmp_path):
     """A non-zero manimgl exit yields (False, None) without raising."""
     scene_path = tmp_path / "section_01.py"
-    scene_path.write_text("from manimlib import *\n\n\nclass S(Scene):\n    pass\n")
+    scene_path.write_text("from manimlib import *\n\n\nclass S(Scene):\n    pass\n", encoding="utf-8")
 
     fake_proc = mocker.MagicMock(returncode=1, stdout="", stderr="boom")
     mocker.patch(

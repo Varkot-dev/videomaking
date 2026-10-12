@@ -1,3 +1,10 @@
+# Build backend. Metadata, dependencies and package data live in setup.py (which
+# reads requirements.txt). setuptools 64+ is needed for PEP 660 editable installs;
+# this only affects the isolated build env, not the runtime setuptools<81 pin.
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
 # Pytest configuration — the single source of truth for how the suite runs.
 #
 # GOAL: local == CI. The historically-documented local command used a curated

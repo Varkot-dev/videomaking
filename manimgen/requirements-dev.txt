@@ -1,0 +1,6 @@
+# Test and lint tooling on top of the runtime dependencies.
+-r requirements.txt
+pytest
+pytest-mock
+hypothesis
+ruff==0.15.13

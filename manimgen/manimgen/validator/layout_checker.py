@@ -20,7 +20,9 @@ logger = logging.getLogger(__name__)
 
 def _load_layout_system_prompt() -> str:
     here = os.path.dirname(__file__)
-    with open(os.path.join(here, "prompts", "layout_checker_system.md")) as f:
+    with open(
+        os.path.join(here, "prompts", "layout_checker_system.md"), encoding="utf-8"
+    ) as f:
         return f.read()
 
 

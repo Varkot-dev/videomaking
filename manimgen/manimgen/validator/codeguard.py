@@ -1579,12 +1579,12 @@ def _precheck_and_autofix_verbose(code: str) -> tuple[str, list[str]]:
 
 def precheck_and_autofix_file(scene_path: str) -> dict[str, Any]:
     """Read a scene file, apply auto-fixes, write back, return result dict."""
-    with open(scene_path) as f:
+    with open(scene_path, encoding="utf-8") as f:
         code = f.read()
 
     fixed, applied_fixes = _precheck_and_autofix_verbose(code)
     if fixed != code:
-        with open(scene_path, "w") as f:
+        with open(scene_path, "w", encoding="utf-8") as f:
             f.write(fixed)
 
     _shadow_log_unknown_symbols(fixed)
