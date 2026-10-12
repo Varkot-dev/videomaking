@@ -17,7 +17,7 @@ class Section02Scene(Scene):
             row.arrange(RIGHT, buff=0.1).center()
             return row
 
-        # CUE 0 — 6.33s
+        # CUE 0 - 6.33s
         title = Text("Looking for 60", font_size=44, color=WHITE).to_edge(UP, buff=0.8)
         top_row = make_row(shuffled)
         target = Text("Target: 60", font_size=28, color=GOLD)
@@ -28,7 +28,7 @@ class Section02Scene(Scene):
         self.play(Write(target), run_time=0.6)
         self.wait(2.43)
 
-        # CUE 1 — 6.33s
+        # CUE 1 - 6.33s
         divider = Line(LEFT * 6.5, RIGHT * 6.5, color=GREY_B, stroke_width=2)
         self.play(
             top_row.animate.shift(UP * 1.5),
@@ -51,7 +51,7 @@ class Section02Scene(Scene):
         self.play(ShowCreation(bot_rect), run_time=0.5)
         self.wait(1.83)
 
-        # CUE 2 — 6.33s
+        # CUE 2 - 6.33s
         ruled = VGroup(*bottom_row[:8])
         self.play(
             top_row.animate.set_opacity(0.25),

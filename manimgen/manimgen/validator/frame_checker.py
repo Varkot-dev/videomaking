@@ -46,7 +46,7 @@ try:
 except ImportError:
     np = None  # type: ignore[assignment]
     _HAS_NUMPY = False
-    logger.debug("[frame_checker] numpy not installed — deterministic checks disabled")
+    logger.debug("[frame_checker] numpy not installed - deterministic checks disabled")
 
 
 def _require_numpy() -> None:
@@ -254,7 +254,7 @@ def _check_frozen_frames(
     similarity = 1.0 - changed
     if changed <= _FROZEN_MAX_CHANGED:
         return (
-            f"ISSUE: Frames at t={ts_a:.1f}s and t={ts_b:.1f}s are {similarity:.2%} identical — "
+            f"ISSUE: Frames at t={ts_a:.1f}s and t={ts_b:.1f}s are {similarity:.2%} identical - "
             f"animation appears frozen | "
             f"CAUSE: Director likely used self.wait() for too long without any animation, "
             f"or all play() calls have very short run_time | "
@@ -337,7 +337,7 @@ def check_frames(video_path: str) -> FrameCheckResult:
 
     if not _HAS_NUMPY:
         logger.warning(
-            "[frame_checker] numpy not installed — frame checks skipped "
+            "[frame_checker] numpy not installed - frame checks skipped "
             "(pip install numpy)"
         )
         return FrameCheckResult(ok=True, skipped=True)

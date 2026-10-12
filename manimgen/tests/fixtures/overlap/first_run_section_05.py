@@ -5,7 +5,7 @@ class Section05Scene(Scene):
     def construct(self):
         # Archetype F-style card sequence: code_reveal, fade_reveal, tracker_label, equation_morph
 
-        # CUE 0 — 5.75s
+        # CUE 0 - 5.75s
         title = Text("The correct loop", font_size=44, color=WHITE).to_edge(UP, buff=0.8)
         code_strs = [
             "lo = 0; hi = n - 1",
@@ -27,7 +27,7 @@ class Section05Scene(Scene):
         self.play(FadeIn(note, shift=UP * 0.2), run_time=0.6)
         self.wait(1.35)  # 0.8+3.0+0.6+1.35 = 5.75
 
-        # CUE 1 — 5.75s
+        # CUE 1 - 5.75s
         big = Text("90%", font_size=48, color=GOLD).move_to(UP * 0.9)
         big.set_backstroke(width=8)
         sub = Text("of professional programmers failed in two hours", font_size=36, color=WHITE)
@@ -53,7 +53,7 @@ class Section05Scene(Scene):
         self.play(FadeIn(cite), run_time=0.5)
         self.wait(2.65)  # 0.8+0.6+1.2+0.5+2.65 = 5.75
 
-        # CUE 2 — 5.75s
+        # CUE 2 - 5.75s
         self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.6)
 
         box_a = Square(side_length=0.9, fill_color="#2a2a2a", fill_opacity=1, stroke_color=GREY_B, stroke_width=2.5)
@@ -88,7 +88,7 @@ class Section05Scene(Scene):
         )
         self.wait(0.95)  # 0.6+1.0+2.0+0.6+0.6+0.95 = 5.75
 
-        # CUE 3 — 5.75s
+        # CUE 3 - 5.75s
         self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.4)
 
         eq1 = Tex(r"mid = \frac{lo + hi}{2}", font_size=48, color=WHITE).move_to(UP * 0.5)

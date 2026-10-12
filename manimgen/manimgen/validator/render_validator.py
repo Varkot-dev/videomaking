@@ -14,9 +14,9 @@ mobjects' own geometry inside manimgl. Its findings arrive as ``OVERLAP:``
 lines and are hard.
 
 Severity:
-  "hard" — ok=False: black screen, frozen animation, text over text.
+  "hard" - ok=False: black screen, frozen animation, text over text.
            Caller must block muxing and trigger retry.
-  "soft" — ok=True, issues non-empty: layout overlaps, edge clipping (layout
+  "soft" - ok=True, issues non-empty: layout overlaps, edge clipping (layout
            issues only appear when the first-pass vision check is opted in).
            The verdict is advisory; callers act only on "hard".
   "none" — ok=True, issues empty: fully clean.

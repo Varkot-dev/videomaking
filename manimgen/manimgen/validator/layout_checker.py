@@ -196,7 +196,7 @@ def check_layout(video_path: str) -> dict:
         return {"ok": True, "issues": "", "skipped": False, "frames": frames}
     if verdict == "unverified":
         logger.warning(
-            "[layout_checker] Unparseable reply (no ISSUE lines, not OK) — unverified"
+            "[layout_checker] Unparseable reply (no ISSUE lines, not OK) - unverified"
         )
         return {
             "ok": True,
