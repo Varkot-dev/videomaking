@@ -124,7 +124,7 @@ class _Fakes:
         class_name = section_class_name(section)
         lines = [f"# {section['title']}: {section['narration']}"]
         for i, d in enumerate(cue_durations or []):
-            lines.append(f"# CUE {i} — {d:.2f}s")
+            lines.append(f"# CUE {i}: {d:.2f}s")
             lines.append(f"self.wait({d:.2f})")
         code = "\n".join(lines) + "\n"
         scene_path = os.path.join(self.dirs["scenes"], f"{section['id']}.py")
