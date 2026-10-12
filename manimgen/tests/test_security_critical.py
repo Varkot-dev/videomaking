@@ -159,7 +159,7 @@ class TestSceneAstGate:
         assert any("SyntaxError" in f for f in r.findings)
 
 
-# ── #29 / #83 — config-load failures are loud, not silently swallowed ───────
+# ── #29 / #83: config-load failures are loud, not silently swallowed ───────
 
 
 class TestConfigLoadLogging:
