@@ -205,6 +205,31 @@ class TestDegradedRuns:
         assert m["result"] == "ok"
         assert "accepted_with_defects" in capsys.readouterr().out
 
+    def test_vision_defects_accepted_by_retry_exit_0(self, fakes, monkeypatch):
+        """retry_scene shipped a render with vision-check issues: the section is
+        accepted_with_defects, and the exit code is 0 (not 3)."""
+        real_run = fakes._run_scene
+        issue = "ISSUE: label is tiny | CAUSE: scale | FIX: scale up"
+
+        def run_scene(scene_path, cls):
+            if cls == "Section02Scene":
+                return False, None
+            return real_run(scene_path, cls)
+
+        def accept(section, code, cls, path, cue_durations=None):
+            ok, video = real_run(path, cls)
+            monkeypatch.setitem(retry._accepted_issues, video, [issue])
+            return ok, video
+
+        monkeypatch.setattr(cli, "run_scene", run_scene)
+        monkeypatch.setattr(cli, "retry_scene", accept)
+        rc = _main(fakes, monkeypatch, TWO, "outcomes")
+        assert rc == 0
+        assert _statuses(fakes) == ["ok", "accepted_with_defects"]
+        m = _manifest(fakes)
+        assert "label is tiny" in m["sections"][1]["reason"]
+        assert m["exit_code"] == 0 and m["result"] == "ok"
+
     def test_no_video_still_writes_manifest(self, fakes, monkeypatch, capsys):
         monkeypatch.setattr(
             muxer, "mux_audio_video", lambda *a: (_ for _ in ()).throw(OSError("x"))

@@ -23,7 +23,7 @@ from manimgen.types import (
 )
 from manimgen.utils import is_usage_stop, safe_section_id
 from manimgen.validator.fallback import fallback_scene
-from manimgen.validator.retry import retry_scene
+from manimgen.validator.retry import accepted_issues, retry_scene
 from manimgen.validator.runner import _find_rendered_video, run_scene
 
 logger = logging.getLogger(__name__)
@@ -393,11 +393,13 @@ def _render_with_retry(
         # retry_scene accepts a render with known freeze-frame tails on its
         # last attempt; re-run the same zero-cost check on the final source.
         freezes = _scene_file_blocking_freezes(gate.scene_path, cue_durations)
-        if freezes:
+        # Visual defects retry_scene shipped anyway (budget or attempt limit).
+        defects = freezes + [i[:160] for i in accepted_issues(video_path)]
+        if defects:
             return RenderResult(
                 video_path,
                 SectionStatus.ACCEPTED_WITH_DEFECTS,
-                "accepted after retries with " + "; ".join(freezes),
+                "accepted after retries with " + "; ".join(defects),
             )
         return RenderResult(video_path, SectionStatus.OK, "repaired by retry")
 
