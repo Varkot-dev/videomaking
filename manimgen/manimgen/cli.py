@@ -71,7 +71,7 @@ def _run_tts_for_section(section: dict, idx: int) -> tuple[str, list, float] | N
     energy = check_audio_not_silent(audio_path)
     if not energy["ok"]:
         logger.warning(
-            "[manimgen] TTS audio for '%s' is %.0f%% silent — retrying once.",
+            "[manimgen] TTS audio for '%s' is %.0f%% silent, retrying once.",
             section["title"],
             energy["silent_ratio"] * 100,
         )
@@ -284,7 +284,7 @@ def _cached_scene_blocking_freezes(
 # now decomposed into three pure-ish seams with explicit signatures:
 #
 #   _generate_and_gate  — codegen + zero-cost timing gate  → GateResult
-#   _render_with_retry  — first render + validate + retry + fallback → RenderResult
+#   _render_with_retry  : first render + validate + retry + fallback → RenderResult
 #   _cut_and_mux        — cut into per-cue clips + mux narration → [clip paths]
 #
 # Behavior is identical to the prior inline version; the cache freeze check and
