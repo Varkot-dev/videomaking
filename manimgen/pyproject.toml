@@ -18,6 +18,10 @@ build-backend = "setuptools.build_meta"
 minversion = "7.0"
 testpaths = ["tests"]
 addopts = "--strict-markers"
+# A hung test (tests/test_llm.py spawns real sleeping subprocesses) is killed
+# after this many seconds instead of holding a runner until the job timeout.
+# Override per test with @pytest.mark.timeout(n).
+timeout = 120
 markers = [
     "unit: isolated function/utility/component tests (no I/O, no subprocess)",
     "integration: cross-module wiring with all LLM/subprocess seams mocked",
