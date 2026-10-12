@@ -90,11 +90,11 @@ class ArraySwapScene(Scene):
                 run_time=0.25,
             )
 
-            # Update swap counter via FadeTransform
+            # Update swap counter: Transform morphs counter_text IN PLACE into the new text,
+            # so exactly one counter stays on screen (FadeTransform + become leaves the old one behind)
             swap_counter[0] += 1
             new_counter = Text(f"Swaps: {swap_counter[0]}", font_size=26, color=TEAL_C).to_edge(DOWN, buff=0.6)
-            self.play(FadeTransform(counter_text, new_counter), run_time=0.3)
-            counter_text.become(new_counter)
+            self.play(Transform(counter_text, new_counter), run_time=0.3)
 
             return 0.3 + 0.55 + 0.25 + 0.3  # = 1.4s per swap
 

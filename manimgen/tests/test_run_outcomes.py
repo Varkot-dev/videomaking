@@ -143,6 +143,45 @@ class TestDegradedRuns:
         assert _main(fakes, monkeypatch, None, "--resume") == 3
         assert _statuses(fakes) == ["ok", "fallback"]
 
+    def test_fallback_sidecar_holds_content_key_and_status_across_resume(
+        self, fakes, monkeypatch
+    ):
+        """Content-keyed cache (#66) and run outcomes (#71) together: line 1 of
+        the sidecar is the section's content key, line 2 is the status, and a
+        cache hit on --resume still reports the fallback and exits 3."""
+        keys = {}
+        real_key = cli._section_key
+
+        def spy(section, topic_hash, durations):
+            k = real_key(section, topic_hash, durations)
+            keys[section["id"]] = k
+            return k
+
+        monkeypatch.setattr(cli, "_section_key", spy)
+        _fail_render_for(fakes, monkeypatch, "Section02Scene")
+        assert _main(fakes, monkeypatch, TWO, "outcomes") == 3
+
+        clip = os.path.join(fakes.dirs["muxed"], "section_02_cue00.mp4")
+        lines = cli._read_sidecar(clip)
+        assert lines[0] == keys["section_02"]
+        assert lines[0] != cli._topic_hash("outcomes")
+        assert lines[1] == "fallback"
+        assert len(lines) == 3 and lines[2]
+        # The section's other sidecar (a clean one) carries the key only.
+        assert cli._read_sidecar(
+            os.path.join(fakes.dirs["muxed"], "section_01_cue00.mp4")
+        ) == [keys["section_01"]]
+        assert not os.path.exists(clip + ".hash.tmp")
+
+        # Second run: every cue is a cache hit, nothing is rendered again.
+        monkeypatch.setattr(
+            cli, "run_scene", lambda *a, **k: pytest.fail("cache hit must not render")
+        )
+        assert _main(fakes, monkeypatch, None, "--resume") == 3
+        assert _statuses(fakes) == ["ok", "fallback"]
+        assert cli._read_sidecar(clip)[:2] == [keys["section_02"], "fallback"]
+        assert _manifest(fakes)["exit_code"] == 3
+
     def test_dropped_section_exits_3(self, fakes, monkeypatch):
         real_mux = fakes._mux
 

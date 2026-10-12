@@ -11,6 +11,8 @@ invariant contract — the retry LLM keys off them — so asserting on the prefi
 is intentional, not brittle.
 """
 
+import re
+
 from manimgen.validator.invariants import run_all
 
 
@@ -300,3 +302,30 @@ class TestI2ZoneGrammar:
         assert not any("I2" in w for w in _warnings(code)), (
             "to_edge(DOWN) should not trigger I2"
         )
+
+
+class TestI2MessagesFollowTheirOwnRule:
+    """An I2 message must never advise code that itself breaks I2."""
+
+    _CORNER = "title = Text('A').to_corner(UL)\nself.play(FadeIn(title))\n"
+
+    def test_corner_message_does_not_advise_two_to_edge_up(self):
+        msgs = [w for w in _warnings(self._CORNER) if w.startswith("I2")]
+        assert msgs, "title.to_corner must raise an I2 warning"
+        for msg in msgs:
+            assert len(re.findall(r"\.to_edge\s*\(\s*UP\b", msg)) <= 1, msg
+
+    def test_split_screen_advice_is_itself_clean(self):
+        advice = (
+            "title = Text('Compare', font_size=48).to_edge(UP, buff=0.8)\n"
+            "left_label = Text('A', font_size=32).next_to(left_panel, UP, buff=0.2)\n"
+            "right_label = Text('B', font_size=32).next_to(right_panel, UP, buff=0.2)\n"
+        )
+        assert not any(w.startswith("I2") for w in _warnings(advice))
+
+    def test_two_to_edge_up_still_flagged(self):
+        code = (
+            "a = Text('a').to_edge(UP, buff=0.8)\n"
+            "b = Text('b').to_edge(UP, buff=0.8)\n"
+        )
+        assert any(w.startswith("I2") for w in _warnings(code))
