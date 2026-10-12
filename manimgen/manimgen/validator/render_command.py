@@ -15,9 +15,13 @@ configured fps. See docs/KNOWN_ISSUES.md.
 
 from __future__ import annotations
 
+import logging
 from typing import NamedTuple
 
 from manimgen import paths
+from manimgen.validator.scene_ast_gate import format_gate_error, inspect_scene_file
+
+logger = logging.getLogger(__name__)
 
 # The canonical dark background. CLAUDE.md: the flag is -c, NOT --background_color.
 _BACKGROUND_COLOR = "#1C1C1C"
@@ -90,7 +94,23 @@ def run_manimgl(
     The single entry point for every manimgl render (first pass, retry and
     fallback). ``timeout`` defaults to the configured 2D/3D budget; on expiry the
     whole process tree is killed. Exit 0 with no fresh video is a failure.
+
+    Hard safety block (#87): the exact file manimgl would execute is first run
+    through ``scene_ast_gate``. A rejected (or unreadable) file is never handed
+    to manimgl; the result is a failure whose ``stderr`` lists the findings, so
+    the retry loop can ask for a fix. This is a static check, not a sandbox.
     """
+    gate = inspect_scene_file(scene_path)
+    if not gate.ok:
+        message = format_gate_error(gate)
+        logger.error(
+            "[render] scene safety gate rejected %s (%s); not rendering: %s",
+            scene_path,
+            class_name,
+            "; ".join(gate.findings),
+        )
+        return RenderResult(False, None, "", message, None, False)
+
     # Imported here: runner imports this module at load time.
     from manimgen import procutil
     from manimgen.validator.env import get_render_env

@@ -1,10 +1,12 @@
 import logging
+import math
 import os
 import re
 
 from manimgen import paths
 from manimgen.utils import safe_section_id
 from manimgen.validator.render_command import run_manimgl
+from manimgen.validator.scene_ast_gate import inspect_scene_code
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +35,14 @@ def _estimate_hold(section: dict) -> int:
     """Match fallback hold duration to narration length so muxing doesn't distort."""
     narration = section.get("narration", "")
     if narration:
-        import math
-
         words = len(narration.split())
         return max(5, math.ceil(words / 130 * 60))
-    return section.get("duration_seconds", 10)
+    # Formatted into scene source unquoted, so it must be a plain number: a
+    # string from a hand-edited or resumed plan.json would be injected as code.
+    try:
+        return max(1, min(600, math.ceil(float(section.get("duration_seconds", 10)))))
+    except (TypeError, ValueError):
+        return 10
 
 
 def fallback_scene(section: dict) -> str | None:
@@ -57,13 +62,23 @@ def fallback_scene(section: dict) -> str | None:
     title = section["title"]
     if len(title) > 52:
         title = title[:49] + "..."
-    code = FALLBACK_TEMPLATE.format(
-        section_num=section_num,
-        title=title,
-        subtitle=subtitle,
-        hold_seconds=hold_seconds,
-    )
-    code = code.replace("class FallbackScene(Scene):", f"class {class_name}(Scene):")
+    code = _fallback_code(class_name, section_num, title, subtitle, hold_seconds)
+    gate = inspect_scene_code(code)
+    if not gate.ok:
+        # The text came from the plan (e.g. a URL in the title). Show neutral
+        # text rather than lose the section; run_manimgl gates the file anyway.
+        logger.warning(
+            "[fallback] title text rejected by the scene safety gate (%s); "
+            "using generic text",
+            "; ".join(gate.findings),
+        )
+        code = _fallback_code(
+            class_name,
+            section_num,
+            f"Section {section_num}",
+            "Visual overview",
+            hold_seconds,
+        )
 
     with open(scene_path, "w", encoding="utf-8") as f:
         f.write(code)
@@ -81,6 +96,18 @@ def fallback_scene(section: dict) -> str | None:
         (result.stderr or "").strip()[-300:],
     )
     return None
+
+
+def _fallback_code(
+    class_name: str, section_num: str, title: str, subtitle: str, hold_seconds: int
+) -> str:
+    code = FALLBACK_TEMPLATE.format(
+        section_num=section_num,
+        title=title,
+        subtitle=subtitle,
+        hold_seconds=hold_seconds,
+    )
+    return code.replace("class FallbackScene(Scene):", f"class {class_name}(Scene):")
 
 
 def _section_num(section: dict) -> str:
