@@ -352,6 +352,10 @@ _AXES_LENGTH_RENAMES: dict[str, str] = {
     "z_length": "depth",
 }
 
+# ManimCommunity NumberLine takes length=; ManimGL NumberLine takes width=.
+_NUMBERLINE_CALLEES = frozenset({"NumberLine", "UnitInterval"})
+_NUMBERLINE_RENAMES: dict[str, str] = {"length": "width"}
+
 # Canonical color-role → ManimGL constant map. Single source of truth, mirrors
 # the palette table in generator/prompts/director_system.md. The Director shows
 # these roles as a reference but never requires emitting the assignment lines, so
@@ -546,6 +550,14 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
     )
     for (old, new), count in Counter((o, n) for _, o, n in renamed).items():
         applied.append(f"{old} -> {new} (ManimGL Axes) ({count})")
+    fixed, renamed = _edit_call_kwargs(
+        fixed,
+        lambda call, callee, kw: (
+            _NUMBERLINE_RENAMES.get(kw.arg) if callee in _NUMBERLINE_CALLEES else None
+        ),
+    )
+    for (old, new), count in Counter((o, n) for _, o, n in renamed).items():
+        applied.append(f"{old} -> {new} (ManimGL NumberLine) ({count})")
 
     for pattern, repl, label in replacements:
         new_fixed, count = re.subn(pattern, repl, fixed)
