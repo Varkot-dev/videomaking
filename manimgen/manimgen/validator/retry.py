@@ -83,6 +83,17 @@ def run_budget_used() -> int:
     return _run_llm_calls_used
 
 
+# Visual defects a shipped render is known to have, keyed by video path. Set
+# whenever retry_scene accepts a render despite defects, cleared on a clean
+# pass, so the caller can report ACCEPTED_WITH_DEFECTS instead of OK.
+_accepted_issues: dict[str, list[str]] = {}
+
+
+def accepted_issues(video_path: str | None) -> list[str]:
+    """Known visual defects of a render retry_scene shipped (empty if clean)."""
+    return list(_accepted_issues.get(video_path or "", []))
+
+
 def _consume_run_budget(category: str) -> bool:
     """Try to reserve one paid LLM call against the global per-run budget.
 
@@ -300,6 +311,13 @@ def retry_scene(
     # one bad LLM fix between attempt 2 and 5 drags the section to fallback.
     best_video_path: str | None = None
     best_issue_count: int = 10**9
+    best_issues: list[str] = []
+
+    def _ship_best(fallback_path: str | None) -> tuple[bool, str | None]:
+        path = best_video_path or fallback_path
+        if path:
+            _accepted_issues[path] = list(best_issues)
+        return True, path
 
     # Timing pass on the initial code — catches freeze-frame tails before the
     # first render attempt at zero cost. (I6 · stable rhythm, I10 · narration contract)
@@ -314,7 +332,16 @@ def retry_scene(
             for w in initial_timing_warnings:
                 print(f"[retry]   {w}")
 
-    for attempt in range(1, MAX_RETRIES + 1):
+    # An attempt is a render that actually ran. A scene rejected before manimgl
+    # started (precheck or safety gate) and a crash a token-free local fix
+    # repairs are re-run without using one up, so the LLM fixes that follow
+    # still get rendered. Bounded by free_steps_left so the loop always ends.
+    attempt = 0
+    step = 0
+    free_steps_left = MAX_RETRIES
+    while attempt < MAX_RETRIES:
+        attempt += 1
+        step += 1
         result = _run_and_capture(scene_path, class_name)
         if result["success"]:
             from manimgen.validator.frame_checker import check_frames
@@ -398,6 +425,7 @@ def retry_scene(
                 defective_frames = layout.get("frames", [])
 
             if not combined_issues and not layout_unverified:
+                _accepted_issues.pop(result["video_path"], None)
                 return True, result["video_path"]
 
             # Record this render as the best-so-far if it has fewer issues
@@ -407,6 +435,7 @@ def retry_scene(
             if issue_count < best_issue_count:
                 best_video_path = result["video_path"]
                 best_issue_count = issue_count
+                best_issues = list(combined_issues)
 
             # #33: UNVERIFIED render (layout LLM was down) with NO concrete
             # frame/timing defect. There is nothing actionable to feed an LLM
@@ -421,7 +450,7 @@ def retry_scene(
                     "UNVERIFIED (LLM unavailable) and no frame/timing defects — "
                     "shipping render unverified (bounded, no clean-pass claim)."
                 )
-                return True, best_video_path or result["video_path"]
+                return _ship_best(result["video_path"])
 
             # Scene rendered but has visual defects. Feed structured feedback
             # back into the retry loop if budget allows.
@@ -438,7 +467,7 @@ def retry_scene(
                 print(
                     "[retry] Accepting video despite visual issues (budget or attempt limit reached)."
                 )
-                return True, best_video_path or result["video_path"]
+                return _ship_best(result["video_path"])
 
             # Dedup: if we already paid for a vision call on this exact set of
             # defects and they came back unchanged, the model has nothing new
@@ -450,7 +479,7 @@ def retry_scene(
                     "already failed to fix it; accepting best render instead of "
                     "paying again."
                 )
-                return True, best_video_path or result["video_path"]
+                return _ship_best(result["video_path"])
 
             # Global per-run ceiling across ALL sections (MAX_TOTAL_LLM_CALLS).
             if not _consume_run_budget("visual"):
@@ -458,7 +487,7 @@ def retry_scene(
                     "[retry] Global run LLM budget exhausted — accepting best "
                     "render instead of requesting a visual fix."
                 )
-                return True, best_video_path or result["video_path"]
+                return _ship_best(result["video_path"])
 
             print("[retry] Requesting visual fix from LLM...")
             previous_code = code
@@ -484,7 +513,17 @@ def retry_scene(
         error_type = _classify_error(result["stderr"])
         guidance = _fix_guidance(error_type, result["stderr"])
         error_signature = _build_error_signature(error_type, result["stderr"])
-        _write_attempt_artifacts(logs_dir, class_name, attempt, code, result["stderr"])
+        _write_attempt_artifacts(logs_dir, class_name, step, code, result["stderr"])
+
+        def _refund(reason: str) -> None:
+            nonlocal attempt, free_steps_left
+            if free_steps_left > 0:
+                free_steps_left -= 1
+                attempt -= 1
+                print(f"[retry] {reason}: attempt not counted.")
+
+        if not result.get("rendered", True):
+            _refund("Rejected before rendering")
 
         # Token-free deterministic fixes first.
         local_fixed, local_applied = apply_error_aware_fixes(code, result["stderr"])
@@ -500,6 +539,8 @@ def retry_scene(
             print(
                 f"[retry] Attempt {attempt}/{MAX_RETRIES} applied local fixes: {', '.join(local_applied)}"
             )
+            if result.get("rendered", True):
+                _refund("Token-free local fix")
             continue
 
         print(
@@ -597,7 +638,7 @@ Original code:
         print(
             f"[retry] All attempts exhausted — shipping best earlier render (had {best_issue_count} visual issue(s))."
         )
-        return True, best_video_path
+        return _ship_best(None)
     return False, None
 
 
@@ -649,7 +690,12 @@ def _run_and_capture(scene_path: str, class_name: str) -> dict:
             stderr += "\nLayout warnings:\n- " + "\n- ".join(
                 precheck["layout_warnings"]
             )
-        return {"success": False, "video_path": None, "stderr": stderr}
+        return {
+            "success": False,
+            "video_path": None,
+            "stderr": stderr,
+            "rendered": False,
+        }
 
     # Shared entry point (tree-kill timeout, configurable budget, fresh-video
     # check). Exit 0 without a fresh video comes back as a failure, so callers
@@ -662,7 +708,15 @@ def _run_and_capture(scene_path: str, class_name: str) -> dict:
             "stderr": "",
             "overlaps": tuple(result.overlaps),
         }
-    return {"success": False, "video_path": None, "stderr": result.stderr}
+    # No exit code and no timeout: the safety gate refused the file, so
+    # manimgl never ran.
+    rendered = result.returncode is not None or result.timed_out
+    return {
+        "success": False,
+        "video_path": None,
+        "stderr": result.stderr,
+        "rendered": rendered,
+    }
 
 
 _retry_system_prompt_cache: str | None = None
