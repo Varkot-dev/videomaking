@@ -13,6 +13,18 @@ drift fails the build instead of sitting unnoticed.
 
 ## Quick reference
 
+**Supported install: editable (`pip install -e .`).** manimgen reads `config.yaml`
+from the project folder, and that file exists only in a source checkout. A
+non-editable (wheel) install is not supported: it stops at start-up with a message
+saying `config.yaml` was not found; it never falls back to defaults. To use a
+config file somewhere else, set `MANIMGEN_CONFIG` to its path.
+
+Relative paths in the `output:` block of `config.yaml` resolve against the folder
+holding `config.yaml`, not against where you launch the command, so every launch
+writes plans, renders and clips to the same place. A run logs the config file and
+output folder it is using. A missing, unreadable or malformed `config.yaml`, or a
+value of the wrong type, is an error that names the file and the problem.
+
 ```bash
 python3 -m pytest -q          # full suite, fully mocked, no API key needed
 manimgen "binary search"      # generate a video from a topic
