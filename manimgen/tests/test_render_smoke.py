@@ -145,6 +145,30 @@ class TestEvaluateGl:
         assert c.status == rs.WARN
         assert "software" in c.detail
 
+    @pytest.mark.parametrize(
+        "renderer",
+        [
+            # Mesa's d3d12 driver on a machine with no graphics chip: it runs
+            # on Microsoft's software DirectX adapter (seen on GitHub's runner).
+            "D3D12 (Microsoft Basic Render Driver)",
+            "Microsoft Basic Render Driver",
+        ],
+    )
+    def test_microsoft_basic_render_driver_is_software(self, renderer):
+        # Reported PASS before: the name has no "software" in it, but this
+        # adapter draws on the CPU, so it must warn like llvmpipe does.
+        c = rs.evaluate_gl(self._ok(renderer=renderer), "win32")
+        assert c.status == rs.WARN
+        assert "software" in c.detail
+
+    def test_d3d12_on_a_real_gpu_still_passes(self):
+        # The driver name alone is not a reason to warn: Mesa's d3d12 driver
+        # on a real chip reports the chip's name.
+        c = rs.evaluate_gl(
+            self._ok(renderer="D3D12 (Intel(R) UHD Graphics 770)"), "win32"
+        )
+        assert c.status == rs.PASS
+
     def test_old_version_fails(self):
         assert rs.evaluate_gl(self._ok(version="2.1 Metal"), "darwin").status == rs.FAIL
 

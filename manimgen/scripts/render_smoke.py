@@ -105,6 +105,7 @@ SOFTWARE_RENDERER_MARKERS = (
     "swrast",
     "software",
     "gdi generic",
+    "basic render",  # Microsoft Basic Render Driver: Windows' CPU adapter
 )
 
 

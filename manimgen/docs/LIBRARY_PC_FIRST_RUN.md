@@ -45,7 +45,7 @@ Read the `OpenGL` line of the `render_smoke.py` table first. It names the render
 |---|---|---|
 | `PASS  GL 4.x on Intel(R) UHD Graphics 770` | The graphics chip works | Nothing, go to step 5 |
 | `WARN  ... llvmpipe ... (software rendering)` | Works on the processor, slower | Nothing, or use quality `l` or `m` |
-| `PASS  GL 4.5 on D3D12 (Microsoft Basic Render Driver)` | Works, but this is Microsoft's software adapter, so it is drawn on the processor even though the line says PASS | Nothing, or use quality `l` or `m` |
+| `WARN  ... D3D12 (Microsoft Basic Render Driver) ... (software rendering)` | Works, but this is Microsoft's software adapter, so it is drawn on the processor, not the graphics chip | Nothing, or use quality `l` or `m` |
 | `FAIL  could not create an OpenGL 3.3+ context` | The Intel driver cannot be used | Do the Mesa fallback below |
 
 Mesa is a free OpenGL that can be dropped in without admin rights: you only copy three files. It
