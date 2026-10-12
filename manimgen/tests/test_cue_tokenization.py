@@ -1,29 +1,135 @@
-# Integration test: cue_parser word-count alignment with edge-tts word boundaries.
+# Offline test: cue_parser word-count alignment with edge-tts word boundaries.
 #
 # The risk: cue_parser uses str.split() to count words, but edge-tts may
 # tokenize differently (contractions, punctuation attachment, hyphenated words).
 # If they diverge, cue_word_indices point to the wrong words and A/V sync breaks.
 #
-# These tests run against the real edge-tts stream (free, no API key) and verify
-# that for real narration strings the word counts stay aligned.
+# These tests used to stream from the real edge-tts service (Microsoft Bing
+# speech servers), which made the suite fail or skip whenever the network
+# blocked it. They now run fully offline: edge_tts.Communicate is replaced by
+# _FakeCommunicate, which emits WordBoundary events the way the real service
+# does (one event per spoken word, punctuation dropped, contractions kept
+# whole, offsets/durations in 100ns ticks with a leading silence and sentence
+# pauses). The code under test (tts._generate_async, cue_parser, segmenter)
+# still consumes the exact chunk shape edge-tts produces.
 #
-# Skipped automatically when edge-tts is not installed (CI without audio deps).
+# LIMITATION: the fake builds its boundaries from text.split(), so the
+# word-count assertions here check the parse_cues / cue_times / compute_segments
+# plumbing against an ASSUMED edge-tts tokenization, not against the real
+# service. They cannot catch the real service tokenizing differently. To
+# validate the assumption, record real WordBoundary output on a machine with
+# network access and compare it with _FakeCommunicate.
 
-import asyncio
+import re
 
 import pytest
 
-try:
-    import edge_tts
+from manimgen.planner.cue_parser import align_cue_indices, parse_cues
+from manimgen.planner.segmenter import compute_segments
+from manimgen.renderer import tts
 
-    _EDGE_TTS_AVAILABLE = True
-except ImportError:
-    _EDGE_TTS_AVAILABLE = False
+# ---------------------------------------------------------------------------
+# Fake edge-tts stream
+# ---------------------------------------------------------------------------
 
-pytestmark = pytest.mark.skipif(
-    not _EDGE_TTS_AVAILABLE,
-    reason="edge-tts not installed",
-)
+_TICKS_PER_SEC = 10_000_000  # edge-tts offsets are in 100-nanosecond units
+
+# Timing model loosely matching en-US-AndrewMultilingualNeural at +5%:
+# ~0.1s leading silence, ~55ms per character plus a base cost per word,
+# short inter-word gaps and longer pauses after clause/sentence punctuation.
+_LEAD_IN_SEC = 0.1
+_WORD_BASE_SEC = 0.12
+_PER_CHAR_SEC = 0.055
+_GAP_SEC = 0.04
+_CLAUSE_PAUSE_SEC = 0.18
+_SENTENCE_PAUSE_SEC = 0.35
+_TRAIL_SEC = 0.3
+
+# Leading/trailing punctuation that edge-tts never reports as part of a word.
+_EDGE_PUNCT = re.compile(r"^[^\w]+|[^\w]+$")
+
+
+def _edge_tokens(text: str, split_hyphens: bool = False) -> list[tuple[str, str]]:
+    """Tokenize like edge-tts WordBoundary: return (word, trailing_punct) pairs.
+
+    Words are whitespace separated with surrounding punctuation stripped and
+    punctuation-only tokens dropped. Internal apostrophes stay ("you'll").
+    With split_hyphens=True, "well-known" becomes two boundaries, which is the
+    divergent case the cue re-alignment logic exists to handle.
+    """
+    tokens: list[tuple[str, str]] = []
+    for raw in text.split():
+        word = _EDGE_PUNCT.sub("", raw)
+        if not word:
+            continue
+        trailing = raw[raw.rfind(word) + len(word) :]
+        parts = word.split("-") if split_hyphens else [word]
+        parts = [p for p in parts if p]
+        for i, part in enumerate(parts):
+            tokens.append((part, trailing if i == len(parts) - 1 else ""))
+    return tokens
+
+
+def _fake_boundaries(text: str, split_hyphens: bool = False) -> list[dict]:
+    """Build realistic WordBoundary chunks for text."""
+    events = []
+    t = _LEAD_IN_SEC
+    for word, trailing in _edge_tokens(text, split_hyphens):
+        dur = _WORD_BASE_SEC + _PER_CHAR_SEC * len(word)
+        events.append(
+            {
+                "type": "WordBoundary",
+                "offset": round(t * _TICKS_PER_SEC),
+                "duration": round(dur * _TICKS_PER_SEC),
+                "text": word,
+            }
+        )
+        t += dur + _GAP_SEC
+        if any(c in trailing for c in ".!?"):
+            t += _SENTENCE_PAUSE_SEC
+        elif any(c in trailing for c in ",;:"):
+            t += _CLAUSE_PAUSE_SEC
+    return events
+
+
+def _fake_audio_duration(text: str, split_hyphens: bool = False) -> float:
+    """Total audio length the fake stream represents (last word end + tail)."""
+    events = _fake_boundaries(text, split_hyphens)
+    if not events:
+        return _LEAD_IN_SEC + _TRAIL_SEC
+    last = events[-1]
+    return (last["offset"] + last["duration"]) / _TICKS_PER_SEC + _TRAIL_SEC
+
+
+class _FakeCommunicate:
+    """Drop-in for edge_tts.Communicate that never touches the network."""
+
+    instances: list["_FakeCommunicate"] = []
+    split_hyphens = False
+
+    def __init__(self, text, voice, rate="+0%", boundary="SentenceBoundary", **kw):
+        self.text = text
+        self.voice = voice
+        self.rate = rate
+        self.boundary = boundary
+        _FakeCommunicate.instances.append(self)
+
+    async def stream(self):
+        # Interleave audio and boundary chunks the way the service does.
+        for event in _fake_boundaries(self.text, self.split_hyphens):
+            yield {"type": "audio", "data": b"\xff\xf3" + b"\x00" * 30}
+            if self.boundary == "WordBoundary":
+                yield dict(event)
+        yield {"type": "audio", "data": b"\xff\xf3" + b"\x00" * 30}
+
+
+@pytest.fixture(autouse=True)
+def fake_edge_tts(monkeypatch):
+    """Route every edge_tts.Communicate use in this module to the fake."""
+    _FakeCommunicate.instances = []
+    _FakeCommunicate.split_hyphens = False
+    monkeypatch.setattr(tts.edge_tts, "Communicate", _FakeCommunicate)
+    return _FakeCommunicate
 
 
 # ---------------------------------------------------------------------------
@@ -31,78 +137,14 @@ pytestmark = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 
 
-async def _collect_word_boundaries(text: str) -> list[str]:
-    """Stream edge-tts and return the list of words from WordBoundary events."""
-    communicate = edge_tts.Communicate(
-        text,
-        "en-US-AndrewMultilingualNeural",
-        rate="+5%",
-        boundary="WordBoundary",
-    )
-    words = []
-    async for chunk in communicate.stream():
-        if chunk["type"] == "WordBoundary":
-            words.append(chunk["text"])
-    return words
-
-
-def _tts_word_count(text: str) -> int:
-    return len(asyncio.run(_collect_word_boundaries(text)))
+def _tts_words(text: str, tmp_path) -> list[str]:
+    """Run the real tts.generate_narration path and return the boundary words."""
+    _, timestamps = tts.generate_narration(text, str(tmp_path / "narration.mp3"))
+    return [t.word for t in timestamps]
 
 
 def _split_word_count(text: str) -> int:
     return len(text.split())
-
-
-def _run_or_skip_on_network(fn, *args, **kwargs):
-    """Run an edge-tts-dependent call; skip (not fail) on a network outage.
-
-    These are integration tests against the real edge-tts stream
-    (Microsoft Bing speech servers). When that service is unreachable or
-    returns 5xx, the test cannot make its assertion — that is an
-    environmental failure, not a code regression, so it must SKIP, not
-    FAIL (a red build here would falsely claim the pipeline is broken).
-
-    Only network/transport errors are converted to skips. A genuine
-    assertion failure (the str.split vs edge-tts tokenization divergence
-    this file exists to catch) still propagates and fails loudly.
-    """
-    try:
-        return fn(*args, **kwargs)
-    except Exception as exc:  # noqa: BLE001 - re-raised unless network-class
-        # A 4xx from the speech server means OUR request was malformed
-        # (e.g. a regression in the edge_tts.Communicate() params) — that
-        # is a real code bug and MUST fail loudly, never skip. Only a 5xx
-        # / transport / DNS failure is an environmental outage worth
-        # skipping. Gate the HTTP-response case on status before the
-        # generic transport-marker check below.
-        status = getattr(exc, "status", None)
-        if isinstance(status, int):
-            if 400 <= status < 500:
-                # OUR request was malformed — a real code bug. Fail loudly.
-                raise
-            if status >= 500:
-                # Server-side outage — environmental. Skip.
-                pytest.skip(f"edge-tts server error (HTTP {status}) — skipping: {exc}")
-
-        msg = f"{type(exc).__module__}.{type(exc).__name__}: {exc}"
-        # Transport / connection / DNS failures only. ClientResponseError is
-        # handled above by HTTP status, not here.
-        network_markers = (
-            "WSServerHandshakeError",
-            "ClientConnectorError",
-            "ClientConnectionError",
-            "ServerDisconnectedError",
-            "ClientOSError",
-            "TimeoutError",
-            "ConnectionResetError",
-            "ConnectionRefusedError",
-            "socket.gaierror",
-            "NoConnectionsAvailable",
-        )
-        if any(marker in msg for marker in network_markers):
-            pytest.skip(f"edge-tts service unreachable — skipping: {msg}")
-        raise
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +178,7 @@ NARRATION_SAMPLES = [
 
 
 @pytest.mark.parametrize("label,text", NARRATION_SAMPLES)
-def test_word_count_matches_split(label: str, text: str) -> None:
+def test_word_count_matches_split(label: str, text: str, tmp_path) -> None:
     """TTS word boundary count must equal str.split() count (±1 tolerance).
 
     A mismatch here means cue indices will point to the wrong word onset
@@ -145,86 +187,120 @@ def test_word_count_matches_split(label: str, text: str) -> None:
     Tolerance of ±1 accounts for leading/trailing silence tokens that some
     TTS engines emit as zero-duration boundary events.
     """
-    tts_count = _run_or_skip_on_network(_tts_word_count, text)
+    words = _tts_words(text, tmp_path)
     split_count = _split_word_count(text)
-    assert abs(tts_count - split_count) <= 1, (
+    assert abs(len(words) - split_count) <= 1, (
         f"[{label}] Word count mismatch: str.split()={split_count}, "
-        f"edge-tts WordBoundary={tts_count}. "
+        f"edge-tts WordBoundary={len(words)}. "
         f"Text: {text!r}"
     )
+    # Boundary words carry no attached punctuation, so the cue aligner must
+    # compare on alphanumeric content rather than raw token equality.
+    assert all(w and w[-1].isalnum() for w in words), words
 
 
-def test_cue_index_resolves_to_correct_word() -> None:
+def test_generate_narration_requests_word_boundaries(fake_edge_tts, tmp_path) -> None:
+    """generate_narration must ask edge-tts for WordBoundary events.
+
+    Without boundary="WordBoundary" the service only emits sentence events,
+    timestamps come back empty and every cue lookup fails.
+    """
+    tts.generate_narration("Hello there world.", str(tmp_path / "a.mp3"))
+    assert len(fake_edge_tts.instances) == 1
+    call = fake_edge_tts.instances[0]
+    assert call.boundary == "WordBoundary"
+    assert call.text == "Hello there world."
+    assert re.fullmatch(r"[+-]\d+%", call.rate), call.rate
+
+
+def test_cue_index_resolves_to_correct_word(tmp_path) -> None:
     """A cue placed after N words must correspond to the correct onset time.
 
     Verifies the full chain: parse_cues → cue_word_indices → TTS timestamps →
     cue_times returns a timestamp that matches word N from TTS boundaries.
     """
-    import os
-    import tempfile
-
-    from manimgen.planner.cue_parser import parse_cues
-    from manimgen.renderer.tts import cue_times, generate_narration
-
     narration_with_cues = (
         "Start here we go. [CUE] Now this is the next idea. [CUE] And we finish."
     )
     clean, cue_indices = parse_cues(narration_with_cues)
 
-    # cue_indices should be [0, 4, 10] — word 0, word after "Start here we go.", word after "Now..."
-    assert cue_indices[0] == 0, "First cue index must always be 0"
-    assert len(cue_indices) == 3, (
-        f"Expected 3 cues, got {len(cue_indices)}: {cue_indices}"
-    )
+    # word 0 = "Start", word 4 = "Now", word 10 = "And"
+    assert cue_indices == [0, 4, 10], cue_indices
 
-    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-        tmp_path = f.name
-    try:
-        _, timestamps = _run_or_skip_on_network(generate_narration, clean, tmp_path)
-    finally:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+    tmp_audio = str(tmp_path / "narration.mp3")
+    _, timestamps = tts.generate_narration(clean, tmp_audio)
+    with open(tmp_audio, "rb") as f:
+        assert f.read(), "generate_narration wrote an empty audio file"
 
     # All cue indices must be valid (within bounds of TTS word count)
     assert len(timestamps) > 0, "TTS returned no word timestamps"
     for idx in cue_indices:
         assert idx < len(timestamps), (
-            f"Cue index {idx} out of range — TTS only has {len(timestamps)} words. "
+            f"Cue index {idx} out of range: TTS only has {len(timestamps)} words. "
             f"str.split() and edge-tts have diverged."
         )
 
+    # Each cue must land on the word that followed its [CUE] tag.
+    assert [timestamps[i].word for i in cue_indices] == ["Start", "Now", "And"]
+
     # cue_times must not raise and must return monotonically increasing times
-    times = cue_times(timestamps, cue_indices)
+    times = tts.cue_times(timestamps, cue_indices)
     assert len(times) == len(cue_indices)
     for i in range(1, len(times)):
         assert times[i] >= times[i - 1], (
             f"Cue times not monotonically increasing: {times}"
         )
+    # And they must be exactly those words' onsets.
+    assert times == [timestamps[i].start for i in cue_indices]
+    assert times[0] == pytest.approx(_LEAD_IN_SEC)
 
 
-def test_short_cue_segment_not_negative() -> None:
+def test_hyphen_split_divergence_is_realigned(fake_edge_tts, tmp_path) -> None:
+    """If edge-tts splits "well-known" into two boundaries, cues must follow.
+
+    str.split() sees one word, edge-tts two, so every cue after the hyphen is
+    shifted by one. align_cue_indices / compute_segments(clean_text=...) must
+    re-derive the index so the cue still starts on the intended word.
+    """
+    fake_edge_tts.split_hyphens = True
+    clean, cue_indices = parse_cues(
+        "This is a well-known technique. [CUE] Computers use it everywhere."
+    )
+    assert cue_indices == [0, 5]
+
+    _, timestamps = tts.generate_narration(clean, str(tmp_path / "n.mp3"))
+    words = [t.word for t in timestamps]
+    assert len(words) == _split_word_count(clean) + 1
+
+    aligned = align_cue_indices(clean, cue_indices, words)
+    assert [words[i] for i in aligned] == ["This", "Computers"]
+
+    audio_dur = _fake_audio_duration(clean, split_hyphens=True)
+    segments = compute_segments(timestamps, cue_indices, audio_dur, clean_text=clean)
+    assert segments[1].duration == pytest.approx(
+        audio_dur - timestamps[aligned[1]].start, abs=1e-3
+    )
+
+
+def test_short_cue_segment_not_negative(tmp_path) -> None:
     """A cue placed just 1 word before the end must still yield a positive duration."""
-    import os
-    import tempfile
-
-    from manimgen.planner.cue_parser import parse_cues
-    from manimgen.planner.segmenter import compute_segments
-    from manimgen.renderer.tts import generate_narration, get_audio_duration
-
     narration = "One two three. [CUE] Four."
     clean, cue_indices = parse_cues(narration)
+    assert cue_indices == [0, 3]
 
-    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-        tmp_path = f.name
-    try:
-        _, timestamps = _run_or_skip_on_network(generate_narration, clean, tmp_path)
-        audio_dur = get_audio_duration(tmp_path)
-    finally:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+    _, timestamps = tts.generate_narration(clean, str(tmp_path / "narration.mp3"))
+    # ffprobe cannot read the fake MP3 bytes, so use the duration the fake
+    # stream represents (last word end plus trailing silence).
+    audio_dur = _fake_audio_duration(clean)
+    assert audio_dur > timestamps[-1].end
 
     segments = compute_segments(timestamps, cue_indices, audio_dur)
+    assert len(segments) == 2
     for seg in segments:
         assert seg.duration > 0, (
             f"Segment {seg.cue_index} has non-positive duration: {seg.duration}"
         )
+    # The last cue runs from its word onset to the end of the audio.
+    assert segments[1].duration == pytest.approx(
+        audio_dur - timestamps[3].start, abs=1e-3
+    )
