@@ -518,11 +518,11 @@ self.wait(seconds)
 scan_rect = SurroundingRectangle(boxes[0], color=TEAL_A, buff=0.05)
 self.play(scan_rect.animate.move_to(boxes[1]))  # still same size as boxes[0]
 
-# WRONG — bare become() returns self (a Mobject), not an Animation — CRASH
+# WRONG - bare become() returns self (a Mobject), not an Animation - CRASH
 # (the validator rewrites it to .animate.become(...), but write the right form yourself)
 self.play(scan_rect.become(SurroundingRectangle(boxes[i], color=TEAL_A, buff=0.05)))
 
-# RIGHT — .animate.become(...) morphs the rectangle to the new target inside self.play()
+# RIGHT - .animate.become(...) morphs the rectangle to the new target inside self.play()
 scan_rect = SurroundingRectangle(boxes[0], color=TEAL_A, buff=0.05)
 self.play(ShowCreation(scan_rect), run_time=0.3)
 for i in range(1, len(boxes)):
@@ -599,7 +599,7 @@ obj.set_fill_color(RED)               → use obj.set_fill(RED) or obj.set_fill(
 text_obj.animate.set_text("new")      → Text has no set_text(). Create new_label = Text("new"); self.play(FadeOut(old_label), FadeIn(new_label))
 Transform(text_a, text_b)             → crashes if glyphs differ; use FadeOut(a) then FadeIn(b)
 scan_rect.animate.move_to(x)          → only moves, never resizes; use self.play(scan_rect.animate.become(SurroundingRectangle(x, ...)))
-self.play(obj.become(SurroundingRectangle(...)))  → CRASH — bare become() returns self (a Mobject), not an Animation; write self.play(obj.animate.become(SurroundingRectangle(...))) or self.play(Transform(obj, SurroundingRectangle(...)))
+self.play(obj.become(SurroundingRectangle(...)))  → CRASH - bare become() returns self (a Mobject), not an Animation; write self.play(obj.animate.become(SurroundingRectangle(...))) or self.play(Transform(obj, SurroundingRectangle(...)))
 boxes[i], boxes[j] = boxes[j], boxes[i]  → CRASH: VGroup does not support item assignment; use a parallel Python list: box_list = list(boxes), then swap box_list[i], box_list[j]
 tex_obj.get_parts_by_tex_expression(r"\symbol")  → DOES NOT EXIST in ManimGL Tex. To highlight a sub-expression, create a separate Tex() object and position it with .move_to() or .next_to(). For a single token, try get_part_by_tex(r"\symbol") instead.
 ```
