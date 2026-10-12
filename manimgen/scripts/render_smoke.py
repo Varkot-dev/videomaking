@@ -256,7 +256,9 @@ def _gl_hint(platform: str) -> str:
     if platform.startswith("win"):
         return (
             "No admin: put Mesa's opengl32.dll (pal1000/mesa-dist-win, x64 folder) "
-            "next to python.exe. With admin: install the Intel graphics driver."
+            "next to python.exe, then set GALLIUM_DRIVER=d3d12 (may use the real "
+            "GPU through DirectX 12) or GALLIUM_DRIVER=llvmpipe (CPU, always "
+            "works). With admin: install the Intel graphics driver."
         )
     if platform == "darwin":
         return "macOS provides OpenGL 4.1; reinstall moderngl: pip install -U moderngl"

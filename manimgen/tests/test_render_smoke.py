@@ -153,6 +153,12 @@ class TestEvaluateGl:
         assert c.status == rs.FAIL
         assert "boom" in c.detail
         assert "opengl32.dll" in c.hint
+        assert "GALLIUM_DRIVER=d3d12" in c.hint
+        assert "GALLIUM_DRIVER=llvmpipe" in c.hint
+
+    def test_windows_hint_lists_d3d12_before_llvmpipe(self):
+        hint = rs._gl_hint("win32")
+        assert hint.index("d3d12") < hint.index("llvmpipe")
 
     def test_missing_payload_is_fail_not_crash(self):
         c = rs.evaluate_gl(None, "linux")
