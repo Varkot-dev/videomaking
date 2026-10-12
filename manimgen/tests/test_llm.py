@@ -8,13 +8,19 @@ e478fbd, pipeline stalled 11 minutes on research_topic()).
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+import manimgen.llm as llm_mod
 from manimgen.llm import (
     _gemini,
     _anthropic,
+    _claude_cli,
+    _strip_json_fence,
     _resolve_provider,
     chat,
     _REQUEST_TIMEOUT_SECONDS,
@@ -121,7 +127,7 @@ class TestAnthropicClientConfigured:
 
         fake_anthropic = MagicMock()
         fake_response = MagicMock()
-        fake_response.content = [MagicMock(text="hello")]
+        fake_response.content = [MagicMock(type="text", text="hello")]
         fake_anthropic.Anthropic.return_value.messages.create.return_value = fake_response
 
         with patch.dict("sys.modules", {"anthropic": fake_anthropic}):
@@ -159,7 +165,7 @@ class TestProviderResolution:
 
     def test_empty_env_var_falls_back_to_config(self, monkeypatch):
         monkeypatch.setenv("LLM_PROVIDER", "")
-        assert _resolve_provider() in {"gemini", "anthropic"}
+        assert _resolve_provider() in {"claude_cli", "gemini", "anthropic", "ollama"}
 
     def test_ollama_provider_resolves(self, monkeypatch):
         monkeypatch.setenv("LLM_PROVIDER", "ollama")
@@ -223,3 +229,161 @@ class TestOllamaUrlSsrfGuard:
             with pytest.raises(ValueError, match="non-local address"):
                 llm_mod._ollama("sys", "user", [])
             mock_post.assert_not_called()
+
+
+class TestAnthropicResponseText:
+    """_anthropic() must return text from every text block, whatever comes first."""
+
+    def _call(self, monkeypatch, blocks, stop_reason="end_turn"):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+        fake_anthropic = MagicMock()
+        fake_response = MagicMock()
+        fake_response.content = blocks
+        fake_response.stop_reason = stop_reason
+        fake_anthropic.Anthropic.return_value.messages.create.return_value = fake_response
+        with patch.dict("sys.modules", {"anthropic": fake_anthropic}):
+            return _anthropic(system="sys", user="user", images=[])
+
+    def test_skips_non_text_first_block(self, monkeypatch):
+        blocks = [
+            MagicMock(type="thinking", spec=["type", "thinking"]),
+            MagicMock(type="text", text="class A: pass"),
+        ]
+        assert self._call(monkeypatch, blocks) == "class A: pass"
+
+    def test_joins_multiple_text_blocks(self, monkeypatch):
+        blocks = [MagicMock(type="text", text="ab"), MagicMock(type="text", text="cd")]
+        assert self._call(monkeypatch, blocks) == "abcd"
+
+    def test_truncation_is_logged(self, monkeypatch, caplog):
+        blocks = [MagicMock(type="text", text="partial")]
+        with caplog.at_level("WARNING", logger="manimgen.llm"):
+            self._call(monkeypatch, blocks, stop_reason="max_tokens")
+        assert "max_tokens" in caplog.text
+
+
+class TestStripJsonFence:
+    @pytest.mark.parametrize(
+        "raw",
+        ['```json\n{"a": 1}\n```', '```\n{"a": 1}\n```', '  {"a": 1}  ', '{"a": 1}'],
+    )
+    def test_unwraps_to_bare_json(self, raw):
+        assert _strip_json_fence(raw) == '{"a": 1}'
+
+    def test_unterminated_fence_left_alone(self):
+        assert _strip_json_fence('```json\n{"a": 1}') == '```json\n{"a": 1}'
+
+    def test_chat_json_mode_strips_fence_for_non_gemini(self, monkeypatch):
+        monkeypatch.setenv("LLM_PROVIDER", "claude_cli")
+        with patch("manimgen.llm._claude_cli", return_value='```json\n[1]\n```'):
+            assert chat(system="s", user="u", json_mode=True) == "[1]"
+
+    def test_chat_leaves_code_fences_without_json_mode(self, monkeypatch):
+        monkeypatch.setenv("LLM_PROVIDER", "claude_cli")
+        reply = "```python\nx = 1\n```"
+        with patch("manimgen.llm._claude_cli", return_value=reply):
+            assert chat(system="s", user="u") == reply
+
+
+def _result_line(text="ok", is_error=False, subtype="success"):
+    return json.dumps(
+        {"type": "result", "subtype": subtype, "is_error": is_error, "result": text}
+    )
+
+
+def _completed(stdout="", stderr="", returncode=0):
+    return subprocess.CompletedProcess(
+        args=[], returncode=returncode, stdout=stdout.encode(), stderr=stderr.encode()
+    )
+
+
+class TestClaudeCli:
+    """_claude_cli() drives `claude -p`; subprocess is mocked, nothing is spawned."""
+
+    @pytest.fixture(autouse=True)
+    def _claude_on_path(self, monkeypatch):
+        monkeypatch.setattr(
+            llm_mod.shutil, "which", lambda name: f"/fake/bin/{name}"
+        )
+
+    def test_provider_resolves(self, monkeypatch):
+        monkeypatch.setenv("LLM_PROVIDER", "claude_cli")
+        assert _resolve_provider() == "claude_cli"
+
+    def test_chat_dispatches_to_claude_cli(self, monkeypatch):
+        monkeypatch.setenv("LLM_PROVIDER", "claude_cli")
+        with patch("manimgen.llm._claude_cli", return_value="hi") as mock_cli:
+            assert chat(system="s", user="u", images=["AAAA"]) == "hi"
+        mock_cli.assert_called_once_with("s", "u", ["AAAA"])
+
+    def test_missing_executable_raises_actionable_error(self, monkeypatch):
+        monkeypatch.setattr(llm_mod.shutil, "which", lambda name: None)
+        with pytest.raises(RuntimeError, match="not found on PATH"):
+            _claude_cli(system="s", user="u", images=[])
+
+    def test_returns_result_text(self):
+        stdout = '{"type":"system","subtype":"init"}\n' + _result_line("  scene  ")
+        with patch.object(llm_mod.subprocess, "run", return_value=_completed(stdout)):
+            assert _claude_cli(system="s", user="u", images=[]) == "scene"
+
+    def test_prompt_delivery_and_isolation(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-not-leak")
+        seen = {}
+
+        def fake_run(cmd, **kwargs):
+            seen["cmd"] = cmd
+            seen["kwargs"] = kwargs
+            sys_file = cmd[cmd.index("--system-prompt-file") + 1]
+            with open(sys_file, encoding="utf-8") as f:
+                seen["system"] = f.read()
+            return _completed(_result_line("done"))
+
+        with patch.object(llm_mod.subprocess, "run", side_effect=fake_run):
+            _claude_cli(system="SYSTEM PROMPT é", user="USER TEXT", images=["QUJD"])
+
+        cmd, kwargs = seen["cmd"], seen["kwargs"]
+        assert cmd[0] == "/fake/bin/claude"
+        assert "-p" in cmd and "--tools=" in cmd and "--strict-mcp-config" in cmd
+        assert cmd[cmd.index("--model") + 1] == llm_mod._LLM_CONFIG["claude_cli_model"]
+        assert seen["system"] == "SYSTEM PROMPT é"
+        # No prompt text on the command line (Windows ~32K argv limit).
+        assert not any("USER TEXT" in part or "SYSTEM PROMPT" in part for part in cmd)
+
+        msg = json.loads(kwargs["input"].decode("utf-8"))
+        content = msg["message"]["content"]
+        assert content[0]["type"] == "image"
+        assert content[0]["source"]["data"] == "QUJD"
+        assert content[-1] == {"type": "text", "text": "USER TEXT"}
+
+        env = kwargs["env"]
+        assert "ANTHROPIC_API_KEY" not in env
+        assert env["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] == "1"
+        assert kwargs["cwd"] != os.getcwd()
+        assert kwargs["timeout"] > 0
+
+    def test_error_result_is_retried_then_raises(self):
+        err = _completed(_result_line("rate limited", is_error=True, subtype="error"))
+        with patch.object(llm_mod.subprocess, "run", return_value=err) as run:
+            with pytest.raises(RuntimeError, match="rate limited"):
+                _claude_cli(system="s", user="u", images=[])
+        assert run.call_count == _REQUEST_RETRY_ATTEMPTS
+
+    def test_recovers_after_transient_failure(self):
+        responses = [
+            _completed(stderr="network blip", returncode=1),
+            _completed(_result_line("second try")),
+        ]
+        with patch.object(llm_mod.subprocess, "run", side_effect=responses):
+            assert _claude_cli(system="s", user="u", images=[]) == "second try"
+
+    def test_timeout_raises_after_retries(self):
+        boom = subprocess.TimeoutExpired(cmd="claude", timeout=1)
+        with patch.object(llm_mod.subprocess, "run", side_effect=boom):
+            with pytest.raises(RuntimeError, match="timed out"):
+                _claude_cli(system="s", user="u", images=[])
+
+    def test_stderr_surfaces_when_no_result_event(self):
+        bad = _completed(stderr="Invalid API key · Please run /login", returncode=1)
+        with patch.object(llm_mod.subprocess, "run", return_value=bad):
+            with pytest.raises(RuntimeError, match="/login"):
+                _claude_cli(system="s", user="u", images=[])
