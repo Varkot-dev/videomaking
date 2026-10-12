@@ -639,12 +639,9 @@ def _die(message: str):
 
 
 def _save_plan(lesson_plan: dict) -> None:
-    """Write the plan cache atomically so a crash never leaves a torn plan.json."""
     os.makedirs(os.path.dirname(_PLAN_CACHE), exist_ok=True)
-    tmp_path = _PLAN_CACHE + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
+    with open(_PLAN_CACHE, "w", encoding="utf-8") as f:
         json.dump(lesson_plan, f, indent=2)
-    os.replace(tmp_path, _PLAN_CACHE)
     logger.info("[manimgen] Plan saved to %s", _PLAN_CACHE)
 
 
@@ -652,8 +649,7 @@ def _load_cached_plan() -> dict:
     """Load the cached plan for --resume, exiting with a clear error if unusable."""
     if not os.path.exists(_PLAN_CACHE):
         _die(
-            f"--resume needs a cached plan but none exists at {_PLAN_CACHE} "
-            "(the path is relative to the current directory). "
+            f"--resume needs a cached plan but none exists at {_PLAN_CACHE}. "
             "Run without --resume first."
         )
     try:
@@ -795,11 +791,7 @@ def main():
             )
         )
 
-    if not rendered_videos:
-        _die("No video was produced: no section rendered. See the log above.")
     output = assemble_video(rendered_videos, lesson_plan["title"])
-    if not output or not os.path.exists(output):
-        _die(f"No video was produced: expected the final output at {output}.")
 
     # --- A/V mismatch summary ---
     mismatches = get_mismatch_log()

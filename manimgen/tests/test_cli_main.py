@@ -124,20 +124,6 @@ class TestLogging:
         assert logging.getLogger().handlers == [host]
         assert not os.path.exists(env["logs"])
 
-    def test_no_video_produced_exits_nonzero(self, env, monkeypatch, capsys):
-        monkeypatch.setattr(cli, "_run_section", lambda *a, **k: [])
-        with pytest.raises(SystemExit) as e:
-            _run(monkeypatch, "bubble sort")
-        assert e.value.code == 1
-        assert "No video was produced" in capsys.readouterr().err
-
-    def test_output_missing_on_disk_exits_nonzero(self, env, monkeypatch, capsys):
-        os.remove(env["out"])
-        with pytest.raises(SystemExit) as e:
-            _run(monkeypatch, "bubble sort")
-        assert e.value.code == 1
-        assert "No video was produced" in capsys.readouterr().err
-
 
 # --- #64: --resume ----------------------------------------------------------
 
@@ -228,9 +214,8 @@ class TestResume:
             _run(monkeypatch, "t", "--pdf", "a.pdf")
         assert e.value.code == 2
 
-    def test_fresh_plan_saved_atomically(self, env, monkeypatch):
+    def test_fresh_plan_saved_with_topic_hash(self, env, monkeypatch):
         _run(monkeypatch, "bubble sort")
         with open(env["plan_path"], encoding="utf-8") as f:
             saved = json.load(f)
         assert saved["_topic_hash"] == cli._topic_hash("bubble sort")
-        assert os.listdir(os.path.dirname(env["plan_path"])) == ["plan.json"]
