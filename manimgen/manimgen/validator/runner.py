@@ -6,7 +6,7 @@ from datetime import datetime
 from manimgen import paths
 from manimgen.validator.codeguard import precheck_and_autofix_file
 from manimgen.validator.env import get_render_env
-from manimgen.validator.render_command import build_manimgl_command
+from manimgen.validator.render_command import build_manimgl_command, with_utf8_io
 from manimgen.validator.scene_ast_gate import inspect_scene_file
 
 # Slack subtracted from "now" when computing the freshness floor for
@@ -27,7 +27,7 @@ def _render_floor() -> float:
 
 
 def _is_3d_scene(scene_path: str) -> bool:
-    with open(scene_path) as f:
+    with open(scene_path, encoding="utf-8") as f:
         return "ThreeDScene" in f.read()
 
 
@@ -47,7 +47,7 @@ def validate_scene_inputs(scene_path: str) -> dict:
         errors.append(f"Scene file is empty: {scene_path}")
 
     try:
-        with open(scene_path) as f:
+        with open(scene_path, encoding="utf-8") as f:
             f.read(1)
     except OSError as e:
         errors.append(f"Scene file not readable: {e}")
@@ -56,7 +56,7 @@ def validate_scene_inputs(scene_path: str) -> dict:
     try:
         os.makedirs(scenes_dir, exist_ok=True)
         write_check = os.path.join(scenes_dir, ".write_check")
-        with open(write_check, "w") as f:
+        with open(write_check, "w", encoding="utf-8") as f:
             f.write("")
         os.unlink(write_check)
     except OSError as e:
@@ -92,7 +92,7 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
 
     precheck = precheck_and_autofix_file(scene_path)
     if not precheck["ok"]:
-        with open(log_path, "w") as f:
+        with open(log_path, "w", encoding="utf-8") as f:
             if precheck.get("applied_fixes"):
                 f.write("=== PRECHECK AUTO-FIXES ===\n")
                 for fix in precheck.get("applied_fixes"):
@@ -145,11 +145,13 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
             build_manimgl_command(scene_path, class_name),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
-            env=get_render_env(),
+            env=with_utf8_io(get_render_env()),
         )
 
-        with open(log_path, "w") as f:
+        with open(log_path, "w", encoding="utf-8") as f:
             if precheck.get("applied_fixes"):
                 f.write("=== PRECHECK AUTO-FIXES ===\n")
                 for fix in precheck.get("applied_fixes"):
@@ -171,7 +173,7 @@ def run_scene(scene_path: str, class_name: str) -> tuple[bool, str | None]:
         return False, None
 
     except subprocess.TimeoutExpired:
-        with open(log_path, "w") as f:
+        with open(log_path, "w", encoding="utf-8") as f:
             f.write(f"=== TIMEOUT ===\nScene rendering exceeded {timeout} seconds.\n")
         return False, None
 

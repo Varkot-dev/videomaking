@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 import os
+import sys
 from collections.abc import Callable
 
 import yaml
@@ -27,7 +28,7 @@ _PLAN_CACHE = paths.plan_cache()
 def _load_config() -> dict:
     config_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
     try:
-        with open(config_path) as f:
+        with open(config_path, encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
     except Exception as e:
         # A malformed/unreadable config.yaml silently disables TTS and can
@@ -191,7 +192,7 @@ def _render_is_fresh(video_path: str, topic_hash: str) -> bool:
             os.path.basename(video_path),
         )
         return False
-    with open(sidecar) as f:
+    with open(sidecar, encoding="utf-8") as f:
         stored = f.read().strip()
     if stored != topic_hash:
         logger.warning(
@@ -205,7 +206,7 @@ def _render_is_fresh(video_path: str, topic_hash: str) -> bool:
 
 
 def _write_hash_sidecar(video_path: str, topic_hash: str) -> None:
-    with open(_sidecar_hash_path(video_path), "w") as f:
+    with open(_sidecar_hash_path(video_path), "w", encoding="utf-8") as f:
         f.write(topic_hash)
 
 
@@ -240,9 +241,9 @@ def _cached_scene_blocking_freezes(
     if not section_id or not os.path.exists(scene_path):
         return []
     try:
-        with open(scene_path) as f:
+        with open(scene_path, encoding="utf-8") as f:
             code = f.read()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return []
 
     return _code_blocking_freezes(code, cue_durations)
@@ -613,6 +614,16 @@ def _run_section(
 
 
 def main():
+    # Windows writes redirected or piped output in the ANSI code page (cp1252),
+    # which cannot encode the arrows used in log lines; replace instead of
+    # raising so a log line can never abort a run.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="backslashreplace")
+            except (OSError, ValueError):
+                pass
+
     parser = argparse.ArgumentParser(description="ManimGen: topic to 3B1B-style video")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("topic", nargs="?", help="Topic string")
@@ -631,7 +642,7 @@ def main():
     # --- Plan ---
     if args.resume and os.path.exists(_PLAN_CACHE):
         logger.info("[manimgen] Resuming from cached plan: %s", _PLAN_CACHE)
-        with open(_PLAN_CACHE) as f:
+        with open(_PLAN_CACHE, encoding="utf-8") as f:
             lesson_plan = json.load(f)
         # Recover topic hash from cached plan (stored during original run)
         current_topic_hash = lesson_plan.get("_topic_hash", "")
@@ -645,7 +656,7 @@ def main():
         lesson_plan = plan_lesson_from_pdf(args.pdf)
         lesson_plan["_topic_hash"] = current_topic_hash
         os.makedirs(os.path.dirname(_PLAN_CACHE), exist_ok=True)
-        with open(_PLAN_CACHE, "w") as f:
+        with open(_PLAN_CACHE, "w", encoding="utf-8") as f:
             json.dump(lesson_plan, f, indent=2)
         logger.info("[manimgen] Plan saved to %s", _PLAN_CACHE)
     else:
@@ -655,7 +666,7 @@ def main():
         lesson_plan = plan_lesson(topic)
         lesson_plan["_topic_hash"] = current_topic_hash
         os.makedirs(os.path.dirname(_PLAN_CACHE), exist_ok=True)
-        with open(_PLAN_CACHE, "w") as f:
+        with open(_PLAN_CACHE, "w", encoding="utf-8") as f:
             json.dump(lesson_plan, f, indent=2)
         logger.info("[manimgen] Plan saved to %s", _PLAN_CACHE)
 

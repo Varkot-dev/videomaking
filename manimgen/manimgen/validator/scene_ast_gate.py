@@ -162,5 +162,5 @@ def inspect_scene_code(code: str) -> GateResult:
 
 def inspect_scene_file(scene_path: str) -> GateResult:
     """Read a scene file and run :func:`inspect_scene_code` over its contents."""
-    with open(scene_path) as f:
+    with open(scene_path, encoding="utf-8") as f:
         return inspect_scene_code(f.read())

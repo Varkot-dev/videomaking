@@ -53,7 +53,9 @@ def _requests_3d(cue_visuals: str) -> bool:
 
 def _load_director_prompt() -> str:
     here = os.path.dirname(__file__)
-    with open(os.path.join(here, "prompts", "director_system.md")) as f:
+    with open(
+        os.path.join(here, "prompts", "director_system.md"), encoding="utf-8"
+    ) as f:
         return f.read()
 
 
@@ -77,7 +79,7 @@ def _index_examples() -> dict[str, list[str]]:
         if not fname.endswith(".py"):
             continue
         path = os.path.join(examples_dir, fname)
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             head = f.read(512)  # tag always near the top
         m = tag_re.search(head)
         if not m:
@@ -118,7 +120,7 @@ def _load_examples_text(section: dict) -> str:
         return ""
     blocks = []
     for path in selected:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             content = f.read().strip()
         blocks.append(f"### {os.path.basename(path)}\n```python\n{content}\n```")
     return "\n\n".join(blocks)
@@ -237,7 +239,7 @@ def generate_scenes(
     # Defense in depth: sanitize the id again at this filesystem sink — the
     # written file is executed by manimgl, so a traversal id here is RCE.
     scene_path = os.path.join(scenes_dir, f"{safe_section_id(section)}.py")
-    with open(scene_path, "w") as f:
+    with open(scene_path, "w", encoding="utf-8") as f:
         f.write(code)
 
     # Run file-based full validation (layout smells, timing smells, banned patterns)
@@ -245,7 +247,7 @@ def generate_scenes(
     # a non-ok result instead of discarding it and proceeding to a render that
     # is already known to be doomed (mirrors runner.py's precheck["ok"] gate).
     precheck = precheck_and_autofix_file(scene_path)
-    with open(scene_path) as f:
+    with open(scene_path, encoding="utf-8") as f:
         code = f.read()
 
     if not precheck["ok"]:

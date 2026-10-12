@@ -22,6 +22,7 @@ import re
 import subprocess
 
 from manimgen import paths
+from manimgen.utils import ffmpeg_concat_line
 
 _XFADE_DURATION = 0.3
 _CUE00_PATTERN = re.compile(r"_cue00\.mp4$")
@@ -57,7 +58,12 @@ def assemble_video(video_paths: list[str], title: str) -> str:
     videos_dir = paths.videos_dir()
     os.makedirs(videos_dir, exist_ok=True)
 
-    safe_title = title.lower().replace(" ", "_").replace("/", "-")
+    # Replace every character Windows forbids in a filename (not just "/"): an
+    # LLM title like "Binary Search: Halving" would otherwise write to an NTFS
+    # alternate data stream named after the colon instead of a visible .mp4.
+    # Trailing dots are also invalid on Windows.
+    safe_title = re.sub(r'[<>:"/\\|?*]', "-", title.lower().replace(" ", "_"))
+    safe_title = safe_title.rstrip(".") or "video"
     output_path = os.path.join(videos_dir, f"{safe_title}.mp4")
 
     if not video_paths:
@@ -236,9 +242,9 @@ def _hard_concat(paths: list[str], output_path: str) -> None:
 
     list_file = output_path + ".concat_list.txt"
     try:
-        with open(list_file, "w") as f:
+        with open(list_file, "w", encoding="utf-8") as f:
             for p in paths:
-                f.write(f"file '{os.path.abspath(p)}'\n")
+                f.write(ffmpeg_concat_line(p))
         subprocess.run(
             [
                 "ffmpeg",
@@ -288,6 +294,8 @@ def _video_duration(path: str) -> float:
                 check=True,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=30,
             )
         except (subprocess.SubprocessError, OSError):
@@ -346,6 +354,8 @@ def _has_audio_stream(path: str) -> bool:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         out, _ = proc.communicate(timeout=_AUDIO_PROBE_TIMEOUT_SECONDS)
         if proc.returncode != 0:
