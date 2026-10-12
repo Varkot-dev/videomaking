@@ -151,6 +151,10 @@ def _resolves(rel: str) -> bool:
     """
     if (REPO_ROOT / rel).exists():
         return True
+    # Git-root-relative: the README GitHub renders links `manimgen/docs/X.md`
+    # from the repository root, and that is what a visitor's click resolves.
+    if (GIT_ROOT / rel).exists():
+        return True
     # Package-relative: `validator/retry.py` -> `manimgen/validator/retry.py`
     if (REPO_ROOT / "manimgen" / rel).exists():
         return True
@@ -390,3 +394,19 @@ def test_config_does_not_advertise_unimplemented_tts_engines() -> None:
                 "implementation. Mark it UNIMPLEMENTED in a comment or "
                 "implement it."
             )
+
+
+# ---------------------------------------------------------------------------
+# First-run checklist: Mesa driver advice (measured on GitHub's Windows runner)
+# ---------------------------------------------------------------------------
+def test_first_run_checklist_mesa_driver_advice():
+    text = (GIT_ROOT / "manimgen" / "docs" / "LIBRARY_PC_FIRST_RUN.md").read_text(
+        encoding="utf-8"
+    )
+    d3d12 = text.index('GALLIUM_DRIVER = "d3d12"')
+    llvmpipe = text.index('GALLIUM_DRIVER = "llvmpipe"')
+    assert d3d12 < llvmpipe
+    assert "zink" in text and "Vulkan" in text
+    assert "not verified" in text
+    readme = (GIT_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "manimgen/docs/LIBRARY_PC_FIRST_RUN.md" in readme

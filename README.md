@@ -253,6 +253,8 @@ python3 manimgen/scripts/env_doctor.py
 
 ---
 
+A step-by-step first-run checklist for a PC without admin rights is in [manimgen/docs/LIBRARY_PC_FIRST_RUN.md](manimgen/docs/LIBRARY_PC_FIRST_RUN.md).
+
 ## Usage
 
 ```bash
