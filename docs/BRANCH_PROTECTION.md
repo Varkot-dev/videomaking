@@ -22,8 +22,15 @@ Enable:
    - Require branches to be up to date before merging
    - Required checks (exact job names from `ci.yml`):
      - `Lint (ruff)`
-     - `Full test suite (no ignores)`
+     - `Full test suite (no ignores, Python 3.11)`
+     - `Full test suite (no ignores, Python 3.13)`
+     - `Full test suite (Windows, Python 3.11)`
      - `Mocked-LLM pipeline smoke`
+
+   The test job is a Python matrix, so its name carries the version: if a
+   required check still reads `Full test suite (no ignores)`, GitHub waits for a
+   check that never reports and blocks every merge. Update the rule when a
+   Python version is added to or dropped from the matrix in `ci.yml`.
 3. **Do not allow bypassing the above settings** (apply to admins too —
    otherwise the gate is advisory, which defeats the purpose)
 4. Optional but recommended: **Require conversation resolution before merging**
