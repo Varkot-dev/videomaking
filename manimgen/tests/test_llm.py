@@ -616,8 +616,54 @@ def _pid_alive(pid: int) -> bool:
     try:
         with open(f"/proc/{pid}/stat", encoding="utf-8") as f:
             return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except FileNotFoundError:
+        return False  # reaped between kill(pid, 0) and this read: it is gone
     except OSError:
-        return True
+        # /proc is unreadable here: ask ps. An empty answer means gone.
+        out = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True
+        ).stdout.strip()
+        return bool(out) and not out.startswith("Z")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="reads /proc")
+class TestPidAliveHelper:
+    """_pid_alive must not report a gone process as alive.
+
+    GitHub's Linux 3.11 runner failed test_timeout_kills_grandchild_holding_the_pipe
+    with "grandchild survived" although the process was gone: kill(pid, 0) still
+    succeeded (a zombie), the reaper then removed /proc/<pid> before the stat
+    read, and the helper treated that OSError as "alive". The kill code was right.
+    """
+
+    _PID = 424242
+
+    def _fake_proc(self, monkeypatch, stat):
+        real_open = open
+
+        def fake_open(path, *args, **kwargs):
+            if str(path) == f"/proc/{self._PID}/stat":
+                if stat is None:
+                    raise FileNotFoundError(path)
+                import io
+
+                return io.StringIO(stat)
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, "kill", lambda pid, sig: None)
+        monkeypatch.setattr("builtins.open", fake_open)
+
+    def test_reaped_between_kill_and_stat_read_counts_as_gone(self, monkeypatch):
+        self._fake_proc(monkeypatch, stat=None)
+        assert _pid_alive(self._PID) is False
+
+    def test_zombie_counts_as_gone(self, monkeypatch):
+        self._fake_proc(monkeypatch, stat=f"{self._PID} (sleep) Z 1 1 1 0 -1")
+        assert _pid_alive(self._PID) is False
+
+    def test_running_process_counts_as_alive(self, monkeypatch):
+        self._fake_proc(monkeypatch, stat=f"{self._PID} (sleep) S 1 1 1 0 -1")
+        assert _pid_alive(self._PID) is True
 
 
 class TestClaudeCliEnvAllowlist:
