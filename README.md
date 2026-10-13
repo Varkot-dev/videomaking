@@ -289,6 +289,13 @@ sudo apt-get install ffmpeg pkg-config libpango1.0-dev libcairo2-dev
 
 A LaTeX distribution is only needed for scenes that use `Tex()` formulas; `Text()` does not need one.
 
+**LaTeX on Linux needs more than `texlive-latex-extra`.** ManimGL's default Tex template (the tex_templates file in the installed manimlib package) loads `dsfont` (Debian package `texlive-fonts-extra`), `physics` (`texlive-science`), `tipa` (`tipa`), `wasysym` (`texlive-fonts-recommended`) and `calligra` (`texlive-latex-extra`), among others, and it converts the compiled `.dvi` with `dvisvgm`. Without them every `Tex()` scene dies with `LatexError: File dsfont.sty not found` (or `physics.sty`). On Debian / Ubuntu:
+
+```bash
+sudo apt-get install texlive-latex-base texlive-latex-recommended texlive-latex-extra \
+    texlive-fonts-recommended texlive-fonts-extra texlive-science tipa dvisvgm
+```
+
 **Claude Code** (for the default provider):
 
 ```bash

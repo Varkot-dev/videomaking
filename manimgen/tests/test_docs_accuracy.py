@@ -678,3 +678,15 @@ def test_documented_llm_providers_are_the_ones_the_code_accepts() -> None:
     assert documented == accepted, (
         f"README lists providers {sorted(documented)}, llm.chat accepts {sorted(accepted)}"
     )
+
+
+@pytest.mark.unit
+def test_readme_linux_latex_packages_cover_the_tex_template() -> None:
+    """ManimGL's default tex template loads dsfont and physics and shells out to dvisvgm.
+
+    The README once listed only texlive-latex-extra, so every Tex() scene on a
+    fresh Linux box died with `LatexError: File dsfont.sty not found`.
+    """
+    text = (GIT_ROOT / "README.md").read_text(encoding="utf-8")
+    for needed in ("texlive-fonts-extra", "texlive-science", "tipa", "dvisvgm"):
+        assert needed in text, f"README Linux LaTeX instructions must mention {needed}"
