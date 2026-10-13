@@ -18,9 +18,13 @@ breakage: fix it, add a check to `scripts/env_doctor.py`, document it in
 Automated pipeline: **topic string or PDF → 3Blue1Brown-style animated explainer video with narration.**
 Uses an audio-first CUE pipeline where spoken word timestamps drive animation durations — no speed warping.
 
-**Stack:** Python 3.13, ManimGL (3b1b fork), Gemini 2.5 Flash, FFmpeg 8.1, LaTeX, edge-tts, Flask (editor)
+**Stack:** Python 3.11+ (CI uses 3.13), ManimGL 1.7.2 (3b1b fork), Claude via Claude Code `claude -p` (default LLM provider), FFmpeg, LaTeX, edge-tts, Flask (editor)
+
+**Platforms:** macOS, Linux and Windows. The user's own machine is a Windows 11 PC without admin rights, so keep every code path cross-platform (`os.pathsep`, `shutil.which`, no POSIX-only commands) and keep the no-admin Windows setup in the root README.md working.
 
 **Repo:** `https://github.com/Varkot-dev/videomaking.git` — branch `main`
+
+**Where things are documented:** setup, usage, exit codes and environment variables are in `../README.md`; the module map and the reasons behind each design decision are in `../docs/ARCHITECTURE.md`; what is broken, unverified or not done is in `docs/KNOWN_ISSUES.md`.
 
 **Tests:** run `python3 -m pytest -q` — bare, no flags. `pyproject.toml` is the
 single source of truth for how the suite runs, and it deliberately carries no
@@ -61,7 +65,7 @@ The importable package lives at **`manimgen/manimgen/`** (the nested directory).
 manimgen/
 ├── manimgen/                    # source package (the importable one)
 │   ├── cli.py                   # entry: manimgen <topic> | --pdf <file> | --resume
-│   ├── llm.py                   # shared LLM client (Gemini/Anthropic toggle, config-driven)
+│   ├── llm.py                   # shared LLM client (claude_cli/anthropic/gemini/ollama, config-driven)
 │   ├── utils.py                 # shared: strip_fencing(), section_class_name()
 │   ├── input/
 │   │   ├── parser.py            # normalize topic string
@@ -83,8 +87,12 @@ manimgen/
 │   │   ├── layout_checker.py    # LLM vision check on rendered frames (multi-frame)
 │   │   ├── frame_checker.py     # zero-cost PIL-based black/frozen/clipping detection
 │   │   ├── timing_verifier.py   # loop-aware static timing analysis + auto-fix (wired via retry.apply_timing_gate)
-│   │   ├── env.py               # render environment vars (LaTeX PATH)
+│   │   ├── env.py               # render environment vars (cross-platform PATH, LaTeX lookup)
 │   │   └── prompts/             # retry_system.md, fallback_system.md, layout_checker_system.md
+│   ├── probes/                  # code that runs INSIDE the manimgl child (see "Visual validation")
+│   │   ├── overlap_probe.py     # text-over-text detector, stdlib only, loaded by path
+│   │   ├── overlap_report.py    # host side: child env (PYTHONPATH, report path), report parsing
+│   │   └── bootstrap/sitecustomize.py  # start-up hook; chains any shadowed sitecustomize
 │   ├── renderer/
 │   │   ├── tts.py               # edge-tts with WordBoundary → per-word timestamps
 │   │   ├── audio_slicer.py      # full audio → N cue-aligned .m4a slices (AAC, sample-accurate)
@@ -99,7 +107,7 @@ manimgen/
 │       └── templates/editor.html
 ├── tests/                       # pytest suite (run `python3 -m pytest -q`)
 ├── config.yaml                  # LLM provider, model names, TTS config, render quality
-├── requirements.txt
+├── requirements.txt             # runtime deps (setup.py reads it for install_requires)
 ├── requirements-dev.txt         # -r requirements.txt + pytest, pytest-mock, pytest-timeout, pytest-cov, hypothesis, ruff==0.15.13
 └── setup.py                     # console_scripts: manimgen, manimgen-edit
 ```
@@ -119,7 +127,7 @@ topic / PDF
   → plan saved to manimgen/output/plan.json
 
 For each section:
-  1. TTS (edge-tts WordBoundary)  → full .mp3 + per-word timestamps (sub-ms)
+  1. TTS (edge-tts WordBoundary)  → full .mp3 + per-word timestamps
   2. segmenter.compute_segments() → exact duration per cue from word onset times
   3. audio_slicer.slice_audio()   → section_01_cue00.m4a, _cue01.m4a, ...
 
@@ -168,18 +176,24 @@ For each section:
 ## Running the pipeline
 
 ```bash
-# From manimgen/ project root
-GEMINI_API_KEY=<key> MANIMGEN_MAX_RETRY_LLM_CALLS=2 manimgen "gradient descent"
-GEMINI_API_KEY=<key> manimgen --pdf notes.pdf
-GEMINI_API_KEY=<key> manimgen --resume   # resume from cached plan.json
+# From manimgen/ project root. Default provider (claude_cli) needs no API key,
+# only Claude Code on PATH and logged in (run `claude` once).
+MANIMGEN_MAX_RETRY_LLM_CALLS=2 manimgen "gradient descent"
+manimgen --pdf notes.pdf
+manimgen --resume   # resume from cached plan.json
+
+# Another provider for one run
+# (gemini and anthropic bill per token and are blocked without MANIMGEN_ALLOW_PAID_API=1)
+MANIMGEN_ALLOW_PAID_API=1 LLM_PROVIDER=gemini GEMINI_API_KEY=<key> manimgen "gradient descent"
 
 manimgen-edit   # launch clip editor
 
-# Run tests (zero cost — everything LLM/subprocess is mocked)
+# Run tests (zero cost, everything LLM/subprocess is mocked)
 python3 -m pytest -q
 ```
 
-**API key location:** `manimgen/.env` (GEMINI_API_KEY=...)
+**API keys** (only for the `anthropic` / `gemini` providers): `manimgen/.env`
+(`GEMINI_API_KEY=...`, `ANTHROPIC_API_KEY=...`), git-ignored, loaded by `llm.py`.
 
 **Config and output locations:** `manimgen/config.py` is the one loader of `config.yaml` (or the file named by `MANIMGEN_CONFIG`); a missing or malformed file raises `ConfigError`, never a silent default. Relative `output:` paths resolve against the folder holding config.yaml, not the cwd. Editable install (`pip install -e .`) only.
 
@@ -194,15 +208,25 @@ python3 -m pytest -q
 
 Resolution order (first wins):
 1. `LLM_PROVIDER` env var
-2. `llm_provider` in `config.yaml`
-3. Default: `"gemini"`
+2. `llm_provider` in `config.yaml` (currently `claude_cli`)
+3. Default: `"claude_cli"`
 
-Model names and `max_tokens` are configured under `llm:` in `config.yaml` — never hardcoded.
+Model names and `max_tokens` are configured under `llm:` in `config.yaml`, never hardcoded.
 
-| Provider | Model | SDK |
-|---|---|---|
-| `gemini` | `gemini-2.5-flash` | `google.genai` (NOT the deprecated `google.generativeai`) |
-| `anthropic` | `claude-sonnet-4-6` | `anthropic` |
+| Provider | Model (config key) | Mechanism | Billing |
+|---|---|---|---|
+| `claude_cli` (default) | `sonnet` or `opus` (`llm.claude_cli_model`) | `claude -p` subprocess (Claude Code headless) | User's Claude plan usage limits, no API key |
+| `anthropic` | `claude-sonnet-5-5` (`llm.anthropic_model`), `max_tokens` 16000 | `anthropic` SDK | Per token, `ANTHROPIC_API_KEY` |
+| `gemini` | `gemini-2.5-flash` (`llm.gemini_model`) | `google.genai` (NOT the deprecated `google.generativeai`) | Per token, `GEMINI_API_KEY` |
+| `ollama` | `llama3.1` (`llm.ollama_model`) | local HTTP, loopback, private and link-local URLs only (SSRF guard) | Free |
+
+**`claude_cli` details (`llm._claude_cli`):**
+- Needs Claude Code installed and logged in (`claude` once). `llm.claude_cli_path` overrides the executable name or gives a full path; `scripts/env_doctor.py` warns when it is not on PATH.
+- System prompt goes through `--system-prompt-file` in a temp dir; the user turn and any base64 PNG frames go on stdin as one `stream-json` message. Nothing large is put on argv (Windows caps a command line at ~32K chars).
+- Flags: `--tools=` (single token, so it survives the Windows cmd shim), `--strict-mcp-config`, `--disable-slash-commands`, `--no-session-persistence`, `--model <model for the role>` (`llm.claude_cli_model` unless `llm.models` or `MANIMGEN_MODEL_<ROLE>` says otherwise). cwd is an empty temp dir.
+- Env: built from an allowlist of variable names (`_CLI_ENV_ALLOWLIST`), so other services' keys never reach the child. `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, the Bedrock/Vertex/Foundry switches and a parent Claude Code session's identity are removed on purpose (otherwise Claude Code would bill the API instead of the plan), and `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` keeps CLAUDE.md files out of the prompt.
+- 600s timeout per call, 3 attempts (not retried when the error says not logged in, usage limit or credit balance); the final `{"type": "result"}` stream event is the reply. Guards: `_ensure_subscription_auth`, `_check_plan_limits`, `_ensure_plan_headroom` (`MANIMGEN_MAX_PLAN_UTILIZATION`, default 0.90).
+- `json_mode=True` is native only on Gemini. For `claude_cli`, `anthropic` and `ollama` the prompt asks for JSON and `chat()` strips a surrounding markdown `json` code fence.
 
 ---
 
@@ -258,7 +282,8 @@ After every fix, the file is **always reloaded from disk** — previously a bug 
 
 ### 6. Visual validation (two-tier)
 - **Tier 1 (frame_checker.py):** zero-cost PIL-based — detects black frames, frozen frames, edge clipping.
-- **Tier 2 (layout_checker.py):** LLM vision — multi-frame sampling at 25%/50%/75% of duration, returns structured `ISSUE | CAUSE | FIX` feedback that gets fed back into the retry loop.
+- **Tier 1b (probes/overlap_probe.py, #97):** zero-cost text-over-text check run inside the manimgl render. `render_command.run_manimgl` prepends `probes/bootstrap/` to the child's PYTHONPATH (joined with `os.pathsep`) and sets `MANIMGEN_OVERLAP_REPORT`; the bootstrap `sitecustomize.py` installs a `sys.meta_path` hook that wraps `Scene.post_play`/`tear_down` when manimgl imports `manimlib.scene.scene` (the scene file is untouched, so the safety gate is unchanged). After every `play()`/`wait()` it compares bounding boxes of visible text-like mobjects (StringMobject, DecimalNumber, SingleStringTex; not Brace) and reports pairs overlapping >= 20% of the smaller box (ancestor, same-string and < 0.02 unit² overlaps ignored; max 10 findings, 3 per string). Findings land in `RenderResult.overlaps` and `<video>.overlaps.json`, become hard `OVERLAP:` issues in `validate_render` and `retry_scene` (normal visual-fix budget and signature dedup), and survivors make the section `accepted_with_defects`. A probe failure is recorded as `probe_error` and never fails a render. Off switch: `MANIMGEN_OVERLAP_PROBE=0`. Limits: text vs text only (not text vs shapes); stable states only (TransformMatchingTex midpoint garble is scored in the report's `morphs` list but not acted on); calibration record and the two real offending scenes in `tests/fixtures/overlap/`; false-positive rate on other topics unmeasured; for an `always_redraw` text the reported string can be stale (`become()` does not copy it), the geometry is current.
+- **Tier 2 (layout_checker.py):** LLM vision, multi-frame sampling at 25%/50%/75% of duration, returns structured `ISSUE | CAUSE | FIX` feedback (only `ISSUE:` lines count; any other non-OK reply is UNVERIFIED). It runs in `retry_scene`, NOT on the first pass: `validate_render` skips it unless `MANIMGEN_FIRST_PASS_LAYOUT=1`, because its verdict was never enforced there.
 
 ### 7. TTS voice
 - Engine: `edge-tts` (free, local)
@@ -277,8 +302,8 @@ After every fix, the file is **always reloaded from disk** — previously a bug 
 LLM-written scenes run under `manimgl` with the user's full rights.
 `validator/scene_ast_gate.py` is a whole-tree static gate (import allowlist plus
 denylist of dangerous names, attributes, strings and encodings). It is a HARD
-block: `render_command.run_manimgl` refuses a rejected file, the generator
-refuses a rejected draft, and retry discards a rejected LLM fix. It is NOT a
+block: `render_command.run_manimgl` refuses a rejected file, the generator routes
+a rejected draft to retry, and retry discards a rejected LLM fix. It is NOT a
 sandbox and can be bypassed by a determined author; only trusted topics and PDFs
 should be used until the audit-hook launcher (deferred, issue #87 option 2)
 exists. Every file in `manimgen/examples/` must pass the gate
@@ -296,8 +321,8 @@ gate narrowly and add a test; never route a render around `run_manimgl`.
 5. **codeguard is the first line of defense** — extend it for any new known-bad pattern before touching prompts
 6. **No duplicate source files** — never create top-level mirrors of source files
 7. **Adding a new example scene:** add to `manimgen/examples/`, add `techniques: <name>` as first docstring line (the name must be in `manimgen/techniques.py`; a test enforces it). No other code changes needed.
-8. **Core design principles** — no hardcoded mappings, no duplicate sources of truth, no speculative abstractions. (These were previously cited as an external `MASTER GUIDELINES.md`; no such file exists in this repo, so they are stated here directly.)
-9. **Docs must match code.** `tests/test_docs_accuracy.py` mechanically checks that every relative path the docs cite exists, that no doc hardcodes a test count, and that no tracked doc leaks a personal home-directory absolute path. If it fails, fix the doc — never weaken the test.
+8. **Core design principles**: no hardcoded mappings, no duplicate sources of truth, no speculative abstractions. (The longer engineering guide is `MASTER GUIDELINES.md` at the git root.)
+9. **Docs must match code.** `tests/test_docs_accuracy.py` mechanically checks that every relative path the docs cite exists, that no doc hardcodes a test count, that no tracked doc leaks a personal home-directory absolute path, that every `MANIMGEN_*` variable a doc names appears in the code, that the exit codes and section caps in the docs match `cli.py` and `lesson_planner.py`, and that every script a doc tells you to run exists. If it fails, fix the doc, never weaken the test.
 
 ---
 
@@ -440,13 +465,13 @@ Most visible quality issue. Cues often have 1–8 seconds of frozen still at the
 `timing_verifier` is wired in via `retry.apply_timing_gate` (verify → auto-fix → re-verify). It runs: (a) once on initial code before the first render in `cli.py`; (b) on initial code in `retry_scene`; (c) after every error fix and visual fix. The previous duplicated ad-hoc copy in `cli.py` was removed in favor of the shared gate. Unresolvable warnings block the first render and force the retry path.
 
 ### 3. ✅ RESOLVED — frame_checker.py wiring
-Confirmed wired in `validator/retry.py` — `check_frames()` runs after every successful render. Hard failures (black/frozen frames confirmed by timing oracle) block muxing and force retry. Soft failures (layout issues) are injected into the next LLM fix prompt.
+Confirmed wired in `validator/retry.py`: `check_frames()` runs after every successful render. Hard failures (black/frozen frames confirmed by timing oracle) block muxing and force retry. Soft failures (layout issues, only when `MANIMGEN_FIRST_PASS_LAYOUT=1`) are advisory on the first pass; `retry_scene` feeds layout issues into its LLM fix prompt.
 
 ### 4. LOW — `.hypothesis/` and `.DS_Store` committed
 Should be in `.gitignore`. Clutters diffs.
 
-### 5. LOW — `_load_llm_config()` called on every LLM call
-Parses `config.yaml` twice per `chat()` call. Should be cached at module load.
+### 5. RESOLVED: `_load_llm_config()` called on every LLM call
+`llm.py` now parses `config.yaml` once at import into `_LLM_CONFIG`.
 
 ### 6. LOW — Cue-word tokenization mismatch risk
 `cue_parser` uses `str.split()` word counts; edge-tts may tokenize differently.
@@ -470,6 +495,10 @@ python3 -m pytest tests/test_pipeline_contracts.py -v  # A/V sync contracts
 python3 -m pytest tests/test_research_step.py -v       # researcher + planner
 python3 -m pytest tests/test_frame_checker.py -v       # zero-cost visual checks
 python3 -m pytest tests/test_timing_verifier.py -v     # static timing analysis
+python3 -m pytest tests/test_llm.py -v                 # provider switch, claude -p invocation
+
+# Lint, same pinned version as CI (installed by requirements-dev.txt)
+ruff check manimgen/ && ruff format --check manimgen/
 ```
 
 ---

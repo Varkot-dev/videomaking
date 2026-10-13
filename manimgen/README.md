@@ -13,6 +13,8 @@ drift fails the build instead of sitting unnoticed.
 
 ## Quick reference
 
+Run the install from this folder (the one holding `setup.py` and `config.yaml`).
+
 **Supported install: editable (`pip install -e .`).** manimgen reads `config.yaml`
 from the project folder, and that file exists only in a source checkout. A
 non-editable (wheel) install is not supported: it stops at start-up with a message
@@ -26,6 +28,10 @@ output folder it is using. A missing, unreadable or malformed `config.yaml`, or 
 value of the wrong type, is an error that names the file and the problem.
 
 ```bash
+pip install -r requirements-dev.txt   # runtime deps + pytest, pytest-mock, hypothesis, ruff
+pip install -e .                      # the manimgen / manimgen-edit commands
+claude                                # once: log in to Claude Code (default LLM provider)
+
 python3 -m pytest -q          # full suite, fully mocked, no API key needed
 manimgen "binary search"      # generate a video from a topic
 manimgen --pdf lecture.pdf    # or from a PDF
@@ -60,5 +66,7 @@ before and after). `manimgen.llm.usage_summary()` returns a per-role table and
 the plan-utilization change over the run, so you can see what share of the
 5-hour allowance one video costs.
 
-See [../README.md](../README.md) for the pipeline architecture, the Codeguard
-repair harness, configuration, and known limitations.
+See [../README.md](../README.md) for the pipeline overview, the Codeguard
+repair harness, LLM provider details, macOS/Linux and Windows (no admin) setup,
+the environment variables and the cost model. The module map and the reasons
+behind each design decision are in [../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md).
