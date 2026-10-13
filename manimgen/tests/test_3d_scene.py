@@ -239,10 +239,16 @@ class TestGenerateScenesPrecheckGate(unittest.TestCase):
             tempfile.TemporaryDirectory() as tmpdir,
         ):
             mock_paths.scenes_dir.return_value = tmpdir
-            with self.assertRaisesRegex(ValueError, "failed precheck"):
+            with self.assertRaisesRegex(ValueError, "failed precheck") as ctx:
                 scene_generator.generate_scenes(
                     self._make_section(), cue_durations=[5.0]
                 )
+            # The draft rides on the exception so cli can route it into retry.
+            exc = ctx.exception
+            self.assertIsInstance(exc, scene_generator.ScenePrecheckError)
+            self.assertEqual(exc.class_name, "Section01Scene")
+            self.assertTrue(exc.scene_path.startswith(tmpdir))
+            self.assertIn("def construct(self)", exc.code)
 
     def test_valid_scene_does_not_raise(self):
         import tempfile
