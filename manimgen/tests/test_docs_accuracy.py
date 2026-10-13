@@ -410,3 +410,15 @@ def test_first_run_checklist_mesa_driver_advice():
     assert "not verified" in text
     readme = (GIT_ROOT / "README.md").read_text(encoding="utf-8")
     assert "manimgen/docs/LIBRARY_PC_FIRST_RUN.md" in readme
+
+
+@pytest.mark.unit
+def test_readme_linux_latex_packages_cover_the_tex_template() -> None:
+    """ManimGL's default tex template loads dsfont and physics and shells out to dvisvgm.
+
+    The README once listed only texlive-latex-extra, so every Tex() scene on a
+    fresh Linux box died with `LatexError: File dsfont.sty not found`.
+    """
+    text = (GIT_ROOT / "README.md").read_text(encoding="utf-8")
+    for needed in ("texlive-fonts-extra", "texlive-science", "tipa", "dvisvgm"):
+        assert needed in text, f"README Linux LaTeX instructions must mention {needed}"
