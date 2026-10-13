@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable
 
 from manimgen import config, paths
-from manimgen.generator.scene_generator import generate_scenes
+from manimgen.generator.scene_generator import ScenePrecheckError, generate_scenes
 from manimgen.input.parser import parse_input
 from manimgen.planner.lesson_planner import plan_lesson, plan_lesson_from_pdf
 from manimgen.renderer.assembler import assemble_video
@@ -393,11 +393,29 @@ def _generate_and_gate(
     same pass retry.py uses): verify → auto-fix → re-verify. If timing issues
     survive auto-fix, ``timing_blocked`` is True so the caller skips the
     expensive first render and routes straight to the retry path (which can
-    apply an LLM fix with the timing warnings in context).
+    apply an LLM fix with the timing warnings in context). A draft that a
+    pre-render check rejects (precheck, unknown names, scene safety gate) sets
+    ``precheck_blocked`` and takes the same route; it is never rendered here.
     """
-    code, class_name, scene_path = generate_scenes(
-        section, cue_durations=cue_durations, overview=overview
-    )
+    try:
+        code, class_name, scene_path = generate_scenes(
+            section, cue_durations=cue_durations, overview=overview
+        )
+    except ScenePrecheckError as exc:
+        # The draft is on disk. Do not abort the section: skip the render and
+        # let retry_scene show the model the findings (error-aware fixes, LLM
+        # fix that must pass the gate again, then the fallback card).
+        logger.warning(
+            "[manimgen] Draft rejected before rendering, routing to retry: %s",
+            exc,
+        )
+        return GateResult(
+            code=exc.code,
+            class_name=exc.class_name,
+            scene_path=exc.scene_path,
+            timing_blocked=False,
+            precheck_blocked=True,
+        )
 
     timing_blocked = False
     if cue_durations:
@@ -430,14 +448,15 @@ def _render_with_retry(
 ) -> RenderResult:
     """Render a gated scene, forcing the retry/fallback path on any failure.
 
-    The first render is skipped entirely when ``gate.timing_blocked`` is set.
+    The first render is skipped entirely when ``gate.timing_blocked`` or
+    ``gate.precheck_blocked`` is set.
     A successful first render is still re-checked for hard visual failures
     (validate_render) and blocking freeze-frame tails — either forces the retry
     path. If retries fail, the styled fallback scene is used. The result says
     which of these shipped (#71); its path is None only if the fallback also
     failed.
     """
-    if gate.timing_blocked:
+    if gate.timing_blocked or gate.precheck_blocked:
         success, video_path = False, None
     else:
         success, video_path = run_scene(gate.scene_path, gate.class_name)

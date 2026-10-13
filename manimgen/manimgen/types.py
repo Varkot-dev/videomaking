@@ -31,13 +31,17 @@ class GateResult:
     Carries the (possibly auto-fixed) scene source plus where it was written and
     whether the zero-cost timing gate found unresolvable freeze-frame issues. A
     ``timing_blocked`` of True means the expensive first render should be skipped
-    and the section routed straight into the retry path.
+    and the section routed straight into the retry path. ``precheck_blocked``
+    means the same for a draft a pre-render check rejected (codeguard's precheck,
+    including the unknown-name check, or the scene safety gate): it is never
+    rendered, and retry_scene re-runs the checks and shows the model the findings.
     """
 
     code: str
     class_name: str
     scene_path: str
     timing_blocked: bool
+    precheck_blocked: bool = False
 
 
 @dataclass(frozen=True)

@@ -27,6 +27,25 @@ from manimgen.validator.scene_ast_gate import format_gate_error, inspect_scene_c
 
 logger = logging.getLogger(__name__)
 
+
+class ScenePrecheckError(ValueError):
+    """A generated scene was written to disk but a pre-render check rejected it.
+
+    Raised for a failed codeguard precheck (this includes the unknown-name check)
+    and for a rejection by the scene safety gate. The draft stays on disk and
+    rides on the exception so the caller can send it through the retry path
+    (the model is shown the findings and its fix must pass the gate again)
+    instead of aborting the section. The draft must never be rendered as is.
+    Subclasses ValueError for existing callers.
+    """
+
+    def __init__(self, message: str, code: str, class_name: str, scene_path: str):
+        super().__init__(message)
+        self.code = code
+        self.class_name = class_name
+        self.scene_path = scene_path
+
+
 _WORDS_PER_MINUTE = 130
 _MAX_EXAMPLES = 6
 
@@ -212,6 +231,10 @@ def generate_scenes(
 
     Returns:
         (code, class_name, scene_path)
+
+    Raises:
+        ScenePrecheckError: the saved scene failed precheck or was rejected by
+            the scene safety gate. The scene is on disk and on the exception.
     """
     class_name = section_class_name(section)
 
@@ -268,14 +291,19 @@ def generate_scenes(
     # AFTER saving — the string-only precheck above skips these checks. Surface
     # a non-ok result instead of discarding it and proceeding to a render that
     # is already known to be doomed (mirrors runner.py's precheck["ok"] gate).
+    # The draft stays on disk and rides on the exception so the caller can send
+    # it through retry_scene rather than lose the section.
     precheck = precheck_and_autofix_file(scene_path)
     with open(scene_path, encoding="utf-8") as f:
         code = f.read()
 
     if not precheck["ok"]:
-        raise ValueError(
+        raise ScenePrecheckError(
             f"Generated scene {os.path.basename(scene_path)} failed precheck "
-            f"validation:\n{precheck['stderr']}"
+            f"validation:\n{precheck['stderr']}",
+            code,
+            class_name,
+            scene_path,
         )
 
     # Scene safety gate (#87). A rejected scene is never rendered: it takes the
@@ -288,9 +316,12 @@ def generate_scenes(
             os.path.basename(scene_path),
             "; ".join(gate.findings),
         )
-        raise ValueError(
+        raise ScenePrecheckError(
             f"Generated scene {os.path.basename(scene_path)} was rejected by "
-            f"the scene safety gate:\n{format_gate_error(gate)}"
+            f"the scene safety gate:\n{format_gate_error(gate)}",
+            code,
+            class_name,
+            scene_path,
         )
 
     return code, class_name, scene_path
