@@ -185,3 +185,249 @@ class TestSharedFreezeSeam:
         assert seen.get("called") is True
         assert out == ["cue 0: 6.0s freeze tail"]
 
+
+# ---------------------------------------------------------------------------
+# A first draft that a pre-render check rejects must enter the retry path, not
+# abort the section: precheck findings, unknown names, and the scene safety gate.
+# ---------------------------------------------------------------------------
+
+# Item assignment into a real VGroup is a render-blocking precheck finding.
+_BLOCKED_DRAFT = (
+    "from manimlib import *\n\n\n"
+    "class Section01Scene(Scene):\n"
+    "    def construct(self):\n"
+    "        boxes = VGroup(*[Square() for _ in range(3)])\n"
+    "        boxes[0] = Circle()\n"
+    "        self.wait(1.0)\n"
+)
+_UNKNOWN_NAME_DRAFT = (
+    "from manimlib import *\n\n\n"
+    "class Section01Scene(Scene):\n"
+    "    def construct(self):\n"
+    "        self.add(FancyWidgetThatDoesNotExist())\n"
+    "        self.wait(1.0)\n"
+)
+_UNSAFE_DRAFT = (
+    "from manimlib import *\n"
+    "import os\n\n\n"
+    "class Section01Scene(Scene):\n"
+    "    def construct(self):\n"
+    "        os.system('echo pwned')\n"
+    "        self.wait(1.0)\n"
+)
+_CLEAN_DRAFT = (
+    "from manimlib import *\n\n\n"
+    "class Section01Scene(Scene):\n"
+    "    def construct(self):\n"
+    "        self.wait(1.0)\n"
+)
+_SECTION = {
+    "id": "section_01",
+    "title": "Sorting",
+    "narration": "Swap two items.",
+    "cues": [{"index": 0, "visual": "Swap two bars."}],
+}
+
+
+class _Wired:
+    """Real generate_scenes, codeguard, gate and retry_scene; the LLM, the disk
+    layout and the render/fallback leaves are faked."""
+
+    def __init__(self, monkeypatch, tmp_path, first_draft, fixes=()):
+        import manimgen.validator.retry as retry
+        from manimgen import paths
+        from manimgen.generator import scene_generator
+
+        self.retry = retry
+        self.calls = {"run_scene": 0, "fallback": 0, "chat": 0}
+        self.prompts: list[str] = []
+        self.rendered: list[str] = []
+        self.fixes = list(fixes)
+
+        monkeypatch.setattr(scene_generator, "chat", lambda **k: first_draft)
+        monkeypatch.setattr(scene_generator, "_load_director_prompt", lambda: "sys")
+        monkeypatch.setattr(scene_generator, "_load_examples_text", lambda s: "")
+        monkeypatch.setattr(scene_generator, "load_reference_frames", lambda: [])
+        monkeypatch.setattr(paths, "scenes_dir", lambda: str(tmp_path))
+        monkeypatch.setattr(paths, "logs_dir", lambda: str(tmp_path / "logs"))
+        monkeypatch.setattr(cli, "_find_rendered_video", lambda cls: None)
+        monkeypatch.setattr(retry, "_load_retry_system_prompt", lambda: "sys")
+        retry.reset_run_budget()
+
+        def _run_scene(path, cls):
+            self.calls["run_scene"] += 1
+            return True, "/tmp/first.mp4"
+
+        def _fallback(section):
+            self.calls["fallback"] += 1
+            return "/tmp/fallback.mp4"
+
+        def _fix(system, user, **k):
+            self.calls["chat"] += 1
+            self.prompts.append(user)
+            return self.fixes.pop(0) if self.fixes else first_draft
+
+        monkeypatch.setattr(cli, "run_scene", _run_scene)
+        monkeypatch.setattr(cli, "fallback_scene", _fallback)
+        monkeypatch.setattr(retry, "chat", _fix)
+
+        # The real run_manimgl (and its safety gate) runs; only the process
+        # launch is replaced, and every launch is recorded.
+        from manimgen import procutil
+        from manimgen.validator import render_command
+
+        def _run_tree(cmd, *a, **k):
+            self.rendered.append(" ".join(map(str, cmd)))
+            raise AssertionError("a render was started")
+
+        monkeypatch.setattr(procutil, "run_tree", _run_tree)
+        self.render_command = render_command
+
+
+class TestRejectedFirstDraft:
+    def test_precheck_finding_is_reported_not_raised(self, monkeypatch, tmp_path):
+        _Wired(monkeypatch, tmp_path, _BLOCKED_DRAFT)
+        gate = cli._generate_and_gate(dict(_SECTION), None, None)
+        assert gate.precheck_blocked is True
+        assert gate.timing_blocked is False
+        assert gate.class_name == "Section01Scene"
+        with open(gate.scene_path, encoding="utf-8") as f:
+            assert "boxes[0] = Circle()" in f.read()
+        assert gate.code == open(gate.scene_path, encoding="utf-8").read()
+
+    def test_unknown_name_is_reported_not_raised(self, monkeypatch, tmp_path):
+        _Wired(monkeypatch, tmp_path, _UNKNOWN_NAME_DRAFT)
+        gate = cli._generate_and_gate(dict(_SECTION), None, None)
+        assert gate.precheck_blocked is True
+        assert "FancyWidgetThatDoesNotExist" in gate.code
+
+    def test_safety_gate_rejection_is_reported_not_raised(self, monkeypatch, tmp_path):
+        _Wired(monkeypatch, tmp_path, _UNSAFE_DRAFT)
+        gate = cli._generate_and_gate(dict(_SECTION), None, None)
+        assert gate.precheck_blocked is True
+        assert "os.system" in gate.code
+
+    def test_clean_draft_renders_on_the_first_pass(self, monkeypatch, tmp_path):
+        w = _Wired(monkeypatch, tmp_path, _CLEAN_DRAFT)
+        monkeypatch.setattr(cli, "retry_scene", lambda *a, **k: (False, None))
+        import manimgen.validator.render_validator as rv
+        from manimgen.validator.render_validator import ValidationResult
+
+        monkeypatch.setattr(
+            rv,
+            "validate_render",
+            lambda *a, **k: ValidationResult(ok=True, issues=[], severity="none"),
+        )
+        gate = cli._generate_and_gate(dict(_SECTION), None, None)
+        assert gate.precheck_blocked is False
+        out = cli._run_section(dict(_SECTION), 1, False, "hash")
+        assert w.calls["run_scene"] == 1
+        assert out.status == SectionStatus.OK
+        assert out.clips == ["/tmp/first.mp4"]
+
+    def test_render_with_retry_skips_first_render_when_precheck_blocked(
+        self, monkeypatch
+    ):
+        calls = {"run_scene": 0, "retry": 0}
+
+        def _run_scene(p, c):
+            calls["run_scene"] += 1
+            return True, "/tmp/v.mp4"
+
+        def _retry(section, code, cls, path, cue_durations=None):
+            calls["retry"] += 1
+            return True, "/tmp/retried.mp4"
+
+        monkeypatch.setattr(cli, "run_scene", _run_scene)
+        monkeypatch.setattr(cli, "retry_scene", _retry)
+        monkeypatch.setattr(cli, "_scene_file_blocking_freezes", lambda p, d: [])
+        gate = GateResult(
+            code="CODE",
+            class_name="Demo",
+            scene_path="/tmp/d.py",
+            timing_blocked=False,
+            precheck_blocked=True,
+        )
+        result = cli._render_with_retry({}, gate, None, logging.getLogger("t"))
+        assert calls == {"run_scene": 0, "retry": 1}
+        assert result.path == "/tmp/retried.mp4"
+
+    def test_unknown_name_draft_is_repaired_by_the_real_retry_loop(
+        self, monkeypatch, tmp_path
+    ):
+        from manimgen.validator.frame_checker import FrameCheckResult
+
+        w = _Wired(monkeypatch, tmp_path, _UNKNOWN_NAME_DRAFT, fixes=[_CLEAN_DRAFT])
+        seen_sources = []
+
+        def _render(scene_path, class_name, timeout=None):
+            with open(scene_path, encoding="utf-8") as f:
+                seen_sources.append(f.read())
+            return w.render_command.RenderResult(
+                True, "/tmp/fixed.mp4", "", "", 0, False
+            )
+
+        monkeypatch.setattr(w.retry, "run_manimgl", _render)
+        monkeypatch.setattr(
+            w.retry, "check_layout", lambda p: {"ok": True, "issues": ""}
+        )
+        monkeypatch.setattr(
+            "manimgen.validator.frame_checker.check_frames",
+            lambda p: FrameCheckResult(ok=True),
+        )
+
+        out = cli._run_section(dict(_SECTION), 1, False, "hash")
+
+        assert w.calls["run_scene"] == 0, "the rejected draft must not be rendered"
+        assert w.calls["chat"] == 1
+        assert "FancyWidgetThatDoesNotExist" in w.prompts[0]
+        assert [x.strip() for x in seen_sources] == [_CLEAN_DRAFT.strip()]
+        assert out.status == SectionStatus.OK
+        assert out.clips == ["/tmp/fixed.mp4"]
+
+    def test_unsafe_draft_is_never_rendered_and_retry_sees_the_findings(
+        self, monkeypatch, tmp_path
+    ):
+        from manimgen import procutil
+
+        w = _Wired(monkeypatch, tmp_path, _UNSAFE_DRAFT, fixes=[_CLEAN_DRAFT])
+        launched_sources = []
+
+        def _run_tree(cmd, *a, **k):
+            # Record what the launcher would have executed, then fail the render.
+            with open(tmp_path / "section_01.py", encoding="utf-8") as f:
+                launched_sources.append(f.read())
+            return (1, "", "boom", False)
+
+        monkeypatch.setattr(procutil, "run_tree", _run_tree)
+
+        out = cli._run_section(dict(_SECTION), 1, False, "hash")
+
+        assert w.calls["run_scene"] == 0
+        assert w.prompts, "retry must ask the model for a fix"
+        assert "SceneSafetyGateError" in w.prompts[0]
+        assert "import of 'os' is not allowed" in w.prompts[0]
+        # Only the gate-clean fix ever reached the launcher.
+        assert launched_sources
+        assert all("os.system" not in src for src in launched_sources)
+        assert out.status == SectionStatus.FALLBACK
+
+    def test_model_that_keeps_returning_unsafe_code_ends_in_fallback(
+        self, monkeypatch, tmp_path
+    ):
+        w = _Wired(monkeypatch, tmp_path, _UNSAFE_DRAFT)  # every fix is unsafe too
+        out = cli._run_section(dict(_SECTION), 1, False, "hash")
+        assert w.calls["run_scene"] == 0
+        assert w.rendered == [], "unsafe code reached the process launcher"
+        assert 1 <= w.calls["chat"] <= w.retry.MAX_ERROR_LLM_FIX_CALLS
+        assert w.calls["fallback"] == 1
+        assert out.status == SectionStatus.FALLBACK
+        assert out.clips == ["/tmp/fallback.mp4"]
+
+    def test_run_section_falls_back_when_retry_fails(self, monkeypatch, tmp_path):
+        w = _Wired(monkeypatch, tmp_path, _BLOCKED_DRAFT)
+        monkeypatch.setattr(cli, "retry_scene", lambda *a, **k: (False, None))
+        out = cli._run_section(dict(_SECTION), 1, False, "hash")
+        assert w.calls["run_scene"] == 0
+        assert out.status == SectionStatus.FALLBACK
+        assert out.clips == ["/tmp/fallback.mp4"]

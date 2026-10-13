@@ -98,9 +98,7 @@ def test_retry_attempt_hard_blocks_and_returns_findings(tmp_path, leaf):
     assert leaf == []
 
 
-def test_rejected_llm_error_fix_is_discarded_not_rendered(
-    tmp_path, leaf, monkeypatch
-):
+def test_rejected_llm_error_fix_is_discarded_not_rendered(tmp_path, leaf, monkeypatch):
     """An LLM fix that fails the gate is reverted and never reaches manimgl."""
     monkeypatch.setattr(retry_mod, "MAX_RETRIES", 3)
     monkeypatch.setattr(retry_mod, "_load_retry_system_prompt", lambda: "sys")
@@ -161,9 +159,7 @@ def test_rejected_llm_visual_fix_is_discarded_and_best_render_kept(
         assert f.read() == SAFE
 
 
-def test_generator_refuses_a_rejected_draft_before_any_render(
-    tmp_path, monkeypatch
-):
+def test_generator_refuses_a_rejected_draft_before_any_render(tmp_path, monkeypatch):
     from manimgen.generator import scene_generator
 
     monkeypatch.setattr(scene_generator, "chat", lambda **kw: UNSAFE)
@@ -175,10 +171,13 @@ def test_generator_refuses_a_rejected_draft_before_any_render(
     monkeypatch.setattr(scene_generator.paths, "scenes_dir", lambda: str(tmp_path))
     section = {"id": "section_01", "title": "T", "narration": "Hello.", "cues": []}
 
-    with pytest.raises(ValueError) as info:
+    with pytest.raises(scene_generator.ScenePrecheckError) as info:
         scene_generator.generate_scenes(section, cue_durations=[3.0])
     assert "scene safety gate" in str(info.value)
     assert "subprocess" in str(info.value)
+    # The rejected draft rides on the error so cli can hand it to retry.
+    assert info.value.code.strip() == UNSAFE.strip()
+    assert info.value.scene_path.startswith(str(tmp_path))
 
 
 def test_fallback_scene_passes_the_gate_and_neutralises_plan_text(
