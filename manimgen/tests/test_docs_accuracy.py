@@ -89,9 +89,7 @@ _PATH_SUFFIXES = r"(?:py|md|ya?ml|toml|txt|json|html|cfg|ini)"
 
 # A backtick-quoted token that looks like a repo-relative file path:
 # `validator/retry.py`, `docs/KNOWN_ISSUES.md`, `config.yaml`.
-_PATH_IN_BACKTICKS = re.compile(
-    rf"`([A-Za-z0-9_][A-Za-z0-9_./-]*\.{_PATH_SUFFIXES})`"
-)
+_PATH_IN_BACKTICKS = re.compile(rf"`([A-Za-z0-9_][A-Za-z0-9_./-]*\.{_PATH_SUFFIXES})`")
 
 # The target of a markdown link: [the plan](docs/PLAN.md).
 #
@@ -127,6 +125,8 @@ _EXEMPT_PATH_EXACT = {
     "setup.py",
     "editor.html",
     "templates/editor.html",
+    # Written by every run next to the video; absent from a clean checkout.
+    "run_manifest.json",
 }
 
 
@@ -410,3 +410,271 @@ def test_first_run_checklist_mesa_driver_advice():
     assert "not verified" in text
     readme = (GIT_ROOT / "README.md").read_text(encoding="utf-8")
     assert "manimgen/docs/LIBRARY_PC_FIRST_RUN.md" in readme
+
+
+# ---------------------------------------------------------------------------
+# 5. Claims about behaviour that the code can confirm
+#
+# The checks above cover paths, counts and home directories. The ones below
+# cover the facts a reader acts on: which exit code means what, which
+# environment variables exist, how many sections a plan may have, which scripts
+# can be run, which manifest fields a script can rely on and which config keys
+# can be set. Each reads the value from the code itself, so changing the code
+# without the doc (or the reverse) fails here.
+# ---------------------------------------------------------------------------
+
+# Docs that name environment variables, config keys, scripts or exit codes.
+BEHAVIOUR_DOCS = (
+    GIT_ROOT / "README.md",
+    GIT_ROOT / "CLAUDE.md",
+    GIT_ROOT / "docs" / "ARCHITECTURE.md",
+    PACKAGE_ROOT / "README.md",
+    PACKAGE_ROOT / "CLAUDE.md",
+    PACKAGE_ROOT / "docs" / "KNOWN_ISSUES.md",
+    PACKAGE_ROOT / "docs" / "LIBRARY_PC_FIRST_RUN.md",
+)
+
+
+def _code_text() -> str:
+    """Source of everything a doc may legitimately name: package, scripts, config, CI."""
+    roots = [
+        *sorted((PACKAGE_ROOT / "manimgen").rglob("*.py")),
+        *sorted((PACKAGE_ROOT / "scripts").glob("*.py")),
+        PACKAGE_ROOT / "config.yaml",
+        *sorted((GIT_ROOT / ".github" / "workflows").glob("*.yml")),
+    ]
+    return "\n".join(p.read_text(encoding="utf-8") for p in roots)
+
+
+def _section_of(text: str, heading: str) -> str:
+    """Text from `heading` to the next heading of the same or higher level."""
+    start = text.index(heading)
+    level = len(heading) - len(heading.lstrip("#"))
+    rest = text[start + len(heading) :]
+    end = re.search(rf"^#{{1,{level}}} ", rest, re.MULTILINE)
+    return rest[: end.start()] if end else rest
+
+
+@pytest.mark.unit
+def test_every_manimgen_variable_a_doc_names_exists_in_the_code() -> None:
+    """A documented MANIMGEN_* variable must be read (or set) somewhere in the code.
+
+    Variables built at run time are checked against what builds them: the render
+    timeouts against `paths._RENDER_DEFAULTS` and the per-role models against
+    `llm.ROLES`.
+    """
+    from manimgen import llm, paths
+
+    code = _code_text()
+    dynamic = {
+        f"MANIMGEN_RENDER_TIMEOUT_{k.split('_')[-1].upper()}"
+        for k in paths._RENDER_DEFAULTS
+    }
+    dynamic |= {f"MANIMGEN_MODEL_{role.upper()}" for role in llm.ROLES}
+
+    missing: list[str] = []
+    for doc in BEHAVIOUR_DOCS:
+        text = doc.read_text(encoding="utf-8")
+        for name in set(re.findall(r"MANIMGEN_[A-Z0-9_]*[A-Z0-9]_?", text)):
+            # Whole-name match: `MANIMGEN_OVERLAP_PROB` must not pass just
+            # because `MANIMGEN_OVERLAP_PROBE` contains it.
+            exact = re.search(rf"(?<![A-Z0-9_]){re.escape(name)}(?![A-Z0-9])", code)
+            if exact or name in dynamic:
+                continue
+            missing.append(f"{doc.name}: {name}")
+    assert not missing, (
+        "Docs name environment variables that no code reads or sets: "
+        f"{sorted(missing)}. Fix the doc or the code."
+    )
+
+
+@pytest.mark.unit
+def test_documented_exit_codes_match_cli_constants() -> None:
+    """The exit-code tables in the README and ARCHITECTURE.md must equal cli.py's."""
+    from manimgen import cli
+
+    expected = {
+        cli.EXIT_OK: "every section",
+        cli.EXIT_FAILED: "refused",
+        2: "command line",  # argparse usage error
+        cli.EXIT_DEGRADED: "fallback",
+        cli.EXIT_USAGE_LIMIT: "usage limit",
+    }
+    readme = (GIT_ROOT / "README.md").read_text(encoding="utf-8")
+    arch = (GIT_ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    tables = {
+        "README.md": (
+            _section_of(readme, "### Run summary and exit codes"),
+            r"^\| `(\d+)` \| (.*) \|$",
+        ),
+        "docs/ARCHITECTURE.md": (
+            _section_of(
+                arch, "### 3f. Failure policy: statuses, exit codes, partial videos"
+            ),
+            r"^\| (\d+) \| (.*) \|$",
+        ),
+    }
+    for name, (section, pattern) in tables.items():
+        rows = {
+            int(code): meaning
+            for code, meaning in re.findall(pattern, section, re.MULTILINE)
+            if int(code) < 10
+        }
+        assert set(rows) == set(expected), (
+            f"{name} documents exit codes {sorted(rows)} but cli.py defines "
+            f"{sorted(expected)}"
+        )
+        for code, keyword in expected.items():
+            assert keyword.lower() in rows[code].lower(), (
+                f"{name}: exit code {code} should mention {keyword!r}, "
+                f"got {rows[code]!r}"
+            )
+
+
+@pytest.mark.unit
+def test_documented_section_and_input_caps_match_the_code() -> None:
+    """Section caps, the PDF page cap and the PDF text cap are stated in the docs."""
+    from manimgen.input import pdf_parser
+    from manimgen.planner import lesson_planner
+
+    topic, pdf = lesson_planner._MAX_SECTIONS_TOPIC, lesson_planner._MAX_SECTIONS_PDF
+    planner_src = (
+        PACKAGE_ROOT / "manimgen" / "planner" / "lesson_planner.py"
+    ).read_text(encoding="utf-8")
+    max_chars = int(
+        re.search(r"MAX_CHARS = ([\d_]+)", planner_src).group(1).replace("_", "")
+    )
+    max_images = int(re.search(r"MAX_IMAGES = (\d+)", planner_src).group(1))
+
+    readme = (GIT_ROOT / "README.md").read_text(encoding="utf-8")
+    arch = (GIT_ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+
+    stated = [
+        (readme, r"up to (\d+) sections \(topic\) / (\d+) sections \(PDF\)"),
+        (
+            readme,
+            r"\(topic, at most (\d+)\) or [\d ]+ to \d+ seconds \(PDF, at most (\d+)\)",
+        ),
+        (arch, r"(\d+) sections for a topic, (\d+) for a PDF"),
+    ]
+    for text, pattern in stated:
+        match = re.search(pattern, text)
+        assert match, f"no statement of the section caps matching {pattern!r}"
+        assert (int(match.group(1)), int(match.group(2))) == (topic, pdf), (
+            f"docs say {match.groups()} sections (topic, PDF) but "
+            f"lesson_planner caps them at ({topic}, {pdf})"
+        )
+
+    assert f"{max_chars:,} characters" in arch
+    assert f"{max_images} page images" in arch
+    assert f"capped at {pdf_parser._MAX_PDF_PAGES} pages" in arch
+
+
+@pytest.mark.unit
+def test_scripts_named_in_docs_exist() -> None:
+    """Every `scripts/<name>.py` a doc tells the reader to run must exist."""
+    scripts = {p.name for p in (PACKAGE_ROOT / "scripts").glob("*.py")}
+    missing: list[str] = []
+    for doc in BEHAVIOUR_DOCS:
+        text = doc.read_text(encoding="utf-8")
+        for name in re.findall(r"scripts[\\/]+([A-Za-z0-9_]+\.py)", text):
+            if name not in scripts:
+                missing.append(f"{doc.name}: scripts/{name}")
+    assert not missing, f"Docs name scripts that do not exist: {sorted(set(missing))}"
+
+
+@pytest.mark.unit
+def test_documented_manifest_fields_match_what_the_run_writes(monkeypatch) -> None:
+    """The README lists the fields of run_manifest.json; write one and compare."""
+    import time
+
+    from manimgen import cli
+    from manimgen.types import SectionOutcome, SectionStatus
+
+    captured: dict = {}
+    monkeypatch.setattr(
+        cli, "_write_manifest", lambda manifest, directory: captured.update(manifest)
+    )
+    record = cli._section_record(
+        1, {"id": "s1", "title": "T"}, SectionOutcome(SectionStatus.OK), 1.0
+    )
+    cli._finish_run("t", "h", [record], None, cli.EXIT_FAILED, "no_video", time.time())
+
+    readme = (GIT_ROOT / "README.md").read_text(encoding="utf-8")
+    paragraph = re.search(
+        r"`run_manifest.json` holds (.*?)\n\n", readme, re.DOTALL
+    ).group(1)
+    top_part, section_part = paragraph.split("Each entry")
+    documented_top = set(
+        re.findall(r"`([a-z_]+)`", top_part.split("`sections`")[0] + "`sections`")
+    )
+    documented_top -= {"ok", "degraded", "usage_limit", "narration_failed", "no_video"}
+    documented_top.add("next_steps") if "`next_steps`" in top_part else None
+    assert documented_top == set(captured), (
+        f"README lists manifest fields {sorted(documented_top)}, the run writes "
+        f"{sorted(captured)}"
+    )
+    documented_section = set(
+        re.findall(r"`([a-z_]+)`", section_part.split("of `sections`")[1])
+    )
+    assert documented_section == set(record), (
+        f"README lists section fields {sorted(documented_section)}, the run writes "
+        f"{sorted(record)}"
+    )
+    for result in ("ok", "degraded", "usage_limit", "narration_failed", "no_video"):
+        assert f'"{result}"' in (PACKAGE_ROOT / "manimgen" / "cli.py").read_text(
+            encoding="utf-8"
+        )
+
+
+@pytest.mark.unit
+def test_config_keys_named_in_docs_exist_in_config_yaml() -> None:
+    """`llm.claude_cli_model`, `rendering.quality`, `tts.proxy` ... must be real keys."""
+    import yaml
+
+    config_text = (PACKAGE_ROOT / "config.yaml").read_text(encoding="utf-8")
+    config = yaml.safe_load(config_text)
+    code = _code_text()
+
+    missing: list[str] = []
+    for doc in BEHAVIOUR_DOCS:
+        text = doc.read_text(encoding="utf-8")
+        for section, key in re.findall(
+            r"`(llm|rendering|tts|output)\.([a-z_0-9*]+)`", text
+        ):
+            key = key.rstrip("*")
+            # `llm._claude_cli` and `tts.generate_narration` name Python
+            # functions in modules called llm and tts, not config keys.
+            if (
+                key == "py"
+                or key.startswith("_")
+                or re.search(rf"def {re.escape(key)}\b", code)
+            ):
+                continue
+            present = any(k.startswith(key) for k in (config.get(section) or {}))
+            # Optional keys are documented in commented-out form (tts.proxy).
+            present = present or re.search(
+                rf"^\s*#?\s*{re.escape(key)}\w*:", config_text, re.MULTILINE
+            )
+            if not present:
+                missing.append(f"{doc.name}: {section}.{key}")
+    assert not missing, (
+        f"Docs name config keys that config.yaml lacks: {sorted(set(missing))}"
+    )
+
+
+@pytest.mark.unit
+def test_documented_llm_providers_are_the_ones_the_code_accepts() -> None:
+    """The provider table lists exactly the providers `llm.chat` dispatches on."""
+    llm_src = (PACKAGE_ROOT / "manimgen" / "llm.py").read_text(encoding="utf-8")
+    accepted = set(
+        re.findall(
+            r'"(\w+)"', re.search(r"if provider not in \(([^)]*)\)", llm_src).group(1)
+        )
+    )
+    readme = (GIT_ROOT / "README.md").read_text(encoding="utf-8")
+    table = _section_of(readme, "## LLM providers")
+    documented = set(re.findall(r"^\| `(\w+)`", table, re.MULTILINE))
+    assert documented == accepted, (
+        f"README lists providers {sorted(documented)}, llm.chat accepts {sorted(accepted)}"
+    )
