@@ -9,6 +9,7 @@ All subprocess calls are mocked — no real ffmpeg needed.
 """
 
 import os
+import subprocess
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -16,7 +17,10 @@ from manimgen.renderer.assembler import (
     assemble_video,
     _section_boundaries,
     _hard_concat,
+    _crossfade_sections,
+    _xfade_chain,
     _xfade_pair,
+    _xfade_timeout,
     _video_duration,
     _has_audio_stream,
     _XFADE_DURATION,
@@ -346,3 +350,153 @@ class TestVideoDurationRobustness:
         with patch("manimgen.renderer.assembler.subprocess.run",
                    return_value=self._result("\n")):
             assert _video_duration("/fake.mp4") == pytest.approx(0.1)
+
+
+# ---------------------------------------------------------------------------
+# Section crossfades: single pass, scaled timeout, degrade on failure (#75)
+# ---------------------------------------------------------------------------
+
+
+def _section_clips(tmp_path, n):
+    return _make_clips(tmp_path, [f"section_{i:02d}.mp4" for i in range(1, n + 1)])
+
+
+def _graph(cmd):
+    return cmd[cmd.index("-filter_complex") + 1]
+
+
+class TestCrossfadeSinglePass:
+
+    def test_all_boundaries_in_one_ffmpeg_call(self, tmp_path):
+        clips = _section_clips(tmp_path, 4)
+        out = str(tmp_path / "out.mp4")
+        with patch("manimgen.renderer.assembler.subprocess.run",
+                   return_value=_ok()) as mock_run, \
+             patch("manimgen.renderer.assembler._video_duration", return_value=5.0):
+            _crossfade_sections(clips, out, str(tmp_path))
+        assert mock_run.call_count == 1
+        cmd = mock_run.call_args[0][0]
+        assert _graph(cmd).count("xfade=") == 3
+        assert _graph(cmd).count("acrossfade=") == 3
+        assert cmd.count("-i") == 4
+        # Encode contract: same settings as every other assembler encode.
+        assert cmd[cmd.index("-preset") + 1] == "slow"
+        assert cmd[cmd.index("-crf") + 1] == "17"
+        assert cmd[cmd.index("-ar") + 1] == "48000"
+
+    def test_offsets_accumulate_minus_each_fade(self, tmp_path):
+        clips = _section_clips(tmp_path, 3)
+        with patch("manimgen.renderer.assembler.subprocess.run",
+                   return_value=_ok()) as mock_run, \
+             patch("manimgen.renderer.assembler._video_duration",
+                   side_effect=[5.0, 4.0, 6.0]):
+            _xfade_chain(clips, str(tmp_path / "out.mp4"))
+        graph = _graph(mock_run.call_args[0][0])
+        offsets = [float(x.split("[")[0]) for x in graph.split("offset=")[1:]]
+        d = _XFADE_DURATION
+        assert offsets == pytest.approx([5.0 - d, 5.0 + 4.0 - 2 * d])
+
+    def test_timeout_scales_with_output_duration(self, tmp_path):
+        clips = _section_clips(tmp_path, 8)
+        with patch("manimgen.renderer.assembler.subprocess.run",
+                   return_value=_ok()) as mock_run, \
+             patch("manimgen.renderer.assembler._video_duration", return_value=45.0):
+            _xfade_chain(clips, str(tmp_path / "out.mp4"))
+        timeout = mock_run.call_args.kwargs["timeout"]
+        total = 8 * 45.0 - 7 * _XFADE_DURATION
+        assert timeout == pytest.approx(_xfade_timeout(total))
+        assert timeout > 300
+
+    def test_tiny_section_shrinks_its_fade(self, tmp_path):
+        clips = _section_clips(tmp_path, 2)
+        with patch("manimgen.renderer.assembler.subprocess.run",
+                   return_value=_ok()) as mock_run, \
+             patch("manimgen.renderer.assembler._video_duration",
+                   side_effect=[0.1, 5.0]):
+            _xfade_chain(clips, str(tmp_path / "out.mp4"))
+        graph = _graph(mock_run.call_args[0][0])
+        offset = float(graph.split("offset=")[1].split("[")[0])
+        assert offset == pytest.approx(0.05)
+
+
+class TestCrossfadeFallbacks:
+
+    def _run(self, tmp_path, effect):
+        clips = _section_clips(tmp_path, 3)
+        out = str(tmp_path / "out.mp4")
+        calls = []
+
+        def fake_run(cmd, *args, **kwargs):
+            calls.append(cmd)
+            return effect(cmd)
+
+        with patch("manimgen.renderer.assembler.subprocess.run",
+                   side_effect=fake_run), \
+             patch("manimgen.renderer.assembler._video_duration", return_value=5.0), \
+             patch("manimgen.renderer.assembler.replace_with_retry"):
+            _crossfade_sections(clips, out, str(tmp_path))
+        return calls
+
+    @staticmethod
+    def _is_xfade(cmd):
+        return "-filter_complex" in cmd
+
+    @staticmethod
+    def _is_concat(cmd):
+        return "concat" in cmd and "copy" in cmd
+
+    def test_timeout_falls_back_to_hard_concat(self, tmp_path, caplog):
+        def effect(cmd):
+            if self._is_xfade(cmd):
+                raise subprocess.TimeoutExpired(cmd, 300)
+            return _ok()
+
+        with caplog.at_level("WARNING", logger="manimgen.renderer.assembler"):
+            calls = self._run(tmp_path, effect)
+        # One crossfade attempt, then a stream-copy concat; no pairwise retry.
+        assert sum(self._is_xfade(c) for c in calls) == 1
+        assert self._is_concat(calls[-1])
+        assert "timed out" in caplog.text
+
+    def test_error_retries_pairwise_then_succeeds(self, tmp_path):
+        def effect(cmd):
+            if self._is_xfade(cmd) and cmd.count("-i") > 2:
+                raise subprocess.CalledProcessError(1, cmd)
+            return _ok()
+
+        calls = self._run(tmp_path, effect)
+        # One failed single-pass call, then one pairwise encode per boundary.
+        assert sum(self._is_xfade(c) for c in calls) == 3
+        assert not any(self._is_concat(c) for c in calls)
+
+    def test_pairwise_timeout_uses_hard_cut_per_pair(self, tmp_path):
+        def effect(cmd):
+            if self._is_xfade(cmd) and cmd.count("-i") > 2:
+                raise subprocess.CalledProcessError(1, cmd)
+            if self._is_xfade(cmd):
+                raise subprocess.TimeoutExpired(cmd, 300)
+            return _ok()
+
+        calls = self._run(tmp_path, effect)  # must not raise
+        assert sum(self._is_concat(c) for c in calls) == 2
+
+    def test_assemble_video_survives_crossfade_timeout(self, tmp_path):
+        """End to end through assemble_video: a timeout no longer aborts."""
+        clips = _section_clips(tmp_path, 3)
+
+        def fake_run(cmd, *args, **kwargs):
+            if "-filter_complex" in cmd:
+                raise subprocess.TimeoutExpired(cmd, 300)
+            return _ok()
+
+        with patch("manimgen.renderer.assembler.subprocess.run",
+                   side_effect=fake_run), \
+             patch("manimgen.renderer.assembler._has_audio_stream",
+                   return_value=True), \
+             patch("manimgen.renderer.assembler._video_duration", return_value=5.0), \
+             patch("manimgen.renderer.assembler.paths.videos_dir",
+                   return_value=str(tmp_path / "videos")), \
+             patch("manimgen.renderer.assembler.os.replace") as mock_replace:
+            out = assemble_video(clips, "Timeout Topic")
+        assert out.endswith("timeout_topic.mp4")
+        mock_replace.assert_called_once()
