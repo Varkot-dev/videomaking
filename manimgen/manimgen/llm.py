@@ -183,11 +183,16 @@ def chat(
                 (Gemini response_mime_type='application/json'). Use only for
                 calls that expect a JSON object/array — never for code
                 generation, which returns Python. Only Gemini enforces it
-                natively. For anthropic, claude_cli and ollama this is NOT
-                guaranteed JSON: the prompt must ask for JSON, and the only
-                help given is stripping a surrounding markdown code fence.
-                The text is not validated, so callers still need their own
-                parse-and-retry (the planner has one).
+                natively. Ollama gets its native `format: "json"` request
+                option, which constrains decoding but is not a schema. For
+                anthropic and claude_cli this is NOT guaranteed JSON: the
+                prompt must ask for JSON, and the only help given is
+                stripping a surrounding markdown code fence. For every
+                provider except Gemini the reply is then checked with
+                json.loads and a WARNING is logged when it does not parse, so
+                the degraded path is never silent. The text is returned
+                either way, so callers still need their own parse-and-retry
+                (the planner has one).
         role:   What the call is for (see ROLES). Picks the model (env
                 MANIMGEN_MODEL_<ROLE>, then llm.models in config.yaml, then the
                 provider default) and labels the call in the usage ledger.
@@ -219,8 +224,12 @@ def chat(
         elif provider == "claude_cli":
             text = _claude_cli(system, user, images or [], **kw)
         else:
-            text = _ollama(system, user, images or [], **kw)
-        return _strip_json_fence(text) if json_mode else text
+            text = _ollama(system, user, images or [], json_mode=json_mode, **kw)
+        if not json_mode:
+            return text
+        text = _strip_json_fence(text)
+        _warn_if_not_json(provider, text)
+        return text
     except BaseException as exc:
         error = f"{type(exc).__name__}: {exc}"[:500]
         raise
@@ -244,6 +253,23 @@ def _strip_json_fence(text: str) -> str:
     if len(lines) >= 2 and lines[-1].strip() == "```":
         return "\n".join(lines[1:-1]).strip()
     return stripped
+
+
+def _warn_if_not_json(provider: str, text: str) -> None:
+    """Log (never raise) when a json_mode reply from a non-Gemini provider
+    does not parse, so prompt-only JSON failing is visible in the run log."""
+    try:
+        json.loads(text)
+    except ValueError as exc:
+        logger.warning(
+            "[llm] json_mode reply from %s is not valid JSON (%s); %s. "
+            "Returning the raw text for the caller's parse-and-retry.",
+            provider,
+            exc,
+            "Ollama format=json was requested"
+            if provider == "ollama"
+            else "this provider has no native JSON mode, only the prompt asks for JSON",
+        )
 
 
 def _gemini(
@@ -1037,7 +1063,13 @@ def _model_for(provider: str, role: str | None = None) -> str:
     return default
 
 
-def _ollama(system: str, user: str, images: list[str], role: str | None = None) -> str:
+def _ollama(
+    system: str,
+    user: str,
+    images: list[str],
+    role: str | None = None,
+    json_mode: bool = False,
+) -> str:
     import requests
 
     cfg = _LLM_CONFIG
@@ -1053,6 +1085,9 @@ def _ollama(system: str, user: str, images: list[str], role: str | None = None) 
         "stream": False,
         "options": {"num_ctx": cfg["ollama_num_ctx"]},
     }
+    if json_mode:
+        # Ollama's native JSON mode: decoding is constrained to valid JSON.
+        payload["format"] = "json"
 
     last_exc: Exception | None = None
     for _ in range(_REQUEST_RETRY_ATTEMPTS):

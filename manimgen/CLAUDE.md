@@ -226,7 +226,7 @@ Model names and `max_tokens` are configured under `llm:` in `config.yaml`, never
 - Flags: `--tools=` (single token, so it survives the Windows cmd shim), `--strict-mcp-config`, `--disable-slash-commands`, `--no-session-persistence`, `--model <model for the role>` (`llm.claude_cli_model` unless `llm.models` or `MANIMGEN_MODEL_<ROLE>` says otherwise). cwd is an empty temp dir.
 - Env: built from an allowlist of variable names (`_CLI_ENV_ALLOWLIST`), so other services' keys never reach the child. `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, the Bedrock/Vertex/Foundry switches and a parent Claude Code session's identity are removed on purpose (otherwise Claude Code would bill the API instead of the plan), and `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` keeps CLAUDE.md files out of the prompt.
 - 600s timeout per call, 3 attempts (not retried when the error says not logged in, usage limit or credit balance); the final `{"type": "result"}` stream event is the reply. Guards: `_ensure_subscription_auth`, `_check_plan_limits`, `_ensure_plan_headroom` (`MANIMGEN_MAX_PLAN_UTILIZATION`, default 0.90).
-- `json_mode=True` is native only on Gemini. For `claude_cli`, `anthropic` and `ollama` the prompt asks for JSON and `chat()` strips a surrounding markdown `json` code fence.
+- `json_mode=True` is native only on Gemini; Ollama gets its native `format: "json"` option. For `claude_cli` and `anthropic` the prompt asks for JSON. For all three `chat()` strips a surrounding markdown `json` code fence and logs a WARNING when the reply still is not valid JSON (the raw text is returned for the caller's parse-and-retry).
 
 ---
 

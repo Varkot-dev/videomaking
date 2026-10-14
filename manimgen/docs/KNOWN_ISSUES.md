@@ -48,9 +48,11 @@ past the backslash-only regex repair.
 **Fix:** pass `json_mode=True` on planner `chat()` calls →
 `response_mime_type="application/json"` so Gemini emits guaranteed-valid JSON.
 **Guard:** `check_planner_uses_json_mode()`.
-**Other providers:** only Gemini has native JSON mode. For `claude_cli`,
-`anthropic` and `ollama`, `chat(json_mode=True)` relies on the prompt and strips
-a surrounding markdown `json` code fence before the planner parses the reply.
+**Other providers:** only Gemini has native JSON mode; Ollama is sent its
+`format: "json"` option. For `claude_cli` and `anthropic`,
+`chat(json_mode=True)` relies on the prompt. For all three it strips a
+surrounding markdown `json` code fence and logs a WARNING when the reply still
+does not parse, before the planner parses (and if needed re-asks).
 
 ## 5. `--fps` crashes manimgl 1.7.2 — `int / str`
 **Symptom:** EVERY render aborts with

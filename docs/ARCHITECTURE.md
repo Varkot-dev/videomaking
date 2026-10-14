@@ -133,8 +133,9 @@ resolve to a loopback, private or link-local address, lower quality).
 Trade-off. Per-call latency from starting Claude Code. The guards read
 `stream-json` fields that are not a documented contract, so each is parsed
 defensively. No native JSON mode: `json_mode=True` only strips a code fence on
-`claude_cli`, `anthropic` and `ollama` (Gemini sets a JSON response type), so the
-planner validates and re-asks (`_chat_plan`). Subscription windows can run out
+`claude_cli` and `anthropic` (Gemini sets a JSON response type, Ollama gets
+`format: "json"`); a non-Gemini reply that still does not parse is logged as a
+warning, and the planner validates and re-asks (`_chat_plan`). Subscription windows can run out
 mid-run, which is a resumable stop, not a crash.
 
 Where. `manimgen/manimgen/llm.py`, `manimgen/scripts/check_billing.py` (one small
