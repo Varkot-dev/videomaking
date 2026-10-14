@@ -20,6 +20,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from manimgen import paths
 from manimgen.utils import atomic_output, safe_probe_duration
+from manimgen.validator.render_command import (
+    _BACKGROUND_COLOR as _RENDER_BACKGROUND_COLOR,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +30,10 @@ logger = logging.getLogger(__name__)
 # placement or TTS/render timing problem worth investigating.
 _WARN_THRESHOLD_SECONDS = 1.0
 
-# The pipeline's dark background (matches the -c "#1C1C1C" render flag). Used to
-# synthesize a placeholder clip when a cue's render produced no video stream.
-_BG_COLOR = "#1C1C1C"
+# The pipeline's dark background, shared with the manimgl -c render flag so the
+# placeholder clip (synthesized when a cue's render produced no video stream)
+# always matches a rendered frame.
+_BG_COLOR = _RENDER_BACKGROUND_COLOR
 # Placeholder resolution and fps come from config (paths.render_resolution /
 # paths.render_fps) so it matches the rest of the render.
 
@@ -236,7 +240,7 @@ def _mux_synth_background(
     output_path: str,
     audio_dur: float,
 ) -> None:
-    """Mux narration over a synthesized solid #1C1C1C background.
+    """Mux narration over a synthesized solid background (the render color).
 
     Used when the cue's rendered video has no usable video stream (a too-short
     render). Produces a clean dark clip lasting the full narration so the section
