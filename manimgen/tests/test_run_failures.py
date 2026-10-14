@@ -192,7 +192,7 @@ class TestUsageLimitStop:
 
         video = tmp_path / "v.mp4"
         video.write_bytes(b"x")
-        monkeypatch.setattr(layout_checker, "_sample_frames", lambda p: ["f"])
+        monkeypatch.setattr(layout_checker, "_sample_frames", lambda p, *a, **k: ["f"])
         monkeypatch.setattr(layout_checker, "load_reference_frames", lambda: [])
         monkeypatch.setattr(layout_checker, "_load_layout_system_prompt", lambda: "")
 

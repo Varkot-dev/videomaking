@@ -247,12 +247,12 @@ def test_repeated_visual_defect_does_not_burn_repeated_vision_calls(
     # frame_checker finds nothing; layout_checker keeps reporting the SAME defect.
     monkeypatch.setattr(
         "manimgen.validator.frame_checker.check_frames",
-        lambda v: type("R", (), {"issues": []})(),
+        lambda v, *a, **k: type("R", (), {"issues": []})(),
     )
     monkeypatch.setattr(
         retry_mod,
         "check_layout",
-        lambda v: {
+        lambda v, *a, **k: {
             "ok": False,
             "issues": "ISSUE: text overlaps | CAUSE: bad layout | FIX: move it",
             "frames": [],
