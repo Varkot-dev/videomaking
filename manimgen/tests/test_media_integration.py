@@ -161,6 +161,27 @@ def test_cut_video_at_cues_produces_video_only_clips(small_render):
         assert _duration(out) == pytest.approx(want, abs=_TOL)
 
 
+def test_cue_past_render_end_holds_last_frame_and_muxes(small_render):
+    """#59: a cue that starts past the end of a short render must not be an
+    empty, stream-less clip; it holds the last frame and still muxes."""
+    tmp_path = small_render
+    muxer.clear_mismatch_log()
+    src = _make_video(tmp_path / "scene.mp4", 1)
+    outs = muxer.cut_video_at_cues(
+        src, [0.0, 1.0, 2.0], [1.0, 1.0, 1.5], str(tmp_path / "cuts"), "section_04"
+    )
+    for out, want in zip(outs, (1.0, 1.0, 1.5)):
+        assert _kinds(_probe(out)) == ["video"]
+        assert _duration(out) == pytest.approx(want, abs=_TOL)
+    held = sorted(m["output_path"] for m in muxer.get_mismatch_log())
+    assert held == sorted(outs[1:])
+
+    audio = _make_audio(tmp_path / "a.m4a", 1.5)
+    muxed = muxer.mux_audio_video(outs[2], audio, str(tmp_path / "mux" / "m.mp4"))
+    assert sorted(_kinds(_probe(muxed))) == ["audio", "video"]
+    assert _stream_duration(muxed, "video") == pytest.approx(1.5, abs=_TOL)
+
+
 def test_assemble_video_joins_sections_with_audio(small_render):
     tmp_path = small_render
     clips = []
