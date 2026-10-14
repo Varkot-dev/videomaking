@@ -307,6 +307,46 @@ class TestStripJsonFence:
         with patch(f"manimgen.llm.{helper}", return_value="```json\n[1]\n```"):
             assert chat(system="s", user="u", json_mode=True) == "[1]"
 
+    def test_chat_forwards_json_mode_to_ollama(self, monkeypatch):
+        monkeypatch.setenv("LLM_PROVIDER", "ollama")
+        with patch("manimgen.llm._ollama", return_value="{}") as mock_ollama:
+            chat(system="s", user="u", json_mode=True)
+        assert mock_ollama.call_args.kwargs.get("json_mode") is True
+
+    @pytest.mark.parametrize(
+        "provider,helper",
+        [
+            ("claude_cli", "_claude_cli"),
+            ("anthropic", "_anthropic"),
+            ("ollama", "_ollama"),
+        ],
+    )
+    def test_invalid_json_reply_is_logged_not_silent(
+        self, monkeypatch, caplog, provider, helper
+    ):
+        monkeypatch.setenv("LLM_PROVIDER", provider)
+        monkeypatch.setenv("MANIMGEN_ALLOW_PAID_API", "1")
+        with patch(f"manimgen.llm.{helper}", return_value="Sure! {not json"):
+            with caplog.at_level("WARNING", logger="manimgen.llm"):
+                out = chat(system="s", user="u", json_mode=True)
+        assert out == "Sure! {not json", "raw text must still reach the caller"
+        assert "not valid JSON" in caplog.text
+        assert provider in caplog.text
+
+    def test_valid_json_reply_logs_no_warning(self, monkeypatch, caplog):
+        monkeypatch.setenv("LLM_PROVIDER", "claude_cli")
+        with patch("manimgen.llm._claude_cli", return_value='```json\n{"a": 1}\n```'):
+            with caplog.at_level("WARNING", logger="manimgen.llm"):
+                assert chat(system="s", user="u", json_mode=True) == '{"a": 1}'
+        assert "not valid JSON" not in caplog.text
+
+    def test_no_json_check_without_json_mode(self, monkeypatch, caplog):
+        monkeypatch.setenv("LLM_PROVIDER", "claude_cli")
+        with patch("manimgen.llm._claude_cli", return_value="x = 1"):
+            with caplog.at_level("WARNING", logger="manimgen.llm"):
+                chat(system="s", user="u")
+        assert "not valid JSON" not in caplog.text
+
     def test_chat_docstring_does_not_promise_native_json_for_other_providers(self):
         doc = chat.__doc__ or ""
         assert "NOT" in doc and "guaranteed JSON" in doc
@@ -799,6 +839,18 @@ class TestOllamaHygiene:
         payload = post.call_args.kwargs["json"]
         assert payload["options"]["num_ctx"] == llm_mod._LLM_CONFIG["ollama_num_ctx"]
         assert payload["options"]["num_ctx"] >= 32768
+
+    def test_json_mode_requests_native_format_json(self):
+        ok = self._resp(200, {"message": {"content": "{}"}})
+        with patch("requests.post", return_value=ok) as post:
+            llm_mod._ollama("s", "u", [], json_mode=True)
+        assert post.call_args.kwargs["json"]["format"] == "json"
+
+    def test_no_format_key_without_json_mode(self):
+        ok = self._resp(200, {"message": {"content": "x"}})
+        with patch("requests.post", return_value=ok) as post:
+            llm_mod._ollama("s", "u", [])
+        assert "format" not in post.call_args.kwargs["json"]
 
     def test_num_ctx_comes_from_config(self, monkeypatch):
         monkeypatch.setitem(llm_mod._LLM_CONFIG, "ollama_num_ctx", 8192)
