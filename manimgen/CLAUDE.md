@@ -295,6 +295,8 @@ After every fix, the file is **always reloaded from disk** — previously a bug 
 - Video longer than audio → trim video to audio duration
 - Audio longer than video → freeze last frame (`tpad`)
 - Logs WARNING at diff > 1.0s, LARGE MISMATCH at diff > 1.5s
+- Cutter: a cue that starts past the end of the render is built from the last rendered frame, never an empty clip (#59)
+- No video stream in a cue clip → solid `#1C1C1C` background under the narration
 
 ---
 
@@ -456,10 +458,13 @@ Most visible quality issue. Cues often have 1–8 seconds of frozen still at the
 **Root cause:** Director subtracts one iteration's `run_time` instead of `n * run_time`.
 
 **Fix plan:**
-- Director prompt: make the loop timing rule impossible to miss (already has example, but LLM ignores it under pressure — move to top of Cue timing section) — STILL OPEN
+- ✅ DONE: Director prompt. The loop-timing law opens the Cue timing section of `director_system.md` with a RIGHT (accumulate `anim_time`, subtract the total) and a WRONG (subtract one iteration) example. `tests/test_director_prompt_loop_timing.py` keeps it first.
 - ✅ DONE — `timing_verifier` is now a single authoritative gate (`retry.apply_timing_gate`) called as a zero-cost pre-render check in `cli.py`. Unresolvable timing issues skip the first render and route straight to the retry path, with timing warnings carried into the LLM fix prompt.
+- ✅ DONE (#59): empty cue clips. When the render ends before a cue starts (less than one frame left), a plain cut gave a ~262-byte clip with no video stream and the section was dropped. `cut_video_at_cues` now probes the render length and builds such a cue by holding the last rendered frame for the cue duration (falls back to the plain cut if that ffmpeg call fails). The gap is recorded in the mismatch log and as a `cue_past_video_end` evidence event so the defect stays visible. The muxer still synthesizes a `#1C1C1C` background for any clip that has no video stream.
 
-**Files:** `generator/prompts/director_system.md` (prompt work still open), `validator/timing_verifier.py`, `validator/retry.py`, `cli.py`
+**Still open:** this is mitigation. A loop the Director under-counts still yields a frozen tail on screen; whether the prompt change reduces how often that happens is unmeasured (check `cue_past_video_end` and `av_mismatch` counts in the evidence log after real runs).
+
+**Files:** `generator/prompts/director_system.md`, `validator/timing_verifier.py`, `validator/retry.py`, `renderer/muxer.py` (cutter), `cli.py`
 
 ### 2. ✅ RESOLVED — timing_verifier wiring
 `timing_verifier` is wired in via `retry.apply_timing_gate` (verify → auto-fix → re-verify). It runs: (a) once on initial code before the first render in `cli.py`; (b) on initial code in `retry_scene`; (c) after every error fix and visual fix. The previous duplicated ad-hoc copy in `cli.py` was removed in favor of the shared gate. Unresolvable warnings block the first render and force the retry path.

@@ -318,6 +318,9 @@ Decision. Audio comes first and drives the rest.
    frame (`tpad`) by the gap, otherwise it pads the audio with silence (`apad`).
    It never changes speed. Mismatches over 1.0 s are logged and recorded in the
    evidence log; over 1.5 s the log line says the tail will be a freeze-frame.
+   A cue that starts past the end of the render (the Director under-counted a
+   loop) would cut to an empty clip with no video stream, so the cutter holds
+   the last rendered frame for that cue instead and records the gap (#59).
 
 Alternatives. Estimate from word count (the Director's fallback, 130 words per
 minute, only when there is no audio); stretch video (visible); a forced aligner
