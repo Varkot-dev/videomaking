@@ -75,30 +75,85 @@ def _block_external_network(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Claude CLI guard
+# LLM provider guard
 # ---------------------------------------------------------------------------
 # claude_cli is the default LLM provider, so any test that reaches chat()
 # without mocking it would start the real `claude` program on a developer's
 # machine and spend Claude plan allowance on every local test run (measured: 4
-# launches per run from tests/test_director.py before this guard). Make the
-# program unfindable by default so those tests fail the same way they did when
-# no API key was set, and nothing is ever launched. Tests that exercise the
-# provider patch `which` themselves (and mock the subprocess), which overrides
-# this.
+# launches per run from tests/test_director.py before this guard). Three layers
+# stop that, and the same for the paid and local providers:
+#
+# 1. `shutil.which` cannot find claude, by bare name or by full path (so an
+#    llm.claude_cli_path set to /usr/local/bin/claude is covered too). Unmocked
+#    chat() then fails with the same "not found on PATH" error as before.
+# 2. llm._run_cli, the one function that spawns a process, refuses any command
+#    whose program is claude. This catches a test that patches `which` to a
+#    fake path but forgets to mock the subprocess.
+# 3. llm._anthropic, llm._gemini and llm._ollama raise. The socket guard above
+#    already blocks the paid APIs, but Ollama runs on loopback, so a developer
+#    with a local Ollama server would otherwise get real calls.
+#
+# A test that patches one of these seams itself overrides the guard, because
+# its patch is applied after this fixture. A test that drives the real
+# provider function with its transport mocked (fake SDK module, patched
+# requests.post) opts out of layer 3 with @pytest.mark.allow_real_llm. Layers
+# 1 and 2 have no opt-out: a test that needs claude patches `which` and
+# llm._run_cli itself.
+
+_CLAUDE_NAMES = {"claude", "claude.exe", "claude.cmd", "claude.bat", "claude.ps1"}
+
+
+def _is_claude_program(name) -> bool:
+    import os
+
+    base = os.path.basename(str(name).replace("\\", "/")).lower()
+    return base in _CLAUDE_NAMES
+
+
+class RealLlmCallInTest(RuntimeError):
+    """A test reached a real LLM provider without mocking it."""
 
 
 @pytest.fixture(autouse=True)
-def _never_launch_real_claude(monkeypatch):
+def _never_launch_real_claude(request, monkeypatch):
     import shutil
 
     real_which = shutil.which
 
     def which(name, *args, **kwargs):
-        if str(name).lower() in {"claude", "claude.exe", "claude.cmd"}:
+        if _is_claude_program(name):
             return None
         return real_which(name, *args, **kwargs)
 
     monkeypatch.setattr(shutil, "which", which)
+
+    import manimgen.llm as llm_mod
+
+    real_run_cli = llm_mod._run_cli
+
+    def guarded_run_cli(cmd, *args, **kwargs):
+        if cmd and _is_claude_program(cmd[0]):
+            raise RealLlmCallInTest(
+                f"Test tried to launch the real Claude CLI ({cmd[0]!r}). Mock "
+                "manimgen.llm._run_cli or llm.chat instead."
+            )
+        return real_run_cli(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(llm_mod, "_run_cli", guarded_run_cli)
+
+    if request.node.get_closest_marker("allow_real_llm"):
+        return
+
+    for name in ("_anthropic", "_gemini", "_ollama"):
+
+        def blocked(*args, _name=name, **kwargs):
+            raise RealLlmCallInTest(
+                f"Test reached the real LLM provider llm.{_name}(). Mock "
+                f"llm.chat or llm.{_name}, or mark the test "
+                "@pytest.mark.allow_real_llm if it mocks the transport itself."
+            )
+
+        monkeypatch.setattr(llm_mod, name, blocked)
 
 
 # ---------------------------------------------------------------------------

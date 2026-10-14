@@ -390,6 +390,21 @@ def test_clip_durations_are_probed_once_per_unchanged_file(client, mocker, tmp_p
     assert probe.call_count == 3
 
 
+def test_clip_list_skips_atomic_output_temp_files(client, mocker, tmp_path):
+    """An encode in progress (utils.atomic_output temp file) is not a clip."""
+    from manimgen.utils import atomic_output
+
+    mocker.patch("manimgen.editor.server._probe_duration", return_value=1.0)
+    (tmp_path / "section_01_cue00.mp4").write_text("x", encoding="utf-8")
+    with atomic_output(str(tmp_path / "section_01_cue01.mp4")) as tmp:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("half written")
+        ids = [c["id"] for c in client.get("/api/clips").get_json()]
+        assert ids == ["section_01_cue00"]
+    ids = [c["id"] for c in client.get("/api/clips").get_json()]
+    assert ids == ["section_01_cue00", "section_01_cue01"]
+
+
 @pytest.mark.unit
 def test_failed_probe_is_not_cached(client, mocker, tmp_path):
     server._DURATION_CACHE.clear()
