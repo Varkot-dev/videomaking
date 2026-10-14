@@ -16,6 +16,12 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
+# _extract_cues() asks the LLM to refill missing cues. These tests cover the
+# fallback path, so chat() is mocked to fail instead of reaching a provider.
+_PLANNER_CHAT = "manimgen.planner.lesson_planner.chat"
+_NO_LLM = RuntimeError("no LLM in this test")
+
+
 class TestPlannerStoryboardOutput(unittest.TestCase):
     """Planner _extract_cues() correctly populates section['cues']."""
 
@@ -40,7 +46,8 @@ class TestPlannerStoryboardOutput(unittest.TestCase):
         self.assertEqual(section["cues"][0]["visual"], "Axes appear")
         self.assertEqual(section["cues"][1]["index"], 1)
 
-    def test_extract_cues_fills_missing_visuals(self):
+    @patch(_PLANNER_CHAT, side_effect=_NO_LLM)
+    def test_extract_cues_fills_missing_visuals(self, _mock_chat):
         from manimgen.planner.lesson_planner import _extract_cues
 
         plan = {
@@ -60,7 +67,8 @@ class TestPlannerStoryboardOutput(unittest.TestCase):
         self.assertTrue(len(section["cues"][1]["visual"]) > 0)
         self.assertTrue(len(section["cues"][2]["visual"]) > 0)
 
-    def test_extract_cues_strips_cue_markers_from_narration(self):
+    @patch(_PLANNER_CHAT, side_effect=_NO_LLM)
+    def test_extract_cues_strips_cue_markers_from_narration(self, _mock_chat):
         from manimgen.planner.lesson_planner import _extract_cues
 
         plan = {
@@ -133,7 +141,8 @@ class TestPlannerStoryboardOutput(unittest.TestCase):
         self.assertEqual(len(cues), 3)  # still N+1, degraded
         self.assertTrue(all(len(c["visual"]) > 0 for c in cues))
 
-    def test_extract_cues_word_indices_length_matches_cues(self):
+    @patch(_PLANNER_CHAT, side_effect=_NO_LLM)
+    def test_extract_cues_word_indices_length_matches_cues(self, _mock_chat):
         from manimgen.planner.lesson_planner import _extract_cues
 
         plan = {
@@ -147,7 +156,8 @@ class TestPlannerStoryboardOutput(unittest.TestCase):
         section = result["sections"][0]
         self.assertEqual(len(section["cue_word_indices"]), len(section["cues"]))
 
-    def test_extract_cues_planner_off_by_one_synthesises_fallback(self):
+    @patch(_PLANNER_CHAT, side_effect=_NO_LLM)
+    def test_extract_cues_planner_off_by_one_synthesises_fallback(self, _mock_chat):
         """Regression: planner gives N cues for N [CUE] markers instead of N+1.
 
         When the LLM omits the opening cue (index 0), _extract_cues must:
@@ -317,13 +327,24 @@ class TestCodeguardPrecheck(unittest.TestCase):
         self.assertIsInstance(result, str)
 
     def test_precheck_file_returns_dict(self):
+        import tempfile
+
         from manimgen.validator.codeguard import precheck_and_autofix_file
-        path = "/tmp/test_codeguard_scene.py"
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("from manimlib import *\nclass S(Scene):\n    def construct(self): self.wait(1)\n")
-        result = precheck_and_autofix_file(path)
-        self.assertIsInstance(result, dict)
-        self.assertIn("ok", result)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "test_codeguard_scene.py")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(
+                    "from manim import *\nclass S(Scene):\n"
+                    "    def construct(self): self.wait(1)\n"
+                )
+            result = precheck_and_autofix_file(path)
+            with open(path, encoding="utf-8") as f:
+                on_disk = f.read()
+        # A valid scene passes, and the auto-fix is written back to the file.
+        self.assertIs(result["ok"], True)
+        self.assertEqual(result["stderr"], "")
+        self.assertIn("from manimlib import *", on_disk)
+        self.assertNotIn("from manim import *", on_disk)
 
 
 class TestCutter(unittest.TestCase):

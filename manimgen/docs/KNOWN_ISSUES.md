@@ -48,9 +48,11 @@ past the backslash-only regex repair.
 **Fix:** pass `json_mode=True` on planner `chat()` calls →
 `response_mime_type="application/json"` so Gemini emits guaranteed-valid JSON.
 **Guard:** `check_planner_uses_json_mode()`.
-**Other providers:** only Gemini has native JSON mode. For `claude_cli`,
-`anthropic` and `ollama`, `chat(json_mode=True)` relies on the prompt and strips
-a surrounding markdown `json` code fence before the planner parses the reply.
+**Other providers:** only Gemini has native JSON mode; Ollama is sent its
+`format: "json"` option. For `claude_cli` and `anthropic`,
+`chat(json_mode=True)` relies on the prompt. For all three it strips a
+surrounding markdown `json` code fence and logs a WARNING when the reply still
+does not parse, before the planner parses (and if needed re-asks).
 
 ## 5. `--fps` crashes manimgl 1.7.2 — `int / str`
 **Symptom:** EVERY render aborts with
@@ -78,8 +80,9 @@ If it is installed somewhere off PATH, set `llm.claude_cli_path` in
 `MANIMGEN_ALLOW_PAID_API=1` (they bill per token and are blocked otherwise).
 **Note:** `ANTHROPIC_API_KEY` is stripped from the `claude` subprocess on
 purpose, so a key in `.env` never silently moves `claude_cli` calls onto
-per-token API billing. Hitting the Claude plan's usage limit also shows up as
-`claude -p failed`; wait for the limit to reset and use `manimgen --resume`.
+per-token API billing. Hitting the Claude plan's usage limit stops the run with
+exit code 4 (`UsageLimitError`, message starts `claude -p failed`); wait for the
+limit to reset and use `manimgen --resume`.
 **Guard:** `check_claude_cli()`.
 
 ## 7. `ffmpeg` / `ffprobe` / `manimgl` missing from PATH

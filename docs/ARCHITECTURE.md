@@ -107,8 +107,12 @@ names (so unrelated secrets such as other services' API keys never reach it), wi
 `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, the Bedrock, Vertex and Foundry
 switches and the variables of a parent Claude Code session removed on top: a stray
 key would make Claude Code bill per token with no visible sign. Each call is tried
-up to 3 times with a 600 second timeout, except failures a retry cannot fix (not
-logged in, usage limit, credit balance), which stop at once. Three guards keep "no
+up to 3 times with a 600 second timeout, but a timeout gets only one more try
+(each try can hang for the full 600 seconds), and failures a retry cannot fix (not
+logged in, usage limit, credit balance) stop at once. A used-up plan allowance
+raises `UsageLimitError` (a `RuntimeError` subclass): the primary signal is a
+`rate_limit_event` whose `rate_limit_info.status` is not `allowed` or
+`allowed_warning`, and the error text markers are a fallback. Three guards keep "no
 cost" true:
 
 - Paid-API guard: `anthropic` and `gemini` raise `PaidApiBlockedError` unless
@@ -133,8 +137,9 @@ resolve to a loopback, private or link-local address, lower quality).
 Trade-off. Per-call latency from starting Claude Code. The guards read
 `stream-json` fields that are not a documented contract, so each is parsed
 defensively. No native JSON mode: `json_mode=True` only strips a code fence on
-`claude_cli`, `anthropic` and `ollama` (Gemini sets a JSON response type), so the
-planner validates and re-asks (`_chat_plan`). Subscription windows can run out
+`claude_cli` and `anthropic` (Gemini sets a JSON response type, Ollama gets
+`format: "json"`); a non-Gemini reply that still does not parse is logged as a
+warning, and the planner validates and re-asks (`_chat_plan`). Subscription windows can run out
 mid-run, which is a resumable stop, not a crash.
 
 Where. `manimgen/manimgen/llm.py`, `manimgen/scripts/check_billing.py` (one small
@@ -305,8 +310,9 @@ Decision. Audio comes first and drives the rest.
    `start` of the next, so no last syllable is clipped. Durations sum to the audio.
 4. `str.split()` and edge-tts tokenize contractions, numbers and hyphens
    differently, so `cue_parser.align_cue_indices` re-derives each index against
-   the TTS tokens. An in-range but shifted index would silently pick the wrong
-   word.
+   the TTS tokens by aligning the two streams' letters and digits character by
+   character (equal token counts are not taken as agreement). An in-range but
+   shifted index would silently pick the wrong word.
 5. `audio_slicer` cuts one AAC slice per cue (re-encoded: no MP3 frame drift).
 6. The Director gets the durations and marks blocks `# CUE N`.
    `timing_verifier.verify_timing` splits by those comments, sums `run_time` and
@@ -318,6 +324,9 @@ Decision. Audio comes first and drives the rest.
    frame (`tpad`) by the gap, otherwise it pads the audio with silence (`apad`).
    It never changes speed. Mismatches over 1.0 s are logged and recorded in the
    evidence log; over 1.5 s the log line says the tail will be a freeze-frame.
+   A cue that starts past the end of the render (the Director under-counted a
+   loop) would cut to an empty clip with no video stream, so the cutter holds
+   the last rendered frame for that cue instead and records the gap (#59).
 
 Alternatives. Estimate from word count (the Director's fallback, 130 words per
 minute, only when there is no audio); stretch video (visible); a forced aligner
@@ -555,8 +564,11 @@ CI (`.github/workflows/ci.yml`, on every pull request and on pushes to `main`):
 - `lint`: ruff 0.15.13 `check` and `format --check`, Python 3.13.
 - `test`: full suite on Ubuntu, Python 3.11 and 3.13 (3.13 adds a coverage report
   in the job summary, report only, no threshold).
-- `smoke`: pipeline contracts, e2e and Director tests. It repeats part of `test`
-  because its name is a required status check (`docs/BRANCH_PROTECTION.md`).
+- `smoke`: pipeline contracts, e2e, Director and real-ffmpeg media tests. It
+  repeats part of `test` because its name is a required status check
+  (`docs/BRANCH_PROTECTION.md`); deleting it needs that rule removed first.
+- All three test jobs set `MANIMGEN_REQUIRE_FFMPEG=1`, so the real-ffmpeg tests
+  fail instead of skipping when ffmpeg is missing on a runner.
 - `windows`: full suite on `windows-latest`, Python 3.11, no `PYTHONUTF8`.
 - `nightly-render.yml` (03:17 UTC, or manual) has four independent jobs: a real
   480p render on Linux (Xvfb and Mesa llvmpipe) and on Windows (Mesa llvmpipe), and

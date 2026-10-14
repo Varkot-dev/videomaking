@@ -66,15 +66,25 @@ _CLI_TIMEOUT_SECONDS = 600.0
 # Pause before retrying a failed `claude -p` call: attempt N waits N * this.
 _CLI_RETRY_BACKOFF_SECONDS = 2.0
 
+# A timed-out `claude -p` call is retried at most this many times. Each try
+# can take _CLI_TIMEOUT_SECONDS, so the full retry budget after a hang would
+# be half an hour of waiting on a call that is likely to hang again.
+_CLI_TIMEOUT_RETRIES = 1
+
 # Failures a retry cannot fix (not logged in, plan allowance used up). Retrying
 # would only start two more Claude Code processes that fail the same way.
+# The usage markers are a secondary signal: the primary one is a
+# rate_limit_event whose status is not "allowed" (see _check_usage_rejected).
+_CLI_USAGE_MARKERS = (
+    "usage limit",
+    "limit reached",
+    "credit balance",
+)
 _CLI_FATAL_MARKERS = (
     "/login",
     "not logged in",
     "invalid api key",
-    "usage limit",
-    "limit reached",
-    "credit balance",
+    *_CLI_USAGE_MARKERS,
 )
 
 
@@ -153,6 +163,14 @@ class PaidApiBlockedError(RuntimeError):
     """Raised instead of making a call that would be billed per token."""
 
 
+class UsageLimitError(RuntimeError):
+    """The Claude plan's usage limit is reached: stop the run, resume later.
+
+    A RuntimeError subclass, so code that catches the plain RuntimeError
+    `claude -p` raised before this type existed still catches it.
+    """
+
+
 def _paid_api_allowed() -> bool:
     return os.environ.get(_ALLOW_PAID_ENV, "").strip().lower() in {"1", "true", "yes"}
 
@@ -183,11 +201,16 @@ def chat(
                 (Gemini response_mime_type='application/json'). Use only for
                 calls that expect a JSON object/array — never for code
                 generation, which returns Python. Only Gemini enforces it
-                natively. For anthropic, claude_cli and ollama this is NOT
-                guaranteed JSON: the prompt must ask for JSON, and the only
-                help given is stripping a surrounding markdown code fence.
-                The text is not validated, so callers still need their own
-                parse-and-retry (the planner has one).
+                natively. Ollama gets its native `format: "json"` request
+                option, which constrains decoding but is not a schema. For
+                anthropic and claude_cli this is NOT guaranteed JSON: the
+                prompt must ask for JSON, and the only help given is
+                stripping a surrounding markdown code fence. For every
+                provider except Gemini the reply is then checked with
+                json.loads and a WARNING is logged when it does not parse, so
+                the degraded path is never silent. The text is returned
+                either way, so callers still need their own parse-and-retry
+                (the planner has one).
         role:   What the call is for (see ROLES). Picks the model (env
                 MANIMGEN_MODEL_<ROLE>, then llm.models in config.yaml, then the
                 provider default) and labels the call in the usage ledger.
@@ -219,8 +242,12 @@ def chat(
         elif provider == "claude_cli":
             text = _claude_cli(system, user, images or [], **kw)
         else:
-            text = _ollama(system, user, images or [], **kw)
-        return _strip_json_fence(text) if json_mode else text
+            text = _ollama(system, user, images or [], json_mode=json_mode, **kw)
+        if not json_mode:
+            return text
+        text = _strip_json_fence(text)
+        _warn_if_not_json(provider, text)
+        return text
     except BaseException as exc:
         error = f"{type(exc).__name__}: {exc}"[:500]
         raise
@@ -244,6 +271,23 @@ def _strip_json_fence(text: str) -> str:
     if len(lines) >= 2 and lines[-1].strip() == "```":
         return "\n".join(lines[1:-1]).strip()
     return stripped
+
+
+def _warn_if_not_json(provider: str, text: str) -> None:
+    """Log (never raise) when a json_mode reply from a non-Gemini provider
+    does not parse, so prompt-only JSON failing is visible in the run log."""
+    try:
+        json.loads(text)
+    except ValueError as exc:
+        logger.warning(
+            "[llm] json_mode reply from %s is not valid JSON (%s); %s. "
+            "Returning the raw text for the caller's parse-and-retry.",
+            provider,
+            exc,
+            "Ollama format=json was requested"
+            if provider == "ollama"
+            else "this provider has no native JSON mode, only the prompt asks for JSON",
+        )
 
 
 def _gemini(
@@ -580,7 +624,10 @@ def _claude_cli(
         ]
 
         last_error = ""
-        for attempt in range(1, _REQUEST_RETRY_ATTEMPTS + 1):
+        max_attempts = _REQUEST_RETRY_ATTEMPTS
+        attempt = 0
+        while attempt < max_attempts:
+            attempt += 1
             _ensure_plan_headroom()
             if attempt > 1:
                 time.sleep(_CLI_RETRY_BACKOFF_SECONDS * (attempt - 1))
@@ -595,6 +642,9 @@ def _claude_cli(
             except subprocess.TimeoutExpired:
                 last_error = f"timed out after {_CLI_TIMEOUT_SECONDS:.0f}s"
                 logger.warning("[llm] claude -p attempt %d %s", attempt, last_error)
+                # A call that hung once tends to hang again: allow at most
+                # _CLI_TIMEOUT_RETRIES more tries instead of the full budget.
+                max_attempts = min(max_attempts, attempt + _CLI_TIMEOUT_RETRIES)
                 continue
 
             stdout = proc.stdout.decode("utf-8", errors="replace")
@@ -618,7 +668,13 @@ def _claude_cli(
                     stderr or stdout.strip() or f"exit code {proc.returncode}"
                 )[-2000:]
             logger.warning("[llm] claude -p attempt %d failed: %s", attempt, last_error)
-            if any(m in last_error.lower() for m in _CLI_FATAL_MARKERS):
+            lowered = last_error.lower()
+            if any(m in lowered for m in _CLI_USAGE_MARKERS):
+                raise UsageLimitError(
+                    f"claude -p failed (not retryable): {last_error}"
+                    f"{_usage_reset_hint()}"
+                )
+            if any(m in lowered for m in _CLI_FATAL_MARKERS):
                 raise RuntimeError(f"claude -p failed (not retryable): {last_error}")
 
     raise RuntimeError(f"claude -p failed: {last_error}")
@@ -698,6 +754,16 @@ def _plan_block_message(window: str, utilization: float, resets_at: float) -> st
     )
 
 
+def _usage_reset_hint() -> str:
+    """' Resets around <time> local time.' from the last plan state, or ''."""
+    now = time.time()
+    resets = [r for _, r in _plan_windows.values() if r > now]
+    if not resets:
+        return ""
+    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(max(resets)))
+    return f" Resets around {when} local time."
+
+
 def _ensure_plan_headroom() -> None:
     """Refuse to start a call when the last known plan state says it could bill."""
     if _paid_api_allowed() or not _overage_possible:
@@ -714,16 +780,48 @@ def _ensure_plan_headroom() -> None:
             )
 
 
-def _check_plan_limits(stdout: str) -> None:
-    """Stop the run if a call used, or is about to run into, overage billing."""
-    global _overage_possible, _plan_logged, _last_plan_info
-    if _paid_api_allowed():
+# rate_limit_info.status values that mean the call went through.
+_ALLOWED_LIMIT_STATUSES = frozenset({"allowed", "allowed_warning"})
+
+
+def _check_usage_rejected(info: dict) -> None:
+    """Raise UsageLimitError when a rate_limit_event says the call was refused.
+
+    rate_limit_info.status is "allowed" (or "allowed_warning" near the limit)
+    while the plan has allowance left, and "rejected" once it is used up. Any
+    other status is treated as a stop too; a missing status is not.
+    """
+    status = info.get("status")
+    if not isinstance(status, str) or status in _ALLOWED_LIMIT_STATUSES:
         return
+    resets_at = info.get("resetsAt")
+    window = info.get("rateLimitType")
+    window = window if isinstance(window, str) else ""
+    if isinstance(resets_at, (int, float)) and resets_at > 0:
+        # Record the refused window as full so the stop message (here and in
+        # cli._plan_reset_hint) can name when it resets.
+        _plan_windows[window or "plan"] = (1.0, float(resets_at))
+    detail = f"status {status!r}" + (f", {window}" if window else "")
+    raise UsageLimitError(
+        "claude -p failed (not retryable): Claude plan usage limit reached "
+        f"(rate_limit_event {detail}).{_usage_reset_hint()}"
+    )
+
+
+def _check_plan_limits(stdout: str) -> None:
+    """Stop the run if a call hit the plan's usage limit, or used (or is about
+    to run into) overage billing."""
+    global _overage_possible, _plan_logged, _last_plan_info
+    paid_ok = _paid_api_allowed()
     for event in _iter_cli_events(stdout):
         if event.get("type") != "rate_limit_event":
             continue
         info = event.get("rate_limit_info")
         if not isinstance(info, dict):
+            continue
+        # A refused call is a usage stop whether or not paid calls are allowed.
+        _check_usage_rejected(info)
+        if paid_ok:
             continue
         if info.get("isUsingOverage") is True:
             raise PaidApiBlockedError(
@@ -754,7 +852,8 @@ def _check_plan_limits(stdout: str) -> None:
                 info.get("overageStatus", "unknown"),
                 info.get("overageDisabledReason", "n/a"),
             )
-    _ensure_plan_headroom()
+    if not paid_ok:
+        _ensure_plan_headroom()
 
 
 def _ensure_subscription_auth(stdout: str) -> None:
@@ -1037,7 +1136,13 @@ def _model_for(provider: str, role: str | None = None) -> str:
     return default
 
 
-def _ollama(system: str, user: str, images: list[str], role: str | None = None) -> str:
+def _ollama(
+    system: str,
+    user: str,
+    images: list[str],
+    role: str | None = None,
+    json_mode: bool = False,
+) -> str:
     import requests
 
     cfg = _LLM_CONFIG
@@ -1053,6 +1158,9 @@ def _ollama(system: str, user: str, images: list[str], role: str | None = None) 
         "stream": False,
         "options": {"num_ctx": cfg["ollama_num_ctx"]},
     }
+    if json_mode:
+        # Ollama's native JSON mode: decoding is constrained to valid JSON.
+        payload["format"] = "json"
 
     last_exc: Exception | None = None
     for _ in range(_REQUEST_RETRY_ATTEMPTS):

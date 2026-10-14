@@ -141,12 +141,12 @@ def test_rejected_llm_visual_fix_is_discarded_and_best_render_kept(
     monkeypatch.setattr(retry_mod, "_run_and_capture", fake_run)
     monkeypatch.setattr(
         "manimgen.validator.frame_checker.check_frames",
-        lambda p: FrameCheckResult(ok=True),
+        lambda p, *a, **k: FrameCheckResult(ok=True),
     )
     monkeypatch.setattr(
         retry_mod,
         "check_layout",
-        lambda p: {"ok": False, "issues": "ISSUE: overlap", "skipped": False},
+        lambda p, *a, **k: {"ok": False, "issues": "ISSUE: overlap", "skipped": False},
     )
     monkeypatch.setattr(retry_mod, "_request_visual_fix", lambda *a, **k: UNSAFE)
     scene = _write(tmp_path, SAFE)

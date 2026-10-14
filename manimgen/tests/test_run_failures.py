@@ -22,7 +22,7 @@ import pytest
 import manimgen.renderer.muxer as muxer
 import manimgen.validator.retry as retry
 from manimgen import cli
-from manimgen.llm import PaidApiBlockedError
+from manimgen.llm import PaidApiBlockedError, UsageLimitError
 from tests.run_harness import _Fakes, _plan
 
 THREE = _plan(
@@ -128,8 +128,9 @@ class TestUsageLimitStop:
         [
             PaidApiBlockedError("plan is at 95% of its five_hour allowance"),
             RuntimeError(LIMIT_TEXT),
+            UsageLimitError("Claude plan usage limit reached"),
         ],
-        ids=["plan_guard", "claude_usage_limit"],
+        ids=["plan_guard", "claude_usage_limit", "usage_limit_error"],
     )
     def test_stops_cleanly_with_exit_4(self, fakes, monkeypatch, capsys, exc):
         started = _director_raises_for(fakes, monkeypatch, "section_02", exc)
@@ -192,7 +193,7 @@ class TestUsageLimitStop:
 
         video = tmp_path / "v.mp4"
         video.write_bytes(b"x")
-        monkeypatch.setattr(layout_checker, "_sample_frames", lambda p: ["f"])
+        monkeypatch.setattr(layout_checker, "_sample_frames", lambda p, *a, **k: ["f"])
         monkeypatch.setattr(layout_checker, "load_reference_frames", lambda: [])
         monkeypatch.setattr(layout_checker, "_load_layout_system_prompt", lambda: "")
 

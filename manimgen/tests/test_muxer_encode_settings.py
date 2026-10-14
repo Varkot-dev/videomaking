@@ -81,3 +81,19 @@ class TestEncodeSettings:
         src = cmds[0][cmds[0].index("-i") + 1]
         assert "s=1280x720" in src and "r=24" in src
         assert cmds[0][cmds[0].index("-pix_fmt") + 1] == "yuv420p"
+
+
+def test_placeholder_color_matches_render_background(tmp_path):
+    from manimgen.validator import render_command
+
+    cmds = []
+    with (
+        patch.object(muxer, "_get_duration", side_effect=[1.0, 2.0]),
+        patch.object(muxer, "_has_video_stream", return_value=False),
+        patch.object(muxer.subprocess, "run", side_effect=_writing_fake(cmds)),
+    ):
+        muxer.mux_audio_video("v.mp4", "a.m4a", str(tmp_path / "o.mp4"))
+    src = cmds[0][cmds[0].index("-i") + 1]
+    assert f"c={render_command._BACKGROUND_COLOR}:" in src
+    render_argv = render_command.build_manimgl_command("s.py", "S")
+    assert render_argv[render_argv.index("-c") + 1] == muxer._BG_COLOR

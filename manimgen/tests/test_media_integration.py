@@ -5,9 +5,14 @@ change or a filtergraph break was invisible to CI. These tests build tiny
 synthetic clips with lavfi sources (one to three seconds, 160x90) and run the
 real muxer, audio slicer, cutter and assembler on them, then check the result
 with ffprobe. They are skipped when ffmpeg or ffprobe is not on PATH.
+
+CI sets MANIMGEN_REQUIRE_FFMPEG=1, which turns that skip into a failure: a
+runner whose ffmpeg install step silently broke would otherwise report a green
+build with every real-media test skipped.
 """
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -18,13 +23,26 @@ from manimgen import paths
 from manimgen.renderer import assembler, audio_slicer, muxer
 from manimgen.types import CueSegment
 
+_FFMPEG_MISSING = shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None
+_FFMPEG_REQUIRED = os.environ.get("MANIMGEN_REQUIRE_FFMPEG", "") not in ("", "0")
+
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
-        shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
+        _FFMPEG_MISSING and not _FFMPEG_REQUIRED,
         reason="ffmpeg and ffprobe are required",
     ),
 ]
+
+
+@pytest.fixture(autouse=True)
+def _ffmpeg_present():
+    """Fail, not skip, when CI requires ffmpeg and it is missing."""
+    if _FFMPEG_MISSING:
+        pytest.fail(
+            "MANIMGEN_REQUIRE_FFMPEG is set but ffmpeg or ffprobe is not on PATH"
+        )
+
 
 _TOL = 0.25  # seconds; container rounding and frame alignment
 
@@ -161,6 +179,27 @@ def test_cut_video_at_cues_produces_video_only_clips(small_render):
         assert _duration(out) == pytest.approx(want, abs=_TOL)
 
 
+def test_cue_past_render_end_holds_last_frame_and_muxes(small_render):
+    """#59: a cue that starts past the end of a short render must not be an
+    empty, stream-less clip; it holds the last frame and still muxes."""
+    tmp_path = small_render
+    muxer.clear_mismatch_log()
+    src = _make_video(tmp_path / "scene.mp4", 1)
+    outs = muxer.cut_video_at_cues(
+        src, [0.0, 1.0, 2.0], [1.0, 1.0, 1.5], str(tmp_path / "cuts"), "section_04"
+    )
+    for out, want in zip(outs, (1.0, 1.0, 1.5)):
+        assert _kinds(_probe(out)) == ["video"]
+        assert _duration(out) == pytest.approx(want, abs=_TOL)
+    held = sorted(m["output_path"] for m in muxer.get_mismatch_log())
+    assert held == sorted(outs[1:])
+
+    audio = _make_audio(tmp_path / "a.m4a", 1.5)
+    muxed = muxer.mux_audio_video(outs[2], audio, str(tmp_path / "mux" / "m.mp4"))
+    assert sorted(_kinds(_probe(muxed))) == ["audio", "video"]
+    assert _stream_duration(muxed, "video") == pytest.approx(1.5, abs=_TOL)
+
+
 def test_assemble_video_joins_sections_with_audio(small_render):
     tmp_path = small_render
     clips = []
@@ -195,6 +234,43 @@ def test_assemble_video_injects_silent_audio_for_video_only_clip(small_render):
     out = assembler.assemble_video([with_audio, video_only], "mixed")
     assert sorted(_kinds(_probe(out))) == ["audio", "video"]
     assert _duration(out) == pytest.approx(2.0, abs=_TOL)
+
+
+def test_ten_section_crossfades_use_one_encode(small_render, monkeypatch):
+    """#75: all section crossfades are built in one ffmpeg encode, not one
+    re-encode of the growing video per section, and the length is right."""
+    tmp_path = small_render
+    colors = ["red", "green", "blue", "yellow", "white"] * 2
+    clips = []
+    for i, color in enumerate(colors):
+        # Already "normalised": same size, fps, pixel format, codec and rate.
+        path = tmp_path / f"section_{i + 1:02d}.mp4"
+        _ffmpeg(
+            "-f", "lavfi", "-i", f"color=c={color}:s=160x90:r=30:d=1",
+            "-f", "lavfi", "-i", f"sine=frequency={300 + 50 * i}:sample_rate=48000:d=1",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-ar", "48000", "-shortest", path,
+        )  # fmt: skip
+        clips.append(str(path))
+
+    real_run = subprocess.run
+    encodes = []
+
+    def spy(cmd, *args, **kwargs):
+        if "-filter_complex" in cmd:
+            encodes.append(cmd)
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(assembler.subprocess, "run", spy)
+    work = tmp_path / "work"
+    work.mkdir()
+    out = assembler._concat(clips, set(range(len(clips))), str(work))
+
+    assert len(encodes) == 1
+    assert sorted(_kinds(_probe(out))) == ["audio", "video"]
+    want = len(clips) - (len(clips) - 1) * assembler._XFADE_DURATION
+    assert _duration(out) == pytest.approx(want, abs=_TOL)
+    assert _stream_duration(out, "video") == pytest.approx(want, abs=_TOL)
 
 
 def test_real_mux_replaces_existing_clip_and_leaves_no_temp(tmp_path):

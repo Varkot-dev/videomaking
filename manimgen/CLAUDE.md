@@ -69,7 +69,7 @@ manimgen/
 │   ├── utils.py                 # shared: strip_fencing(), section_class_name()
 │   ├── input/
 │   │   ├── parser.py            # normalize topic string
-│   │   └── pdf_parser.py        # extract text + render pages from PDF
+│   │   └── pdf_parser.py        # extract text + render pages that need an image
 │   ├── techniques.py            # the one technique registry (planner, critic, 3D promotion, example tags)
 │   ├── planner/
 │   │   ├── lesson_planner.py    # research_topic() + plan_lesson() → storyboard JSON
@@ -225,8 +225,8 @@ Model names and `max_tokens` are configured under `llm:` in `config.yaml`, never
 - System prompt goes through `--system-prompt-file` in a temp dir; the user turn and any base64 PNG frames go on stdin as one `stream-json` message. Nothing large is put on argv (Windows caps a command line at ~32K chars).
 - Flags: `--tools=` (single token, so it survives the Windows cmd shim), `--strict-mcp-config`, `--disable-slash-commands`, `--no-session-persistence`, `--model <model for the role>` (`llm.claude_cli_model` unless `llm.models` or `MANIMGEN_MODEL_<ROLE>` says otherwise). cwd is an empty temp dir.
 - Env: built from an allowlist of variable names (`_CLI_ENV_ALLOWLIST`), so other services' keys never reach the child. `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, the Bedrock/Vertex/Foundry switches and a parent Claude Code session's identity are removed on purpose (otherwise Claude Code would bill the API instead of the plan), and `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` keeps CLAUDE.md files out of the prompt.
-- 600s timeout per call, 3 attempts (not retried when the error says not logged in, usage limit or credit balance); the final `{"type": "result"}` stream event is the reply. Guards: `_ensure_subscription_auth`, `_check_plan_limits`, `_ensure_plan_headroom` (`MANIMGEN_MAX_PLAN_UTILIZATION`, default 0.90).
-- `json_mode=True` is native only on Gemini. For `claude_cli`, `anthropic` and `ollama` the prompt asks for JSON and `chat()` strips a surrounding markdown `json` code fence.
+- 600s timeout per call, 3 attempts, but at most one retry after a timeout (`_CLI_TIMEOUT_RETRIES`); not retried when the error says not logged in, usage limit or credit balance. A used-up plan raises `UsageLimitError` (RuntimeError subclass, recognised by `utils.is_usage_stop`, exit 4): primary signal is a `rate_limit_event` with `rate_limit_info.status` other than `allowed`/`allowed_warning`, text markers are the fallback. The final `{"type": "result"}` stream event is the reply. Guards: `_ensure_subscription_auth`, `_check_plan_limits`, `_ensure_plan_headroom` (`MANIMGEN_MAX_PLAN_UTILIZATION`, default 0.90).
+- `json_mode=True` is native only on Gemini; Ollama gets its native `format: "json"` option. For `claude_cli` and `anthropic` the prompt asks for JSON. For all three `chat()` strips a surrounding markdown `json` code fence and logs a WARNING when the reply still is not valid JSON (the raw text is returned for the caller's parse-and-retry).
 
 ---
 
@@ -283,7 +283,7 @@ After every fix, the file is **always reloaded from disk** — previously a bug 
 ### 6. Visual validation (two-tier)
 - **Tier 1 (frame_checker.py):** zero-cost PIL-based — detects black frames, frozen frames, edge clipping.
 - **Tier 1b (probes/overlap_probe.py, #97):** zero-cost text-over-text check run inside the manimgl render. `render_command.run_manimgl` prepends `probes/bootstrap/` to the child's PYTHONPATH (joined with `os.pathsep`) and sets `MANIMGEN_OVERLAP_REPORT`; the bootstrap `sitecustomize.py` installs a `sys.meta_path` hook that wraps `Scene.post_play`/`tear_down` when manimgl imports `manimlib.scene.scene` (the scene file is untouched, so the safety gate is unchanged). After every `play()`/`wait()` it compares bounding boxes of visible text-like mobjects (StringMobject, DecimalNumber, SingleStringTex; not Brace) and reports pairs overlapping >= 20% of the smaller box (ancestor, same-string and < 0.02 unit² overlaps ignored; max 10 findings, 3 per string). Findings land in `RenderResult.overlaps` and `<video>.overlaps.json`, become hard `OVERLAP:` issues in `validate_render` and `retry_scene` (normal visual-fix budget and signature dedup), and survivors make the section `accepted_with_defects`. A probe failure is recorded as `probe_error` and never fails a render. Off switch: `MANIMGEN_OVERLAP_PROBE=0`. Limits: text vs text only (not text vs shapes); stable states only (TransformMatchingTex midpoint garble is scored in the report's `morphs` list but not acted on); calibration record and the two real offending scenes in `tests/fixtures/overlap/`; false-positive rate on other topics unmeasured; for an `always_redraw` text the reported string can be stale (`become()` does not copy it), the geometry is current.
-- **Tier 2 (layout_checker.py):** LLM vision, multi-frame sampling at 25%/50%/75% of duration, returns structured `ISSUE | CAUSE | FIX` feedback (only `ISSUE:` lines count; any other non-OK reply is UNVERIFIED). It runs in `retry_scene`, NOT on the first pass: `validate_render` skips it unless `MANIMGEN_FIRST_PASS_LAYOUT=1`, because its verdict was never enforced there.
+- **Tier 2 (layout_checker.py):** LLM vision, multi-frame sampling just before each cue ends (up to 5 frames, downscaled to 960 px wide; `frame_checker.sample_timestamps`), or at 25%/50%/75% of duration when cue durations are unknown, returns structured `ISSUE | CAUSE | FIX` feedback (only `ISSUE:` lines count; any other non-OK reply is UNVERIFIED). It runs in `retry_scene`, NOT on the first pass: `validate_render` skips it unless `MANIMGEN_FIRST_PASS_LAYOUT=1`, because its verdict was never enforced there.
 
 ### 7. TTS voice
 - Engine: `edge-tts` (free, local)
@@ -295,6 +295,8 @@ After every fix, the file is **always reloaded from disk** — previously a bug 
 - Video longer than audio → trim video to audio duration
 - Audio longer than video → freeze last frame (`tpad`)
 - Logs WARNING at diff > 1.0s, LARGE MISMATCH at diff > 1.5s
+- Cutter: a cue that starts past the end of the render is built from the last rendered frame, never an empty clip (#59)
+- No video stream in a cue clip → solid `#1C1C1C` background under the narration
 
 ---
 
@@ -456,10 +458,13 @@ Most visible quality issue. Cues often have 1–8 seconds of frozen still at the
 **Root cause:** Director subtracts one iteration's `run_time` instead of `n * run_time`.
 
 **Fix plan:**
-- Director prompt: make the loop timing rule impossible to miss (already has example, but LLM ignores it under pressure — move to top of Cue timing section) — STILL OPEN
-- ✅ DONE — `timing_verifier` is now a single authoritative gate (`retry.apply_timing_gate`) called as a zero-cost pre-render check in `cli.py`. Unresolvable timing issues skip the first render and route straight to the retry path, with timing warnings carried into the LLM fix prompt.
+- ✅ DONE: Director prompt. The loop-timing law opens the Cue timing section of `director_system.md` with a RIGHT (accumulate `anim_time`, subtract the total) and a WRONG (subtract one iteration) example. `tests/test_director_prompt_loop_timing.py` keeps it first.
+- DONE: `timing_verifier` runs through one shared gate (`retry.apply_timing_gate`) called as a zero-cost pre-render check in `cli.py`. Unresolvable timing issues skip the first render and route straight to the retry path, with timing warnings carried into the LLM fix prompt. It is a static analysis, so its totals are lower bounds and advisory where it cannot resolve a value: cues it reports as UNKNOWN never block (#22, #23).
+- ✅ DONE (#59): empty cue clips. When the render ends before a cue starts (less than one frame left), a plain cut gave a ~262-byte clip with no video stream and the section was dropped. `cut_video_at_cues` now probes the render length and builds such a cue by holding the last rendered frame for the cue duration (falls back to the plain cut if that ffmpeg call fails). The gap is recorded in the mismatch log and as a `cue_past_video_end` evidence event so the defect stays visible. The muxer still synthesizes a `#1C1C1C` background for any clip that has no video stream.
 
-**Files:** `generator/prompts/director_system.md` (prompt work still open), `validator/timing_verifier.py`, `validator/retry.py`, `cli.py`
+**Still open:** this is mitigation. A loop the Director under-counts still yields a frozen tail on screen; whether the prompt change reduces how often that happens is unmeasured (check `cue_past_video_end` and `av_mismatch` counts in the evidence log after real runs).
+
+**Files:** `generator/prompts/director_system.md`, `validator/timing_verifier.py`, `validator/retry.py`, `renderer/muxer.py` (cutter), `cli.py`
 
 ### 2. ✅ RESOLVED — timing_verifier wiring
 `timing_verifier` is wired in via `retry.apply_timing_gate` (verify → auto-fix → re-verify). It runs: (a) once on initial code before the first render in `cli.py`; (b) on initial code in `retry_scene`; (c) after every error fix and visual fix. The previous duplicated ad-hoc copy in `cli.py` was removed in favor of the shared gate. Unresolvable warnings block the first render and force the retry path.
@@ -467,17 +472,17 @@ Most visible quality issue. Cues often have 1–8 seconds of frozen still at the
 ### 3. ✅ RESOLVED — frame_checker.py wiring
 Confirmed wired in `validator/retry.py`: `check_frames()` runs after every successful render. Hard failures (black/frozen frames confirmed by timing oracle) block muxing and force retry. Soft failures (layout issues, only when `MANIMGEN_FIRST_PASS_LAYOUT=1`) are advisory on the first pass; `retry_scene` feeds layout issues into its LLM fix prompt.
 
-### 4. LOW — `.hypothesis/` and `.DS_Store` committed
-Should be in `.gitignore`. Clutters diffs.
+### 4. RESOLVED: `.hypothesis/` and `.DS_Store` committed
+Both are listed in the root and package `.gitignore`, and `git ls-files` shows no tracked copy of either.
 
 ### 5. RESOLVED: `_load_llm_config()` called on every LLM call
 `llm.py` now parses `config.yaml` once at import into `_LLM_CONFIG`.
 
-### 6. LOW — Cue-word tokenization mismatch risk
-`cue_parser` uses `str.split()` word counts; edge-tts may tokenize differently.
+### 6. RESOLVED: Cue-word tokenization mismatch risk
+`cue_parser.parse_cues` still counts words with `str.split()`, but `segmenter.compute_segments(clean_text=...)` re-derives every cue index against the edge-tts WordBoundary tokens via `cue_parser.align_cue_indices`. The aligner maps each word's first letter or digit through the concatenated alphanumeric content of both streams (`difflib` anchors it when the content differs, e.g. a number read back as words), so hyphen splits, contractions, punctuation-only tokens and merged tokens all resolve to the right onset. Equal token counts are no longer taken as agreement: a spaced dash plus a split hyphenated word used to cancel out and shift every cue between them. Tests: `tests/test_cue_alignment_robust.py` (includes a hypothesis property), `tests/test_cue_parser.py`, `tests/test_cue_tokenization.py`.
 
-### 7. LOW — PDF rendering unconditional
-Renders every page to PNG even for text-heavy PDFs. Should use 3-way logic.
+### 7. RESOLVED: PDF rendering unconditional
+`pdf_parser.parse_pdf` renders a page to PNG only when `_should_render_page` says so: pages with no extractable text (scans), and pages with raster images or at least `_MIN_DRAWINGS_FOR_VISUAL` vector drawing operations. Text-only pages are not rendered. Tests: `tests/test_pdf_render_policy.py`.
 
 ---
 

@@ -351,7 +351,7 @@ def retry_scene(
                 verify_timing,
             )
 
-            frame_result = check_frames(result["video_path"])
+            frame_result = check_frames(result["video_path"], cue_durations)
 
             # HARD TIMING GATE (computed first so the frozen-frame join below
             # can consult it). timing_verifier QUANTIFIES freeze-frame tails:
@@ -417,7 +417,7 @@ def retry_scene(
             # fall through to the bounded best-render acceptance below.
             layout_unverified = False
             if not combined_issues:
-                layout = check_layout(result["video_path"])
+                layout = check_layout(result["video_path"], cue_durations)
                 if layout.get("skipped"):
                     layout_unverified = True
                 elif not layout["ok"] and layout["issues"]:

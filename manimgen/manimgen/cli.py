@@ -79,6 +79,17 @@ def _run_tts_for_section(section: dict, idx: int) -> tuple[str, list, float] | N
         _, timestamps = generate_narration(narration, audio_path)
         save_timestamps(timestamps, ts_path)
         audio_duration = get_audio_duration(audio_path)
+        # Re-validate the retry: it replaced the audio and the timestamps
+        # (generate_narration already rejects an empty word stream), so a
+        # still-silent result must be reported, not shipped unannounced.
+        energy = check_audio_not_silent(audio_path)
+        if not energy["ok"]:
+            logger.error(
+                "[manimgen] TTS retry for '%s' is still %.0f%% silent; the "
+                "section will be voiced with this audio.",
+                section["title"],
+                energy.get("silent_ratio", 1.0) * 100,
+            )
 
     logger.info(
         "[manimgen] %d word timestamps, %.1fs audio",
@@ -1108,7 +1119,7 @@ def _load_cached_plan() -> dict:
     return lesson_plan
 
 
-def main():
+def main() -> None:
     # Windows writes redirected or piped output in the ANSI code page (cp1252),
     # which cannot encode the arrows used in log lines; replace instead of
     # raising so a log line can never abort a run.

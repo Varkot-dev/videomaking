@@ -268,6 +268,20 @@ class TestRetryVisualLoop:
     discarding it.
     """
 
+    @pytest.fixture(autouse=True)
+    def _restore_retry_budgets(self, monkeypatch):
+        # Tests below assign retry.MAX_* module globals directly. Registering
+        # the current values with monkeypatch restores them after each test,
+        # so one test's budget never leaks into the next (or another module).
+        import manimgen.validator.retry as retry_module
+
+        for name in (
+            "MAX_RETRIES",
+            "MAX_VISUAL_LLM_FIX_CALLS",
+            "MAX_ERROR_LLM_FIX_CALLS",
+        ):
+            monkeypatch.setattr(retry_module, name, getattr(retry_module, name))
+
     def _make_section(self):
         return {
             "title": "Test Section",

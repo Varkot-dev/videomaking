@@ -57,7 +57,7 @@ def loop(monkeypatch, tmp_path):
     monkeypatch.setattr(
         retry_mod,
         "check_layout",
-        lambda v: {"ok": True, "issues": "", "frames": [], "skipped": False},
+        lambda v, *a, **k: {"ok": True, "issues": "", "frames": [], "skipped": False},
     )
 
     def _local_fix(code, stderr):

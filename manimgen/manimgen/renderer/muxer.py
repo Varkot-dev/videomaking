@@ -20,6 +20,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from manimgen import paths
 from manimgen.utils import atomic_output, safe_probe_duration
+from manimgen.validator.render_command import (
+    _BACKGROUND_COLOR as _RENDER_BACKGROUND_COLOR,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +30,10 @@ logger = logging.getLogger(__name__)
 # placement or TTS/render timing problem worth investigating.
 _WARN_THRESHOLD_SECONDS = 1.0
 
-# The pipeline's dark background (matches the -c "#1C1C1C" render flag). Used to
-# synthesize a placeholder clip when a cue's render produced no video stream.
-_BG_COLOR = "#1C1C1C"
+# The pipeline's dark background, shared with the manimgl -c render flag so the
+# placeholder clip (synthesized when a cue's render produced no video stream)
+# always matches a rendered frame.
+_BG_COLOR = _RENDER_BACKGROUND_COLOR
 # Placeholder resolution and fps come from config (paths.render_resolution /
 # paths.render_fps) so it matches the rest of the render.
 
@@ -236,7 +240,7 @@ def _mux_synth_background(
     output_path: str,
     audio_dur: float,
 ) -> None:
-    """Mux narration over a synthesized solid #1C1C1C background.
+    """Mux narration over a synthesized solid background (the render color).
 
     Used when the cue's rendered video has no usable video stream (a too-short
     render). Produces a clean dark clip lasting the full narration so the section
@@ -455,6 +459,127 @@ def _cut_one(video_path: str, start: float, dur: float, out_path: str, i: int) -
     return out_path
 
 
+def _source_duration(video_path: str) -> float | None:
+    """Return the duration of the rendered section video, or None if unknown.
+
+    Unlike ``_get_duration`` there is no 0.1s floor: the cutter needs the real
+    end of the render to tell whether a cue starts past it. Any probe failure
+    returns None so the cutter keeps its plain cut behaviour.
+    """
+    if not os.path.isfile(video_path):
+        return None
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "json",
+                video_path,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        return safe_probe_duration(json.loads(result.stdout))
+    except json.JSONDecodeError:
+        return None
+
+
+def _freeze_one(video_path: str, dur: float, out_path: str, i: int) -> str:
+    """Write a ``dur``-second clip that holds the last frame of ``video_path``.
+
+    Used for a cue that starts at or past the end of the rendered video (the
+    Director under-counted loop time, #59). A plain ``-ss`` cut there yields a
+    stream-less ~262-byte file; holding the last frame keeps the cue a real
+    video so the muxer can lay its narration over it.
+    """
+    filt = (
+        "reverse,trim=end_frame=1,setpts=PTS-STARTPTS,"
+        f"tpad=stop_mode=clone:stop_duration={dur:.6f}"
+    )
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-sseof",
+        "-1",
+        "-i",
+        video_path,
+        "-vf",
+        filt,
+        "-t",
+        f"{dur:.6f}",
+        *_REENCODE_ARGS,
+        "-r",
+        str(paths.render_fps()),
+        "-an",
+        out_path,
+    ]
+    _run(cmd, out_path)
+    return out_path
+
+
+def _cut_or_freeze(
+    video_path: str,
+    start: float,
+    dur: float,
+    out_path: str,
+    i: int,
+    source_dur: float | None,
+) -> str:
+    """Cut cue ``i``, or freeze the last frame if it starts past the render end.
+
+    A cue whose start leaves less than one frame of rendered video would be an
+    empty clip. It is instead built from the last rendered frame, and the gap is
+    recorded in the mismatch log and the evidence log so the loop-timing defect
+    stays visible. If the freeze itself fails, the plain cut runs as before.
+    """
+    one_frame = 1.0 / max(1, paths.render_fps())
+    if source_dur is None or source_dur - start >= one_frame:
+        return _cut_one(video_path, start, dur, out_path, i)
+
+    logger.warning(
+        "[cutter] Cue %d starts at %.2fs but the render ends at %.2fs; holding "
+        "the last frame for %.2fs. Director likely miscalculated loop timing.",
+        i,
+        start,
+        source_dur,
+        dur,
+    )
+    _mismatch_log.append(
+        {
+            "output_path": out_path,
+            "video_dur": 0.0,
+            "audio_dur": dur,
+            "diff": dur,
+        }
+    )
+    from manimgen.validator.evidence_log import log_event
+
+    log_event(
+        "cue_past_video_end",
+        output=os.path.basename(out_path),
+        cue_start=round(start, 3),
+        video_end=round(source_dur, 3),
+        cue_dur=round(dur, 3),
+    )
+    try:
+        return _freeze_one(video_path, dur, out_path, i)
+    except RuntimeError as exc:
+        logger.error("[cutter] Last-frame hold failed for cue %d: %s", i, exc)
+        return _cut_one(video_path, start, dur, out_path, i)
+
+
 def cut_video_at_cues(
     video_path: str,
     cue_start_times: list[float],
@@ -462,8 +587,13 @@ def cut_video_at_cues(
     output_dir: str,
     section_id: str,
 ) -> list[str]:
-    """Cut a section video into per-cue clips using parallel FFmpeg re-encodes."""
+    """Cut a section video into per-cue clips using parallel FFmpeg re-encodes.
+
+    A cue that starts past the end of the rendered video is filled with the
+    last rendered frame instead of an empty clip (see ``_cut_or_freeze``).
+    """
     os.makedirs(output_dir, exist_ok=True)
+    source_dur = _source_duration(video_path)
     jobs = [
         (i, start, dur, os.path.join(output_dir, f"{section_id}_cue{i:02d}_video.mp4"))
         for i, (start, dur) in enumerate(zip(cue_start_times, cue_durations))
@@ -472,7 +602,9 @@ def cut_video_at_cues(
     results: dict[int, str] = {}
     with ThreadPoolExecutor(max_workers=_MAX_PARALLEL_CUTS) as pool:
         futures = {
-            pool.submit(_cut_one, video_path, start, dur, out_path, i): i
+            pool.submit(
+                _cut_or_freeze, video_path, start, dur, out_path, i, source_dur
+            ): i
             for i, start, dur, out_path in jobs
         }
         for future in as_completed(futures):

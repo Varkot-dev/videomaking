@@ -23,6 +23,7 @@ from manimgen.llm import (
     _REQUEST_RETRY_ATTEMPTS,
     _REQUEST_TIMEOUT_SECONDS,
     PaidApiBlockedError,
+    UsageLimitError,
     _anthropic,
     _claude_cli,
     _gemini,
@@ -235,6 +236,7 @@ class TestOllamaUrlSsrfGuard:
         with pytest.raises(ValueError, match="http/https"):
             _validate_ollama_url("ftp://localhost:11434")
 
+    @pytest.mark.allow_real_llm
     def test_ollama_call_blocks_public_url(self, monkeypatch):
         """_ollama must refuse a public base URL before issuing any request."""
         import manimgen.llm as llm_mod
@@ -306,6 +308,46 @@ class TestStripJsonFence:
         monkeypatch.setenv("MANIMGEN_ALLOW_PAID_API", "1")
         with patch(f"manimgen.llm.{helper}", return_value="```json\n[1]\n```"):
             assert chat(system="s", user="u", json_mode=True) == "[1]"
+
+    def test_chat_forwards_json_mode_to_ollama(self, monkeypatch):
+        monkeypatch.setenv("LLM_PROVIDER", "ollama")
+        with patch("manimgen.llm._ollama", return_value="{}") as mock_ollama:
+            chat(system="s", user="u", json_mode=True)
+        assert mock_ollama.call_args.kwargs.get("json_mode") is True
+
+    @pytest.mark.parametrize(
+        "provider,helper",
+        [
+            ("claude_cli", "_claude_cli"),
+            ("anthropic", "_anthropic"),
+            ("ollama", "_ollama"),
+        ],
+    )
+    def test_invalid_json_reply_is_logged_not_silent(
+        self, monkeypatch, caplog, provider, helper
+    ):
+        monkeypatch.setenv("LLM_PROVIDER", provider)
+        monkeypatch.setenv("MANIMGEN_ALLOW_PAID_API", "1")
+        with patch(f"manimgen.llm.{helper}", return_value="Sure! {not json"):
+            with caplog.at_level("WARNING", logger="manimgen.llm"):
+                out = chat(system="s", user="u", json_mode=True)
+        assert out == "Sure! {not json", "raw text must still reach the caller"
+        assert "not valid JSON" in caplog.text
+        assert provider in caplog.text
+
+    def test_valid_json_reply_logs_no_warning(self, monkeypatch, caplog):
+        monkeypatch.setenv("LLM_PROVIDER", "claude_cli")
+        with patch("manimgen.llm._claude_cli", return_value='```json\n{"a": 1}\n```'):
+            with caplog.at_level("WARNING", logger="manimgen.llm"):
+                assert chat(system="s", user="u", json_mode=True) == '{"a": 1}'
+        assert "not valid JSON" not in caplog.text
+
+    def test_no_json_check_without_json_mode(self, monkeypatch, caplog):
+        monkeypatch.setenv("LLM_PROVIDER", "claude_cli")
+        with patch("manimgen.llm._claude_cli", return_value="x = 1"):
+            with caplog.at_level("WARNING", logger="manimgen.llm"):
+                chat(system="s", user="u")
+        assert "not valid JSON" not in caplog.text
 
     def test_chat_docstring_does_not_promise_native_json_for_other_providers(self):
         doc = chat.__doc__ or ""
@@ -410,11 +452,29 @@ class TestClaudeCli:
         with patch.object(llm_mod, "_run_cli", side_effect=responses):
             assert _claude_cli(system="s", user="u", images=[]) == "second try"
 
-    def test_timeout_raises_after_retries(self):
+    def test_timeout_is_retried_only_once(self):
+        """Each try can hang for the full timeout, so a timeout gets one retry,
+        not the whole retry budget (#72)."""
         boom = subprocess.TimeoutExpired(cmd="claude", timeout=1)
-        with patch.object(llm_mod, "_run_cli", side_effect=boom):
+        with patch.object(llm_mod, "_run_cli", side_effect=boom) as run:
             with pytest.raises(RuntimeError, match="timed out"):
                 _claude_cli(system="s", user="u", images=[])
+        assert run.call_count == 1 + llm_mod._CLI_TIMEOUT_RETRIES == 2
+
+    def test_timeout_then_success_recovers(self):
+        boom = subprocess.TimeoutExpired(cmd="claude", timeout=1)
+        responses = [boom, _completed(_result_line("second try"))]
+        with patch.object(llm_mod, "_run_cli", side_effect=responses) as run:
+            assert _claude_cli(system="s", user="u", images=[]) == "second try"
+        assert run.call_count == 2
+
+    def test_late_timeout_does_not_extend_the_budget(self):
+        boom = subprocess.TimeoutExpired(cmd="claude", timeout=1)
+        responses = [_completed(stderr="blip", returncode=1), boom, boom, boom]
+        with patch.object(llm_mod, "_run_cli", side_effect=responses) as run:
+            with pytest.raises(RuntimeError, match="timed out"):
+                _claude_cli(system="s", user="u", images=[])
+        assert run.call_count == _REQUEST_RETRY_ATTEMPTS
 
     def test_stderr_surfaces_when_no_result_event(self):
         bad = _completed(stderr="Invalid API key · Please run /login", returncode=1)
@@ -775,6 +835,7 @@ class TestClaudeCliEnvAllowlist:
         assert "GITHUB_TOKEN" not in passed
 
 
+@pytest.mark.allow_real_llm
 class TestOllamaHygiene:
     """#94: Ollama gets an explicit context size and fails fast on 4xx."""
 
@@ -799,6 +860,18 @@ class TestOllamaHygiene:
         payload = post.call_args.kwargs["json"]
         assert payload["options"]["num_ctx"] == llm_mod._LLM_CONFIG["ollama_num_ctx"]
         assert payload["options"]["num_ctx"] >= 32768
+
+    def test_json_mode_requests_native_format_json(self):
+        ok = self._resp(200, {"message": {"content": "{}"}})
+        with patch("requests.post", return_value=ok) as post:
+            llm_mod._ollama("s", "u", [], json_mode=True)
+        assert post.call_args.kwargs["json"]["format"] == "json"
+
+    def test_no_format_key_without_json_mode(self):
+        ok = self._resp(200, {"message": {"content": "x"}})
+        with patch("requests.post", return_value=ok) as post:
+            llm_mod._ollama("s", "u", [])
+        assert "format" not in post.call_args.kwargs["json"]
 
     def test_num_ctx_comes_from_config(self, monkeypatch):
         monkeypatch.setitem(llm_mod._LLM_CONFIG, "ollama_num_ctx", 8192)
@@ -853,6 +926,41 @@ class TestSuiteNeverLaunchesRealClaude:
             with pytest.raises(RuntimeError, match="not found on PATH"):
                 chat(system="s", user="u")
         run.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "path", ["/usr/local/bin/claude", r"C:\Users\me\AppData\npm\claude.cmd"]
+    )
+    def test_full_claude_path_is_unfindable_too(self, path):
+        import shutil
+
+        assert shutil.which(path) is None
+
+    def test_launching_claude_by_full_path_is_refused(self, monkeypatch):
+        """A test that fakes `which` but forgets to mock the subprocess."""
+        import shutil
+
+        monkeypatch.setenv("LLM_PROVIDER", "claude_cli")
+        monkeypatch.setitem(
+            llm_mod._LLM_CONFIG, "claude_cli_path", "/opt/tools/claude"
+        )
+        monkeypatch.setattr(shutil, "which", lambda name, *a, **k: str(name))
+        with patch("subprocess.Popen") as popen:
+            with pytest.raises(RuntimeError, match="real Claude CLI"):
+                chat(system="s", user="u")
+        popen.assert_not_called()
+
+    @pytest.mark.parametrize("provider", ["anthropic", "gemini", "ollama"])
+    def test_other_providers_are_blocked_by_default(self, monkeypatch, provider):
+        monkeypatch.setenv("LLM_PROVIDER", provider)
+        monkeypatch.setenv("MANIMGEN_ALLOW_PAID_API", "1")
+        with pytest.raises(RuntimeError, match="real LLM provider"):
+            chat(system="s", user="u")
+
+    @pytest.mark.allow_real_llm
+    def test_marker_restores_the_real_provider_functions(self):
+        assert llm_mod._ollama.__module__ == "manimgen.llm"
+        assert llm_mod._anthropic is _anthropic
+        assert llm_mod._gemini is _gemini
 
 
 def _limit_event(
@@ -963,3 +1071,91 @@ class TestOverageGuard:
             json.dumps({"type": "rate_limit_event", "rate_limit_info": "nope"}),
         )
         assert out == "fine"
+
+
+def _rejected_event(status="rejected", resets_at=None, window="five_hour"):
+    info = {"status": status, "overageStatus": "rejected", "isUsingOverage": False}
+    if resets_at is not None:
+        info["resetsAt"] = resets_at
+    if window is not None:
+        info["rateLimitType"] = window
+    return json.dumps({"type": "rate_limit_event", "rate_limit_info": info})
+
+
+class TestUsageLimitStop:
+    """A used-up plan allowance stops the call at once, with a typed error (#72)."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_state(self, monkeypatch):
+        monkeypatch.delenv("MANIMGEN_ALLOW_PAID_API", raising=False)
+        monkeypatch.setattr(llm_mod, "_plan_windows", {})
+        monkeypatch.setattr(llm_mod, "_overage_possible", False)
+        monkeypatch.setattr(llm_mod, "_plan_logged", False)
+        monkeypatch.setattr(llm_mod.shutil, "which", lambda name: f"/fake/bin/{name}")
+        monkeypatch.setattr(llm_mod.time, "sleep", lambda s: None)
+
+    def _stdout(self, *events, result=None):
+        result = result or _result_line("You've hit your limit", is_error=True)
+        return "\n".join([_init_line("none"), *events, result])
+
+    def test_rejected_rate_limit_event_stops_after_one_call(self):
+        resets = time.time() + 7200
+        stdout = self._stdout(_rejected_event(resets_at=resets))
+        with patch.object(llm_mod, "_run_cli", return_value=_completed(stdout)) as run:
+            with pytest.raises(UsageLimitError) as info:
+                _claude_cli(system="s", user="u", images=[])
+        assert run.call_count == 1
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(resets))
+        assert "five_hour" in str(info.value) and when in str(info.value)
+        # The reset time is kept for the cli's "wait until" hint.
+        assert llm_mod._plan_windows["five_hour"] == (1.0, resets)
+
+    def test_rejected_event_wins_even_when_the_result_looks_fine(self):
+        stdout = self._stdout(_rejected_event(), result=_result_line("ok"))
+        with patch.object(llm_mod, "_run_cli", return_value=_completed(stdout)) as run:
+            with pytest.raises(UsageLimitError):
+                _claude_cli(system="s", user="u", images=[])
+        assert run.call_count == 1
+
+    def test_rejected_event_stops_even_with_paid_api_allowed(self, monkeypatch):
+        monkeypatch.setenv("MANIMGEN_ALLOW_PAID_API", "1")
+        stdout = self._stdout(_rejected_event())
+        with patch.object(llm_mod, "_run_cli", return_value=_completed(stdout)) as run:
+            with pytest.raises(UsageLimitError):
+                _claude_cli(system="s", user="u", images=[])
+        assert run.call_count == 1
+
+    @pytest.mark.parametrize("status", ["allowed", "allowed_warning", None])
+    def test_allowed_or_missing_status_is_not_a_stop(self, status):
+        event = json.loads(_rejected_event(window=None))
+        if status is None:
+            del event["rate_limit_info"]["status"]
+        else:
+            event["rate_limit_info"]["status"] = status
+        stdout = self._stdout(json.dumps(event), result=_result_line("fine"))
+        with patch.object(llm_mod, "_run_cli", return_value=_completed(stdout)):
+            assert _claude_cli(system="s", user="u", images=[]) == "fine"
+
+    def test_usage_marker_without_event_is_typed_and_not_retried(self):
+        bad = _completed(
+            stderr="Claude AI usage limit reached|1760000000", returncode=1
+        )
+        with patch.object(llm_mod, "_run_cli", return_value=bad) as run:
+            with pytest.raises(UsageLimitError, match="usage limit"):
+                _claude_cli(system="s", user="u", images=[])
+        assert run.call_count == 1
+
+    def test_login_failure_stays_a_plain_runtime_error(self):
+        bad = _completed(stderr="Invalid API key · Please run /login", returncode=1)
+        with patch.object(llm_mod, "_run_cli", return_value=bad) as run:
+            with pytest.raises(RuntimeError) as info:
+                _claude_cli(system="s", user="u", images=[])
+        assert not isinstance(info.value, UsageLimitError)
+        assert run.call_count == 1
+
+    def test_usage_limit_error_is_a_runtime_error_and_a_usage_stop(self):
+        from manimgen.utils import is_usage_stop
+
+        exc = UsageLimitError("anything")
+        assert isinstance(exc, RuntimeError)
+        assert is_usage_stop(exc)

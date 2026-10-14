@@ -15,6 +15,7 @@ import tempfile
 
 from manimgen.llm import chat
 from manimgen.utils import is_usage_stop, load_reference_frames, probe_video_duration
+from manimgen.validator.frame_checker import sample_timestamps
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +61,22 @@ def _load_layout_system_prompt() -> str:
         return f.read()
 
 
+# Frames go to the vision model at most this wide (aspect ratio kept): a
+# 1080p PNG costs several times the image tokens and adds no layout detail.
+_VISION_MAX_WIDTH = 960
+# Width capped, height follows the aspect ratio rounded to an even number.
+# The comma inside min() is escaped for the filtergraph parser; no shell
+# quoting is involved, so the same argument works on Windows.
+_DOWNSCALE_FILTER = f"scale=w=min({_VISION_MAX_WIDTH}\\,iw):h=-2"
+# Most frames sent to the vision model in one call when sampling by cue.
+_MAX_VISION_FRAMES = 5
+_FRAME_EXTRACT_TIMEOUT_SECONDS = 30
+
+
 def _extract_frame(video_path: str, timestamp: float) -> str | None:
     """
-    Extract a single frame from a video at `timestamp` seconds.
+    Extract a single frame from a video at `timestamp` seconds, downscaled to
+    at most _VISION_MAX_WIDTH pixels wide.
     Returns base64-encoded PNG string, or None on failure.
     """
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
@@ -79,12 +93,14 @@ def _extract_frame(video_path: str, timestamp: float) -> str | None:
                 video_path,
                 "-frames:v",
                 "1",
+                "-vf",
+                _DOWNSCALE_FILTER,
                 "-q:v",
                 "2",
                 tmp_path,
             ],
             capture_output=True,
-            timeout=30,
+            timeout=_FRAME_EXTRACT_TIMEOUT_SECONDS,
         )
         if result.returncode != 0 or not os.path.exists(tmp_path):
             logger.warning(
@@ -106,16 +122,24 @@ def _extract_frame(video_path: str, timestamp: float) -> str | None:
             os.unlink(tmp_path)
 
 
-def _sample_frames(video_path: str) -> list[str]:
+def _sample_frames(
+    video_path: str, cue_durations: list[float] | None = None
+) -> list[str]:
     """
-    Extract frames at 25%, 50%, and 75% of video duration.
+    Extract frames at the end of each cue (evenly capped) when cue durations
+    are known, otherwise at 25%, 50%, and 75% of video duration.
     Falls back to fixed timestamps (0.5s, 1.0s) if duration cannot be determined.
     Returns a list of base64-encoded PNG strings (may be empty).
     """
     duration = probe_video_duration(video_path)
 
     if duration and duration > 0.5:
-        timestamps = [duration * 0.25, duration * 0.5, duration * 0.75]
+        timestamps = sample_timestamps(
+            duration,
+            cue_durations,
+            default=[duration * 0.25, duration * 0.5, duration * 0.75],
+            cap=_MAX_VISION_FRAMES,
+        )
     else:
         # Short or unknown duration — try fixed fallbacks
         timestamps = [0.5, 1.0]
@@ -129,12 +153,13 @@ def _sample_frames(video_path: str) -> list[str]:
     return frames
 
 
-def check_layout(video_path: str) -> dict:
+def check_layout(video_path: str, cue_durations: list[float] | None = None) -> dict:
     """
     Check a rendered scene video for visual defects using LLM vision.
 
-    Samples multiple frames across the video timeline (25%/50%/75% of duration)
-    and sends all frames in a single LLM call. Returns structured feedback that
+    Samples multiple frames across the video timeline (the end of each cue
+    when ``cue_durations`` is given, else 25%/50%/75% of duration) and sends
+    all frames in a single LLM call. Returns structured feedback that
     the retry loop can act on directly.
 
     Returns:
@@ -149,7 +174,7 @@ def check_layout(video_path: str) -> dict:
         logger.warning("[layout_checker] Video not found: %s", video_path)
         return {"ok": True, "issues": "", "skipped": True}
 
-    frames = _sample_frames(video_path)
+    frames = _sample_frames(video_path, cue_durations)
 
     if not frames:
         logger.warning(

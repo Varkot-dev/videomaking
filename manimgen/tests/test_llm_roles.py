@@ -120,6 +120,7 @@ class TestRoleRouting:
             chat(system="s", user="u")
         mock_cli.assert_called_once_with("s", "u", [])
 
+    @pytest.mark.allow_real_llm
     def test_role_reaches_anthropic(self, monkeypatch):
         monkeypatch.setenv("LLM_PROVIDER", "anthropic")
         monkeypatch.setenv("MANIMGEN_ALLOW_PAID_API", "1")
@@ -133,6 +134,7 @@ class TestRoleRouting:
         create = fake.Anthropic.return_value.messages.create
         assert create.call_args.kwargs["model"] == "claude-x"
 
+    @pytest.mark.allow_real_llm
     def test_role_reaches_ollama(self, monkeypatch):
         monkeypatch.setenv("LLM_PROVIDER", "ollama")
         monkeypatch.setitem(llm_mod._LLM_CONFIG, "models", {"critic": "qwen"})
