@@ -23,6 +23,7 @@ from manimgen.llm import (
     _REQUEST_RETRY_ATTEMPTS,
     _REQUEST_TIMEOUT_SECONDS,
     PaidApiBlockedError,
+    UsageLimitError,
     _anthropic,
     _claude_cli,
     _gemini,
@@ -410,11 +411,29 @@ class TestClaudeCli:
         with patch.object(llm_mod, "_run_cli", side_effect=responses):
             assert _claude_cli(system="s", user="u", images=[]) == "second try"
 
-    def test_timeout_raises_after_retries(self):
+    def test_timeout_is_retried_only_once(self):
+        """Each try can hang for the full timeout, so a timeout gets one retry,
+        not the whole retry budget (#72)."""
         boom = subprocess.TimeoutExpired(cmd="claude", timeout=1)
-        with patch.object(llm_mod, "_run_cli", side_effect=boom):
+        with patch.object(llm_mod, "_run_cli", side_effect=boom) as run:
             with pytest.raises(RuntimeError, match="timed out"):
                 _claude_cli(system="s", user="u", images=[])
+        assert run.call_count == 1 + llm_mod._CLI_TIMEOUT_RETRIES == 2
+
+    def test_timeout_then_success_recovers(self):
+        boom = subprocess.TimeoutExpired(cmd="claude", timeout=1)
+        responses = [boom, _completed(_result_line("second try"))]
+        with patch.object(llm_mod, "_run_cli", side_effect=responses) as run:
+            assert _claude_cli(system="s", user="u", images=[]) == "second try"
+        assert run.call_count == 2
+
+    def test_late_timeout_does_not_extend_the_budget(self):
+        boom = subprocess.TimeoutExpired(cmd="claude", timeout=1)
+        responses = [_completed(stderr="blip", returncode=1), boom, boom, boom]
+        with patch.object(llm_mod, "_run_cli", side_effect=responses) as run:
+            with pytest.raises(RuntimeError, match="timed out"):
+                _claude_cli(system="s", user="u", images=[])
+        assert run.call_count == _REQUEST_RETRY_ATTEMPTS
 
     def test_stderr_surfaces_when_no_result_event(self):
         bad = _completed(stderr="Invalid API key · Please run /login", returncode=1)
@@ -963,3 +982,91 @@ class TestOverageGuard:
             json.dumps({"type": "rate_limit_event", "rate_limit_info": "nope"}),
         )
         assert out == "fine"
+
+
+def _rejected_event(status="rejected", resets_at=None, window="five_hour"):
+    info = {"status": status, "overageStatus": "rejected", "isUsingOverage": False}
+    if resets_at is not None:
+        info["resetsAt"] = resets_at
+    if window is not None:
+        info["rateLimitType"] = window
+    return json.dumps({"type": "rate_limit_event", "rate_limit_info": info})
+
+
+class TestUsageLimitStop:
+    """A used-up plan allowance stops the call at once, with a typed error (#72)."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_state(self, monkeypatch):
+        monkeypatch.delenv("MANIMGEN_ALLOW_PAID_API", raising=False)
+        monkeypatch.setattr(llm_mod, "_plan_windows", {})
+        monkeypatch.setattr(llm_mod, "_overage_possible", False)
+        monkeypatch.setattr(llm_mod, "_plan_logged", False)
+        monkeypatch.setattr(llm_mod.shutil, "which", lambda name: f"/fake/bin/{name}")
+        monkeypatch.setattr(llm_mod.time, "sleep", lambda s: None)
+
+    def _stdout(self, *events, result=None):
+        result = result or _result_line("You've hit your limit", is_error=True)
+        return "\n".join([_init_line("none"), *events, result])
+
+    def test_rejected_rate_limit_event_stops_after_one_call(self):
+        resets = time.time() + 7200
+        stdout = self._stdout(_rejected_event(resets_at=resets))
+        with patch.object(llm_mod, "_run_cli", return_value=_completed(stdout)) as run:
+            with pytest.raises(UsageLimitError) as info:
+                _claude_cli(system="s", user="u", images=[])
+        assert run.call_count == 1
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(resets))
+        assert "five_hour" in str(info.value) and when in str(info.value)
+        # The reset time is kept for the cli's "wait until" hint.
+        assert llm_mod._plan_windows["five_hour"] == (1.0, resets)
+
+    def test_rejected_event_wins_even_when_the_result_looks_fine(self):
+        stdout = self._stdout(_rejected_event(), result=_result_line("ok"))
+        with patch.object(llm_mod, "_run_cli", return_value=_completed(stdout)) as run:
+            with pytest.raises(UsageLimitError):
+                _claude_cli(system="s", user="u", images=[])
+        assert run.call_count == 1
+
+    def test_rejected_event_stops_even_with_paid_api_allowed(self, monkeypatch):
+        monkeypatch.setenv("MANIMGEN_ALLOW_PAID_API", "1")
+        stdout = self._stdout(_rejected_event())
+        with patch.object(llm_mod, "_run_cli", return_value=_completed(stdout)) as run:
+            with pytest.raises(UsageLimitError):
+                _claude_cli(system="s", user="u", images=[])
+        assert run.call_count == 1
+
+    @pytest.mark.parametrize("status", ["allowed", "allowed_warning", None])
+    def test_allowed_or_missing_status_is_not_a_stop(self, status):
+        event = json.loads(_rejected_event(window=None))
+        if status is None:
+            del event["rate_limit_info"]["status"]
+        else:
+            event["rate_limit_info"]["status"] = status
+        stdout = self._stdout(json.dumps(event), result=_result_line("fine"))
+        with patch.object(llm_mod, "_run_cli", return_value=_completed(stdout)):
+            assert _claude_cli(system="s", user="u", images=[]) == "fine"
+
+    def test_usage_marker_without_event_is_typed_and_not_retried(self):
+        bad = _completed(
+            stderr="Claude AI usage limit reached|1760000000", returncode=1
+        )
+        with patch.object(llm_mod, "_run_cli", return_value=bad) as run:
+            with pytest.raises(UsageLimitError, match="usage limit"):
+                _claude_cli(system="s", user="u", images=[])
+        assert run.call_count == 1
+
+    def test_login_failure_stays_a_plain_runtime_error(self):
+        bad = _completed(stderr="Invalid API key · Please run /login", returncode=1)
+        with patch.object(llm_mod, "_run_cli", return_value=bad) as run:
+            with pytest.raises(RuntimeError) as info:
+                _claude_cli(system="s", user="u", images=[])
+        assert not isinstance(info.value, UsageLimitError)
+        assert run.call_count == 1
+
+    def test_usage_limit_error_is_a_runtime_error_and_a_usage_stop(self):
+        from manimgen.utils import is_usage_stop
+
+        exc = UsageLimitError("anything")
+        assert isinstance(exc, RuntimeError)
+        assert is_usage_stop(exc)

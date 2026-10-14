@@ -78,8 +78,9 @@ If it is installed somewhere off PATH, set `llm.claude_cli_path` in
 `MANIMGEN_ALLOW_PAID_API=1` (they bill per token and are blocked otherwise).
 **Note:** `ANTHROPIC_API_KEY` is stripped from the `claude` subprocess on
 purpose, so a key in `.env` never silently moves `claude_cli` calls onto
-per-token API billing. Hitting the Claude plan's usage limit also shows up as
-`claude -p failed`; wait for the limit to reset and use `manimgen --resume`.
+per-token API billing. Hitting the Claude plan's usage limit stops the run with
+exit code 4 (`UsageLimitError`, message starts `claude -p failed`); wait for the
+limit to reset and use `manimgen --resume`.
 **Guard:** `check_claude_cli()`.
 
 ## 7. `ffmpeg` / `ffprobe` / `manimgl` missing from PATH

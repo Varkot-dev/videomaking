@@ -225,7 +225,7 @@ Every LLM call in the pipeline (research, planning, scene generation, retries, a
 - Claude Code runs as a plain completion: `--tools=` disables every tool, `--strict-mcp-config` loads no MCP servers, and `--no-session-persistence` keeps the calls out of your session history.
 - The working directory is an empty temporary folder and `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` is set, so no repo or user CLAUDE.md, settings or hooks leak into the prompt.
 - `ANTHROPIC_API_KEY` is deliberately removed from the subprocess environment. If it were passed through, Claude Code would quietly switch to per-token API billing instead of your subscription (for example when the key is in `.env` for the `anthropic` provider).
-- Each call has a 600 second timeout and is tried up to 3 times.
+- Each call has a 600 second timeout and is tried up to 3 times, but a call that timed out is retried only once. A call refused because your plan's usage limit is reached is not retried: the run stops with exit code 4.
 
 **Setup:** install Claude Code (see the setup sections below), then run `claude` once in a terminal and log in with your Claude account. After that `manimgen` needs nothing else.
 

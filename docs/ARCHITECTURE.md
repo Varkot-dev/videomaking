@@ -107,8 +107,12 @@ names (so unrelated secrets such as other services' API keys never reach it), wi
 `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, the Bedrock, Vertex and Foundry
 switches and the variables of a parent Claude Code session removed on top: a stray
 key would make Claude Code bill per token with no visible sign. Each call is tried
-up to 3 times with a 600 second timeout, except failures a retry cannot fix (not
-logged in, usage limit, credit balance), which stop at once. Three guards keep "no
+up to 3 times with a 600 second timeout, but a timeout gets only one more try
+(each try can hang for the full 600 seconds), and failures a retry cannot fix (not
+logged in, usage limit, credit balance) stop at once. A used-up plan allowance
+raises `UsageLimitError` (a `RuntimeError` subclass): the primary signal is a
+`rate_limit_event` whose `rate_limit_info.status` is not `allowed` or
+`allowed_warning`, and the error text markers are a fallback. Three guards keep "no
 cost" true:
 
 - Paid-API guard: `anthropic` and `gemini` raise `PaidApiBlockedError` unless
