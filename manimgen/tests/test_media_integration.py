@@ -5,9 +5,14 @@ change or a filtergraph break was invisible to CI. These tests build tiny
 synthetic clips with lavfi sources (one to three seconds, 160x90) and run the
 real muxer, audio slicer, cutter and assembler on them, then check the result
 with ffprobe. They are skipped when ffmpeg or ffprobe is not on PATH.
+
+CI sets MANIMGEN_REQUIRE_FFMPEG=1, which turns that skip into a failure: a
+runner whose ffmpeg install step silently broke would otherwise report a green
+build with every real-media test skipped.
 """
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -18,13 +23,26 @@ from manimgen import paths
 from manimgen.renderer import assembler, audio_slicer, muxer
 from manimgen.types import CueSegment
 
+_FFMPEG_MISSING = shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None
+_FFMPEG_REQUIRED = os.environ.get("MANIMGEN_REQUIRE_FFMPEG", "") not in ("", "0")
+
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
-        shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
+        _FFMPEG_MISSING and not _FFMPEG_REQUIRED,
         reason="ffmpeg and ffprobe are required",
     ),
 ]
+
+
+@pytest.fixture(autouse=True)
+def _ffmpeg_present():
+    """Fail, not skip, when CI requires ffmpeg and it is missing."""
+    if _FFMPEG_MISSING:
+        pytest.fail(
+            "MANIMGEN_REQUIRE_FFMPEG is set but ffmpeg or ffprobe is not on PATH"
+        )
+
 
 _TOL = 0.25  # seconds; container rounding and frame alignment
 

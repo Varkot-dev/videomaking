@@ -555,8 +555,11 @@ CI (`.github/workflows/ci.yml`, on every pull request and on pushes to `main`):
 - `lint`: ruff 0.15.13 `check` and `format --check`, Python 3.13.
 - `test`: full suite on Ubuntu, Python 3.11 and 3.13 (3.13 adds a coverage report
   in the job summary, report only, no threshold).
-- `smoke`: pipeline contracts, e2e and Director tests. It repeats part of `test`
-  because its name is a required status check (`docs/BRANCH_PROTECTION.md`).
+- `smoke`: pipeline contracts, e2e, Director and real-ffmpeg media tests. It
+  repeats part of `test` because its name is a required status check
+  (`docs/BRANCH_PROTECTION.md`); deleting it needs that rule removed first.
+- All three test jobs set `MANIMGEN_REQUIRE_FFMPEG=1`, so the real-ffmpeg tests
+  fail instead of skipping when ffmpeg is missing on a runner.
 - `windows`: full suite on `windows-latest`, Python 3.11, no `PYTHONUTF8`.
 - `nightly-render.yml` (03:17 UTC, or manual) has four independent jobs: a real
   480p render on Linux (Xvfb and Mesa llvmpipe) and on Windows (Mesa llvmpipe), and
