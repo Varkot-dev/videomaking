@@ -369,11 +369,11 @@ class TestRejectedFirstDraft:
 
         monkeypatch.setattr(w.retry, "run_manimgl", _render)
         monkeypatch.setattr(
-            w.retry, "check_layout", lambda p: {"ok": True, "issues": ""}
+            w.retry, "check_layout", lambda p, *a, **k: {"ok": True, "issues": ""}
         )
         monkeypatch.setattr(
             "manimgen.validator.frame_checker.check_frames",
-            lambda p: FrameCheckResult(ok=True),
+            lambda p, *a, **k: FrameCheckResult(ok=True),
         )
 
         out = cli._run_section(dict(_SECTION), 1, False, "hash")

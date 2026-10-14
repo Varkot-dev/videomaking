@@ -199,7 +199,7 @@ def _stub(retry_mod, monkeypatch, tmp_path, captures):
     monkeypatch.setattr(
         retry_mod,
         "check_layout",
-        lambda v: (
+        lambda v, *a, **k: (
             layout_calls.append(v)
             or {"ok": True, "issues": "", "frames": [], "skipped": False}
         ),

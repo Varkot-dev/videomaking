@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -264,8 +265,98 @@ def _check_frozen_frames(
 
 
 # ---------------------------------------------------------------------------
-# Scene-guided frame sampling
+# Timestamp sampling (shared with layout_checker)
 # ---------------------------------------------------------------------------
+
+# Most frames frame_checker samples from one video.
+_MAX_SAMPLES = 8
+# A cue-end sample sits this far before the cue boundary, so it shows the
+# finished state of that cue rather than the first frame of the next one.
+_CUE_END_LEAD_SECONDS = 0.1
+# Scene detection decodes the whole video once.
+_SCENE_DETECT_TIMEOUT_SECONDS = 30
+
+
+def evenly_capped(values: list[float], cap: int) -> list[float]:
+    """Return at most ``cap`` items of sorted ``values``, spread evenly.
+
+    The first and last values are always kept, so a long video is sampled
+    across its whole length instead of only at its start.
+    """
+    ordered = sorted(values)
+    if cap <= 0:
+        return []
+    if len(ordered) <= cap:
+        return ordered
+    if cap == 1:
+        return [ordered[len(ordered) // 2]]
+    step = (len(ordered) - 1) / (cap - 1)
+    return [ordered[round(i * step)] for i in range(cap)]
+
+
+def cue_end_timestamps(
+    duration: float, cue_durations: list[float] | None, cap: int = _MAX_SAMPLES
+) -> list[float]:
+    """Return one timestamp at the end of each cue, evenly capped.
+
+    The end of a cue is where its animation has finished, so it is the frame
+    that shows what the cue built. Returns an empty list when there are no
+    usable cue durations, so callers keep their own default sampling.
+    """
+    if not cue_durations or not duration or duration <= 0:
+        return []
+    last = max(0.0, duration - 0.05)
+    stamps: list[float] = []
+    start = 0.0
+    for cue in cue_durations:
+        try:
+            cue = float(cue)
+        except (TypeError, ValueError):
+            return []
+        if cue <= 0:
+            continue
+        end = start + cue
+        t = min(max(end - _CUE_END_LEAD_SECONDS, start + cue / 2), last)
+        if t >= 0 and (not stamps or t - stamps[-1] > 1e-3):
+            stamps.append(round(t, 3))
+        start = end
+        if start >= duration:
+            break
+    return evenly_capped(stamps, cap)
+
+
+def sample_timestamps(
+    duration: float,
+    cue_durations: list[float] | None,
+    default: list[float],
+    cap: int = _MAX_SAMPLES,
+) -> list[float]:
+    """Timestamps at the end of each cue when cues are known, else ``default``."""
+    cue_ends = cue_end_timestamps(duration, cue_durations, cap)
+    return cue_ends if cue_ends else default
+
+
+def _run_scene_detect(video_path: str, sync_flag: str) -> subprocess.CompletedProcess:
+    """Run ffmpeg scene detection with the given variable-frame-rate flag."""
+    return subprocess.run(
+        [
+            "ffmpeg",
+            "-i",
+            video_path,
+            "-vf",
+            r"select=gt(scene\,0.35),showinfo",
+            sync_flag,
+            "vfr",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=_SCENE_DETECT_TIMEOUT_SECONDS,
+    )
 
 
 def _scene_guided_timestamps(video_path: str, duration: float) -> list[float]:
@@ -274,35 +365,33 @@ def _scene_guided_timestamps(video_path: str, duration: float) -> list[float]:
     Runs ffmpeg select filter to find scene boundaries, then samples:
     - First frame of each new scene
     - Midpoint of scenes longer than 3s
-    Caps at 8 frames; falls back to [0.25, 0.50, 0.75] * duration on error.
+    Caps at 8 frames spread evenly across the video; falls back to
+    [0.25, 0.50, 0.75] * duration (with a log line) when detection fails.
     """
-    import re as _re
-    import subprocess as _sp
-
     fallback = [duration * 0.25, duration * 0.50, duration * 0.75]
     try:
-        cmd = [
-            "ffmpeg",
-            "-i",
-            video_path,
-            "-vf",
-            r"select=gt(scene\,0.35),showinfo",
-            "-vsync",
-            "vfr",
-            "-f",
-            "null",
-            "-",
-        ]
-        result = _sp.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=30,
-        )
-        pts_times = [float(m) for m in _re.findall(r"pts_time:([\d.]+)", result.stderr)]
+        result = _run_scene_detect(video_path, "-fps_mode")
+        if result.returncode != 0 and "fps_mode" in (result.stderr or ""):
+            # ffmpeg older than 5.1 has no -fps_mode; -vsync is its old name.
+            logger.info(
+                "[frame_checker] ffmpeg rejected -fps_mode, retrying scene "
+                "detection with -vsync"
+            )
+            result = _run_scene_detect(video_path, "-vsync")
+        if result.returncode != 0:
+            logger.warning(
+                "[frame_checker] Scene detection failed (ffmpeg exit %s), "
+                "sampling at 25/50/75%%: %s",
+                result.returncode,
+                (result.stderr or "").strip()[-300:],
+            )
+            return fallback
+        pts_times = [float(m) for m in re.findall(r"pts_time:([\d.]+)", result.stderr)]
         if not pts_times:
+            logger.debug(
+                "[frame_checker] No scene cuts in %s, sampling at 25/50/75%%",
+                video_path,
+            )
             return fallback
         timestamps: list[float] = []
         prev = 0.0
@@ -312,9 +401,13 @@ def _scene_guided_timestamps(video_path: str, duration: float) -> list[float]:
             if seg_len > 3.0:
                 timestamps.append(prev + seg_len / 2)
             prev = t
-        timestamps.sort()
-        return timestamps[:8] if timestamps else fallback
-    except Exception:
+        return evenly_capped(timestamps, _MAX_SAMPLES)
+    except Exception as exc:
+        logger.warning(
+            "[frame_checker] Scene detection error, sampling at 25/50/75%%: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
         return fallback
 
 
@@ -323,11 +416,15 @@ def _scene_guided_timestamps(video_path: str, duration: float) -> list[float]:
 # ---------------------------------------------------------------------------
 
 
-def check_frames(video_path: str) -> FrameCheckResult:
+def check_frames(
+    video_path: str, cue_durations: list[float] | None = None
+) -> FrameCheckResult:
     """Run deterministic frame checks on a rendered video.
 
-    Samples frames at 25%, 50%, and 75% of video duration and checks each
-    for black frames, edge clipping, and frozen animation.
+    Samples a frame at the end of each cue when ``cue_durations`` is given,
+    otherwise at detected scene cuts (25/50/75% of the duration as a last
+    resort), and checks each for black frames, edge clipping, and frozen
+    animation.
 
     Returns a FrameCheckResult with ok=True if no issues, or ok=False with
     structured ISSUE|CAUSE|FIX lines matching the layout_checker format.
@@ -349,7 +446,9 @@ def check_frames(video_path: str) -> FrameCheckResult:
     if not duration or duration < 0.5:
         return FrameCheckResult(ok=True, skipped=True)
 
-    timestamps = _scene_guided_timestamps(video_path, duration)
+    timestamps = cue_end_timestamps(duration, cue_durations)
+    if not timestamps:
+        timestamps = _scene_guided_timestamps(video_path, duration)
     frames: list[tuple[float, "Image.Image"]] = []
 
     for ts in timestamps:

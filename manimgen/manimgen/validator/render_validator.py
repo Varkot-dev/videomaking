@@ -97,7 +97,7 @@ def validate_render(
     )
 
     # --- Tier 1: frame_checker (zero cost, always runs) ---
-    frame_result = check_frames(video_path)
+    frame_result = check_frames(video_path, cue_durations)
     if not frame_result.ok and not frame_result.skipped:
         # #32: join the frozen-frame signal with timing — drop frozen lines
         # that timing cannot corroborate (legit holds) instead of discarding
@@ -127,7 +127,7 @@ def validate_render(
     # freeze gate. We surface the unverified state as a soft issue so it is
     # never mistaken for a verified-clean render.
     if cue_durations is not None and first_pass_layout_enabled():
-        layout = check_layout(video_path)
+        layout = check_layout(video_path, cue_durations)
         if layout.get("skipped"):
             all_issues.append(
                 "UNVERIFIED: layout check could not run (LLM unavailable) — "
