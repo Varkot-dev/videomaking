@@ -235,6 +235,7 @@ class TestOllamaUrlSsrfGuard:
         with pytest.raises(ValueError, match="http/https"):
             _validate_ollama_url("ftp://localhost:11434")
 
+    @pytest.mark.allow_real_llm
     def test_ollama_call_blocks_public_url(self, monkeypatch):
         """_ollama must refuse a public base URL before issuing any request."""
         import manimgen.llm as llm_mod
@@ -815,6 +816,7 @@ class TestClaudeCliEnvAllowlist:
         assert "GITHUB_TOKEN" not in passed
 
 
+@pytest.mark.allow_real_llm
 class TestOllamaHygiene:
     """#94: Ollama gets an explicit context size and fails fast on 4xx."""
 
@@ -905,6 +907,41 @@ class TestSuiteNeverLaunchesRealClaude:
             with pytest.raises(RuntimeError, match="not found on PATH"):
                 chat(system="s", user="u")
         run.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "path", ["/usr/local/bin/claude", r"C:\Users\me\AppData\npm\claude.cmd"]
+    )
+    def test_full_claude_path_is_unfindable_too(self, path):
+        import shutil
+
+        assert shutil.which(path) is None
+
+    def test_launching_claude_by_full_path_is_refused(self, monkeypatch):
+        """A test that fakes `which` but forgets to mock the subprocess."""
+        import shutil
+
+        monkeypatch.setenv("LLM_PROVIDER", "claude_cli")
+        monkeypatch.setitem(
+            llm_mod._LLM_CONFIG, "claude_cli_path", "/opt/tools/claude"
+        )
+        monkeypatch.setattr(shutil, "which", lambda name, *a, **k: str(name))
+        with patch("subprocess.Popen") as popen:
+            with pytest.raises(RuntimeError, match="real Claude CLI"):
+                chat(system="s", user="u")
+        popen.assert_not_called()
+
+    @pytest.mark.parametrize("provider", ["anthropic", "gemini", "ollama"])
+    def test_other_providers_are_blocked_by_default(self, monkeypatch, provider):
+        monkeypatch.setenv("LLM_PROVIDER", provider)
+        monkeypatch.setenv("MANIMGEN_ALLOW_PAID_API", "1")
+        with pytest.raises(RuntimeError, match="real LLM provider"):
+            chat(system="s", user="u")
+
+    @pytest.mark.allow_real_llm
+    def test_marker_restores_the_real_provider_functions(self):
+        assert llm_mod._ollama.__module__ == "manimgen.llm"
+        assert llm_mod._anthropic is _anthropic
+        assert llm_mod._gemini is _gemini
 
 
 def _limit_event(

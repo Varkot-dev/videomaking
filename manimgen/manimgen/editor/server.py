@@ -148,6 +148,10 @@ def _get_clips() -> list[dict]:
             continue
         if p.stem.startswith("_tmp_"):
             continue
+        # utils.atomic_output writes "<stem>.<token>.part.mp4" while an encode
+        # runs; a half-written file is not a clip.
+        if p.stem.endswith(".part"):
+            continue
         duration = _cached_duration(p)
         clips.append(
             {

@@ -26,4 +26,5 @@ markers = [
     "unit: isolated function/utility/component tests (no I/O, no subprocess)",
     "integration: cross-module wiring with all LLM/subprocess seams mocked",
     "security: input-validation / traversal / XSS / auth-boundary tests",
+    "allow_real_llm: let the test run the real llm._anthropic/_gemini/_ollama, which tests/conftest.py blocks by default; the test must mock their transport itself",
 ]
