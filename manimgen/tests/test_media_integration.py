@@ -197,6 +197,43 @@ def test_assemble_video_injects_silent_audio_for_video_only_clip(small_render):
     assert _duration(out) == pytest.approx(2.0, abs=_TOL)
 
 
+def test_ten_section_crossfades_use_one_encode(small_render, monkeypatch):
+    """#75: all section crossfades are built in one ffmpeg encode, not one
+    re-encode of the growing video per section, and the length is right."""
+    tmp_path = small_render
+    colors = ["red", "green", "blue", "yellow", "white"] * 2
+    clips = []
+    for i, color in enumerate(colors):
+        # Already "normalised": same size, fps, pixel format, codec and rate.
+        path = tmp_path / f"section_{i + 1:02d}.mp4"
+        _ffmpeg(
+            "-f", "lavfi", "-i", f"color=c={color}:s=160x90:r=30:d=1",
+            "-f", "lavfi", "-i", f"sine=frequency={300 + 50 * i}:sample_rate=48000:d=1",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-ar", "48000", "-shortest", path,
+        )  # fmt: skip
+        clips.append(str(path))
+
+    real_run = subprocess.run
+    encodes = []
+
+    def spy(cmd, *args, **kwargs):
+        if "-filter_complex" in cmd:
+            encodes.append(cmd)
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(assembler.subprocess, "run", spy)
+    work = tmp_path / "work"
+    work.mkdir()
+    out = assembler._concat(clips, set(range(len(clips))), str(work))
+
+    assert len(encodes) == 1
+    assert sorted(_kinds(_probe(out))) == ["audio", "video"]
+    want = len(clips) - (len(clips) - 1) * assembler._XFADE_DURATION
+    assert _duration(out) == pytest.approx(want, abs=_TOL)
+    assert _stream_duration(out, "video") == pytest.approx(want, abs=_TOL)
+
+
 def test_real_mux_replaces_existing_clip_and_leaves_no_temp(tmp_path):
     video = _make_video(tmp_path / "v.mp4", 1)
     audio = _make_audio(tmp_path / "a.m4a", 1)
