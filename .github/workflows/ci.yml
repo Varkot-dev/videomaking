@@ -42,6 +42,11 @@ jobs:
     name: Full test suite (no ignores, Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Every test job installs ffmpeg, so the real-ffmpeg media tests
+    # (tests/test_media_integration.py) must run, not skip: this turns a
+    # missing ffmpeg into a failure instead of a quietly green build.
+    env:
+      MANIMGEN_REQUIRE_FFMPEG: "1"
     strategy:
       # Report every interpreter's result instead of cancelling the rest on
       # the first failure: a 3.11-only break is the signal this matrix exists for.
@@ -97,9 +102,13 @@ jobs:
     # Kept although these three files also run in the full suite: this exact
     # job name is a REQUIRED status check in docs/BRANCH_PROTECTION.md, and
     # deleting it would leave main's protection waiting on a check that never
-    # reports. Remove it only together with that branch protection rule.
+    # reports. Remove it only together with that branch protection rule
+    # (issue #90 asks for its removal; the rule is a repository setting that
+    # only an admin can change, so the job stays until then).
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      MANIMGEN_REQUIRE_FFMPEG: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -126,7 +135,13 @@ jobs:
         # subprocess.run seams). ALL LLM/subprocess/layout-checker calls are
         # mocked — zero API key, zero render, zero network. A wiring
         # regression in any of these fails here without any API cost.
-        run: python3 -m pytest tests/test_pipeline_contracts.py tests/test_pipeline_e2e.py tests/test_director.py -q --strict-markers
+        # test_media_integration adds the real muxer, cutter and assembler on
+        # tiny lavfi clips, so the media half of the pipeline is covered too.
+        run: >
+          python3 -m pytest
+          tests/test_pipeline_contracts.py tests/test_pipeline_e2e.py
+          tests/test_director.py tests/test_media_integration.py
+          -q --strict-markers
 
   windows:
     name: Full test suite (Windows, Python 3.11)
@@ -138,6 +153,8 @@ jobs:
     # default encoding to catch a missing encoding="utf-8".
     runs-on: windows-latest
     timeout-minutes: 30
+    env:
+      MANIMGEN_REQUIRE_FFMPEG: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
