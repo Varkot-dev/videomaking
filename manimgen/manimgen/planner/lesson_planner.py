@@ -15,6 +15,12 @@ logger = logging.getLogger(__name__)
 _MAX_SECTIONS_TOPIC = 6
 _MAX_SECTIONS_PDF = 8
 
+# What plan_lesson_from_pdf sends the planner: extracted text is truncated at
+# this many characters, and at most this many page images are attached.
+# Anything cut is logged as a warning naming what the planner did not see.
+_PDF_MAX_CHARS = 24_000
+_PDF_MAX_IMAGES = 10
+
 
 _SELF_CORRECT_LIMIT = 1  # number of critic passes per plan
 
@@ -713,12 +719,12 @@ def _format_research_brief(brief: dict) -> str:
     key_formulas = brief.get("key_formulas", [])
     if key_formulas:
         lines.append("\nKey formulas:")
-        for f in key_formulas:
-            name = f.get("name", "")
+        for formula in key_formulas:
+            name = formula.get("name", "")
             if not name:
                 continue
-            lines.append(f"  • {name}: {f.get('formula', '')}")
-            lines.append(f"    {f.get('explanation', '')}")
+            lines.append(f"  • {name}: {formula.get('formula', '')}")
+            lines.append(f"    {formula.get('explanation', '')}")
 
     worked_example = brief.get("worked_example", {})
     if worked_example:
@@ -791,13 +797,12 @@ def plan_lesson_from_pdf(pdf_path: str) -> dict:
         len(images),
     )
 
-    MAX_CHARS = 24_000
     content_parts = []
     total = 0
     chunks_sent = 0
     for i, chunk in enumerate(parsed["chunks"]):
         entry = f"[Chunk {i + 1}]\n{chunk}"
-        if total + len(entry) > MAX_CHARS:
+        if total + len(entry) > _PDF_MAX_CHARS:
             content_parts.append(
                 f"[... {len(parsed['chunks']) - i} additional chunks truncated ...]"
             )
@@ -812,7 +817,7 @@ def plan_lesson_from_pdf(pdf_path: str) -> dict:
             "planner (%d char limit); chunks %d-%d were NOT seen",
             chunks_sent,
             chunks_total,
-            MAX_CHARS,
+            _PDF_MAX_CHARS,
             chunks_sent + 1,
             chunks_total,
         )
@@ -831,18 +836,17 @@ def plan_lesson_from_pdf(pdf_path: str) -> dict:
             "Analyse all images and create a visual storyboard based on what you see."
         )
 
-    MAX_IMAGES = 10
     images_total = len(images)
-    if images_total > MAX_IMAGES:
+    if images_total > _PDF_MAX_IMAGES:
         logger.warning(
-            "[planner] PDF has %d rendered pages: only pages 1-%d were sent as "
-            "images; pages %d-%d were NOT seen",
+            "[planner] PDF has %d page images: only images 1-%d were sent; "
+            "images %d-%d were NOT seen",
             images_total,
-            MAX_IMAGES,
-            MAX_IMAGES + 1,
+            _PDF_MAX_IMAGES,
+            _PDF_MAX_IMAGES + 1,
             images_total,
         )
-        images = images[:MAX_IMAGES]
+        images = images[:_PDF_MAX_IMAGES]
 
     system = _load_pdf_system_prompt()
     logger.info(

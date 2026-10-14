@@ -101,6 +101,40 @@ def _chunk_by_paragraphs(text: str, min_chars: int = 200) -> list:
     return chunks
 
 
+# A page with at least this many vector drawing operations is treated as
+# carrying a diagram, chart or plot worth rendering. Plain text pages still
+# produce a handful (header rules, underlines, table borders), so a single
+# drawing is not enough to justify a full-page PNG.
+_MIN_DRAWINGS_FOR_VISUAL = 10
+
+
+def _page_has_visuals(fitz_page) -> bool:
+    """True when a page carries raster images or substantial vector graphics.
+
+    When PyMuPDF cannot answer (an exception from a malformed page), the page
+    counts as visual: rendering one page too many costs a PNG, skipping a
+    diagram loses content the planner cannot recover.
+    """
+    try:
+        if fitz_page.get_images(full=True):
+            return True
+        return len(fitz_page.get_drawings()) >= _MIN_DRAWINGS_FOR_VISUAL
+    except Exception:
+        return True
+
+
+def _should_render_page(has_text: bool, has_visuals: bool) -> bool:
+    """Three-way rendering decision for one page.
+
+    1. No extractable text (a scan, or text drawn as outlines): render, the
+       image is the only record of the page.
+    2. Text plus images or diagrams: render, the visuals are not in the text.
+    3. Text only: skip, the extracted text already carries the content and a
+       PNG would only bloat memory and the LLM payload.
+    """
+    return not has_text or has_visuals
+
+
 def _render_page_to_b64(doc, page_index: int, dpi: int = 150) -> str:
     """Render a single PDF page to a base64-encoded PNG using PyMuPDF."""
     page = doc[page_index]
@@ -112,15 +146,18 @@ def parse_pdf(pdf_path: str) -> dict:
     """
     Extract and structure text and page renders from a PDF file.
 
-    Uses PyMuPDF to render every page to a PNG (captures vector graphics,
-    diagrams, and embedded images alike). pypdf is used for text extraction.
+    pypdf extracts the text. PyMuPDF renders a page to PNG only when the text
+    cannot carry it (see ``_should_render_page``): pages without extractable
+    text, and pages with raster images or substantial vector graphics.
+    Text-only pages are not rendered.
 
     Returns:
         {
             "raw_text": str,        full cleaned text
             "chunks": [str],        logical text segments
             "extracted_pages": int  number of pages with text
-            "images": [str],        base64-encoded PNG renders, one per page
+            "images": [str],        base64-encoded PNG renders, in page order,
+                                    of the pages that needed one
         }
 
     Raises:
@@ -166,8 +203,6 @@ def parse_pdf(pdf_path: str) -> dict:
     for i, page in enumerate(reader.pages):
         if i >= pages_to_process:
             break
-        # Render every processed page regardless of text content
-        all_images.append(_render_page_to_b64(doc, i))
 
         try:
             text = page.extract_text() or ""
@@ -177,7 +212,11 @@ def parse_pdf(pdf_path: str) -> dict:
             )
             text = ""
 
-        if not text.strip():
+        has_text = bool(text.strip())
+        if _should_render_page(has_text, has_text and _page_has_visuals(doc[i])):
+            all_images.append(_render_page_to_b64(doc, i))
+
+        if not has_text:
             warnings.warn(
                 f"[pdf_parser] Page {i + 1} has no extractable text — visual render captured."
             )
@@ -236,11 +275,9 @@ if __name__ == "__main__":
 # Input parser (absorbed from parser.py)
 # ---------------------------------------------------------------------------
 
-import re as _re
-
 
 def parse_input(raw: str) -> str:
     """Normalize raw user input into a clean topic description."""
     text = raw.strip()
-    text = _re.sub(r"\s+", " ", text)
+    text = re.sub(r"\s+", " ", text)
     return text

@@ -26,17 +26,6 @@ from manimgen.validator.codeguard import (
 from manimgen.validator.retry import _classify_error, _fix_guidance
 
 
-# ── Load actual failing scenes from logs ─────────────────────────────────────
-
-def _load_log(filename: str) -> str:
-    here = os.path.dirname(__file__)
-    log_path = os.path.join(here, "..", "manimgen", "output", "logs", filename)
-    if not os.path.isfile(log_path):
-        pytest.skip(f"Log file not found (run the pipeline first): {log_path}")
-    with open(log_path, encoding="utf-8") as f:
-        return f.read()
-
-
 # ── Inline pattern tests — not tied to specific pipeline run output ───────────
 
 # Inline examples of patterns that codeguard must detect/fix.

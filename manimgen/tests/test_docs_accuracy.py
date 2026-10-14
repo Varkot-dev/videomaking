@@ -538,13 +538,8 @@ def test_documented_section_and_input_caps_match_the_code() -> None:
     from manimgen.planner import lesson_planner
 
     topic, pdf = lesson_planner._MAX_SECTIONS_TOPIC, lesson_planner._MAX_SECTIONS_PDF
-    planner_src = (
-        PACKAGE_ROOT / "manimgen" / "planner" / "lesson_planner.py"
-    ).read_text(encoding="utf-8")
-    max_chars = int(
-        re.search(r"MAX_CHARS = ([\d_]+)", planner_src).group(1).replace("_", "")
-    )
-    max_images = int(re.search(r"MAX_IMAGES = (\d+)", planner_src).group(1))
+    max_chars = lesson_planner._PDF_MAX_CHARS
+    max_images = lesson_planner._PDF_MAX_IMAGES
 
     readme = (GIT_ROOT / "README.md").read_text(encoding="utf-8")
     arch = (GIT_ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")

@@ -69,7 +69,7 @@ manimgen/
 │   ├── utils.py                 # shared: strip_fencing(), section_class_name()
 │   ├── input/
 │   │   ├── parser.py            # normalize topic string
-│   │   └── pdf_parser.py        # extract text + render pages from PDF
+│   │   └── pdf_parser.py        # extract text + render pages that need an image
 │   ├── techniques.py            # the one technique registry (planner, critic, 3D promotion, example tags)
 │   ├── planner/
 │   │   ├── lesson_planner.py    # research_topic() + plan_lesson() → storyboard JSON
@@ -459,7 +459,7 @@ Most visible quality issue. Cues often have 1–8 seconds of frozen still at the
 
 **Fix plan:**
 - ✅ DONE: Director prompt. The loop-timing law opens the Cue timing section of `director_system.md` with a RIGHT (accumulate `anim_time`, subtract the total) and a WRONG (subtract one iteration) example. `tests/test_director_prompt_loop_timing.py` keeps it first.
-- ✅ DONE — `timing_verifier` is now a single authoritative gate (`retry.apply_timing_gate`) called as a zero-cost pre-render check in `cli.py`. Unresolvable timing issues skip the first render and route straight to the retry path, with timing warnings carried into the LLM fix prompt.
+- DONE: `timing_verifier` runs through one shared gate (`retry.apply_timing_gate`) called as a zero-cost pre-render check in `cli.py`. Unresolvable timing issues skip the first render and route straight to the retry path, with timing warnings carried into the LLM fix prompt. It is a static analysis, so its totals are lower bounds and advisory where it cannot resolve a value: cues it reports as UNKNOWN never block (#22, #23).
 - ✅ DONE (#59): empty cue clips. When the render ends before a cue starts (less than one frame left), a plain cut gave a ~262-byte clip with no video stream and the section was dropped. `cut_video_at_cues` now probes the render length and builds such a cue by holding the last rendered frame for the cue duration (falls back to the plain cut if that ffmpeg call fails). The gap is recorded in the mismatch log and as a `cue_past_video_end` evidence event so the defect stays visible. The muxer still synthesizes a `#1C1C1C` background for any clip that has no video stream.
 
 **Still open:** this is mitigation. A loop the Director under-counts still yields a frozen tail on screen; whether the prompt change reduces how often that happens is unmeasured (check `cue_past_video_end` and `av_mismatch` counts in the evidence log after real runs).
@@ -472,17 +472,17 @@ Most visible quality issue. Cues often have 1–8 seconds of frozen still at the
 ### 3. ✅ RESOLVED — frame_checker.py wiring
 Confirmed wired in `validator/retry.py`: `check_frames()` runs after every successful render. Hard failures (black/frozen frames confirmed by timing oracle) block muxing and force retry. Soft failures (layout issues, only when `MANIMGEN_FIRST_PASS_LAYOUT=1`) are advisory on the first pass; `retry_scene` feeds layout issues into its LLM fix prompt.
 
-### 4. LOW — `.hypothesis/` and `.DS_Store` committed
-Should be in `.gitignore`. Clutters diffs.
+### 4. RESOLVED: `.hypothesis/` and `.DS_Store` committed
+Both are listed in the root and package `.gitignore`, and `git ls-files` shows no tracked copy of either.
 
 ### 5. RESOLVED: `_load_llm_config()` called on every LLM call
 `llm.py` now parses `config.yaml` once at import into `_LLM_CONFIG`.
 
-### 6. LOW — Cue-word tokenization mismatch risk
-`cue_parser` uses `str.split()` word counts; edge-tts may tokenize differently.
+### 6. RESOLVED: Cue-word tokenization mismatch risk
+`cue_parser.parse_cues` still counts words with `str.split()`, but `segmenter.compute_segments(clean_text=...)` re-derives every cue index against the edge-tts WordBoundary tokens via `cue_parser.align_cue_indices`. The aligner maps each word's first letter or digit through the concatenated alphanumeric content of both streams (`difflib` anchors it when the content differs, e.g. a number read back as words), so hyphen splits, contractions, punctuation-only tokens and merged tokens all resolve to the right onset. Equal token counts are no longer taken as agreement: a spaced dash plus a split hyphenated word used to cancel out and shift every cue between them. Tests: `tests/test_cue_alignment_robust.py` (includes a hypothesis property), `tests/test_cue_parser.py`, `tests/test_cue_tokenization.py`.
 
-### 7. LOW — PDF rendering unconditional
-Renders every page to PNG even for text-heavy PDFs. Should use 3-way logic.
+### 7. RESOLVED: PDF rendering unconditional
+`pdf_parser.parse_pdf` renders a page to PNG only when `_should_render_page` says so: pages with no extractable text (scans), and pages with raster images or at least `_MIN_DRAWINGS_FOR_VISUAL` vector drawing operations. Text-only pages are not rendered. Tests: `tests/test_pdf_render_policy.py`.
 
 ---
 

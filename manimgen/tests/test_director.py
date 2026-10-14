@@ -327,13 +327,24 @@ class TestCodeguardPrecheck(unittest.TestCase):
         self.assertIsInstance(result, str)
 
     def test_precheck_file_returns_dict(self):
+        import tempfile
+
         from manimgen.validator.codeguard import precheck_and_autofix_file
-        path = "/tmp/test_codeguard_scene.py"
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("from manimlib import *\nclass S(Scene):\n    def construct(self): self.wait(1)\n")
-        result = precheck_and_autofix_file(path)
-        self.assertIsInstance(result, dict)
-        self.assertIn("ok", result)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "test_codeguard_scene.py")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(
+                    "from manim import *\nclass S(Scene):\n"
+                    "    def construct(self): self.wait(1)\n"
+                )
+            result = precheck_and_autofix_file(path)
+            with open(path, encoding="utf-8") as f:
+                on_disk = f.read()
+        # A valid scene passes, and the auto-fix is written back to the file.
+        self.assertIs(result["ok"], True)
+        self.assertEqual(result["stderr"], "")
+        self.assertIn("from manimlib import *", on_disk)
+        self.assertNotIn("from manim import *", on_disk)
 
 
 class TestCutter(unittest.TestCase):

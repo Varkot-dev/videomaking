@@ -3,6 +3,7 @@
 import base64
 import contextlib
 import glob
+import logging
 import os
 import re
 import subprocess
@@ -249,6 +250,13 @@ def load_reference_frames() -> list[str]:
 
     frames = []
     for path in sorted(pngs):
-        with open(path, "rb") as f:
-            frames.append(base64.b64encode(f.read()).decode("utf-8"))
+        # One unreadable file must not take every vision check down with it:
+        # skip it and keep the rest.
+        try:
+            with open(path, "rb") as f:
+                frames.append(base64.b64encode(f.read()).decode("utf-8"))
+        except OSError as exc:
+            logging.getLogger(__name__).warning(
+                "[utils] skipping unreadable reference frame %s: %s", path, exc
+            )
     return frames
