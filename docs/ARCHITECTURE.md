@@ -305,8 +305,9 @@ Decision. Audio comes first and drives the rest.
    `start` of the next, so no last syllable is clipped. Durations sum to the audio.
 4. `str.split()` and edge-tts tokenize contractions, numbers and hyphens
    differently, so `cue_parser.align_cue_indices` re-derives each index against
-   the TTS tokens. An in-range but shifted index would silently pick the wrong
-   word.
+   the TTS tokens by aligning the two streams' letters and digits character by
+   character (equal token counts are not taken as agreement). An in-range but
+   shifted index would silently pick the wrong word.
 5. `audio_slicer` cuts one AAC slice per cue (re-encoded: no MP3 frame drift).
 6. The Director gets the durations and marks blocks `# CUE N`.
    `timing_verifier.verify_timing` splits by those comments, sums `run_time` and

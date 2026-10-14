@@ -46,6 +46,11 @@ class ScenePrecheckError(ValueError):
         self.scene_path = scene_path
 
 
+# Speaking rate for the no-TTS contract only: when a section reaches the
+# Director with neither measured cue durations nor an explicit duration
+# (tts.enabled is false, TTS failed for that section, or a caller passes no
+# durations), its length is estimated from the narration word count at this
+# rate. When TTS succeeds the measured word timestamps are used instead.
 _WORDS_PER_MINUTE = 130
 _MAX_EXAMPLES = 6
 

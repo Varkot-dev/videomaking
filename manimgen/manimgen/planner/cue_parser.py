@@ -22,6 +22,7 @@
 # These indices are stored in the lesson plan JSON and later resolved to
 # real timestamps via tts.cue_times(word_timestamps, cue_word_indices).
 
+import difflib
 import logging
 import re
 
@@ -93,8 +94,8 @@ def align_cue_indices(
     desync with no error.
 
     This maps each str.split() boundary index to the index of the edge-tts
-    token that begins the same word, by walking both token streams in parallel
-    and matching on their alphanumeric content (``_word_key``). The edge-tts
+    token that begins the same word, by aligning the concatenated alphanumeric
+    content (``_word_key``) of both streams character by character. The edge-tts
     stream is the canonical clock, so the returned indices are what
     ``cue_times`` / ``compute_segments`` must use.
 
@@ -109,9 +110,14 @@ def align_cue_indices(
         two tokenizations agree this is a no-op (returns ``split_indices``).
     """
     split_words = clean_text.split()
+    split_keys = [_word_key(w) for w in split_words]
+    tts_keys = [_word_key(w) for w in tts_words]
 
-    # Fast path: identical token counts → tokenizations agree, nothing to do.
-    if len(split_words) == len(tts_words):
+    # Fast path: the two streams agree token for token, nothing to do. Equal
+    # token COUNTS are not enough: a punctuation-only split token (a spaced
+    # dash) and a hyphenated word edge-tts splits in two cancel out in the
+    # count while every index between them is shifted by one.
+    if split_keys == tts_keys:
         return list(split_indices)
 
     logger.warning(
@@ -123,36 +129,35 @@ def align_cue_indices(
     )
 
     if not tts_words:
-        # No canonical stream to align against — keep originals (clamped below).
-        return [min(i, 0) for i in split_indices]
+        # No canonical stream to align against: every cue collapses to 0.
+        return [0 for _ in split_indices]
 
-    # Build, for each split-word index, the edge-tts token index where that
-    # word begins. Walk both streams, consuming edge-tts tokens until their
-    # concatenated content covers the current split word.
-    split_to_tts: list[int] = []
-    tts_pos = 0
+    # Align on character positions, not token positions. Each split word is
+    # located by the offset of its first alphanumeric character in the
+    # concatenated content, that offset is mapped into the edge-tts content,
+    # and the edge-tts token covering it is the cue's canonical index. This is
+    # indifferent to how either side breaks words (hyphens, contractions,
+    # punctuation-only tokens, merged tokens).
     n_tts = len(tts_words)
-    for split_word in split_words:
-        start = min(tts_pos, n_tts - 1)
-        target = _word_key(split_word)
-        if not target:
-            split_to_tts.append(start)
-            continue
-        acc = ""
-        cursor = tts_pos
-        while cursor < n_tts and len(acc) < len(target):
-            acc += _word_key(tts_words[cursor])
-            cursor += 1
-        # Map this split word to the first edge-tts token consumed for it.
-        split_to_tts.append(start)
-        tts_pos = max(cursor, tts_pos + 1) if cursor > tts_pos else tts_pos + 1
+    split_starts = _key_offsets(split_keys)
+    tts_ends = [
+        start + len(key) for start, key in zip(_key_offsets(tts_keys), tts_keys)
+    ]
+    char_map = _CharMap("".join(split_keys), "".join(tts_keys))
 
     def _resolve(split_idx: int) -> int:
         if split_idx <= 0:
             return 0
-        if split_idx < len(split_to_tts):
-            return split_to_tts[split_idx]
-        # Boundary past the last word → end of stream.
+        if split_idx >= len(split_words):
+            # Boundary past the last word: end of stream.
+            return n_tts - 1
+        pos = char_map.map(split_starts[split_idx])
+        # The edge-tts token containing this character, or the first one after
+        # it. Content-free tokens (pure punctuation) have an empty span and are
+        # never chosen.
+        for j, end in enumerate(tts_ends):
+            if end > pos:
+                return j
         return n_tts - 1
 
     aligned = []
@@ -163,6 +168,46 @@ def align_cue_indices(
         aligned.append(resolved)
         last = resolved
     return aligned
+
+
+def _key_offsets(keys: list[str]) -> list[int]:
+    """Start offset of each key inside ``"".join(keys)``."""
+    offsets = []
+    pos = 0
+    for key in keys:
+        offsets.append(pos)
+        pos += len(key)
+    return offsets
+
+
+class _CharMap:
+    """Map character positions in one normalised text onto another.
+
+    Both texts are the concatenated ``_word_key`` content of a token stream,
+    so they are identical whenever the two tokenizers only disagree on where
+    words break. When the content itself differs (a number read back as words,
+    a dropped symbol), the matching blocks from ``difflib`` anchor the mapping
+    and an unmatched position snaps to the next matched character, so one
+    local difference never shifts the rest of the narration.
+    """
+
+    def __init__(self, source: str, target: str):
+        self._identical = source == target
+        self._target_len = len(target)
+        self._blocks = []
+        if not self._identical:
+            matcher = difflib.SequenceMatcher(None, source, target, autojunk=False)
+            self._blocks = [b for b in matcher.get_matching_blocks() if b.size]
+
+    def map(self, pos: int) -> int:
+        if self._identical:
+            return pos
+        for a, b, size in self._blocks:
+            if pos < a:
+                return b  # unmatched: snap to the next matched character
+            if pos < a + size:
+                return b + (pos - a)
+        return self._target_len
 
 
 def inject_cues(clean_text: str, cue_word_indices: list[int]) -> str:
