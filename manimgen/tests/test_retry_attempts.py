@@ -17,7 +17,9 @@ from manimgen.probes.overlap_report import Overlap
 from manimgen.validator import retry as retry_mod
 
 _SCENE = "from manimlib import *\n\n\nclass S(Scene):\n    pass\n"
-_KWARG_CRASH = "TypeError: Mobject.__init__() got an unexpected keyword argument 'length'"
+_KWARG_CRASH = (
+    "TypeError: Mobject.__init__() got an unexpected keyword argument 'length'"
+)
 _OVERLAP = Overlap(14.6, "0.4", "0.6", 0.36)
 
 
@@ -62,7 +64,9 @@ def loop(monkeypatch, tmp_path):
 
     def _local_fix(code, stderr):
         if "unexpected keyword argument 'length'" in stderr:
-            return code + "# length removed\n", ["removed unexpected kwarg 'length' (1)"]
+            return code + "# length removed\n", [
+                "removed unexpected kwarg 'length' (1)"
+            ]
         return code, []
 
     monkeypatch.setattr(retry_mod, "apply_error_aware_fixes", _local_fix)
@@ -189,7 +193,9 @@ def test_gate_rejection_for_top_level_expr_is_classified_as_safety_gate():
 
 
 def test_gate_rejection_wins_over_keywords_quoted_in_its_findings():
-    stderr = _GATE_TOPLEVEL + "\n- line 9: name 'TypeError' is not allowed (SyntaxError)"
+    stderr = (
+        _GATE_TOPLEVEL + "\n- line 9: name 'TypeError' is not allowed (SyntaxError)"
+    )
     assert retry_mod._classify_error(stderr) == retry_mod.SceneErrorType.SAFETY_GATE
 
 
@@ -249,3 +255,15 @@ def test_gate_rejection_fix_prompt_uses_gate_guidance(monkeypatch, loop, tmp_pat
     assert "static safety check" in prompt
     assert "sin_t" in prompt and "great_circle" in prompt
     assert "Simplify the scene logic" not in prompt
+
+
+def test_a_render_timeout_is_not_treated_as_a_crash():
+    from manimgen.validator.retry import SceneErrorType, _classify_error, _fix_guidance
+
+    stderr = (
+        "Traceback ... AttributeError: none\n"
+        "TimeoutExpired: scene rendering exceeded 240 seconds (process tree killed)."
+    )
+    assert _classify_error(stderr) is SceneErrorType.TIMEOUT
+    guidance = _fix_guidance(SceneErrorType.TIMEOUT, stderr)
+    assert "did not crash" in guidance and "duration exactly" in guidance

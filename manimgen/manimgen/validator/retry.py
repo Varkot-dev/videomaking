@@ -146,6 +146,7 @@ class SceneErrorType(str, enum.Enum):
     RUNTIME = "runtime"
     TIMING = "timing"
     SAFETY_GATE = "safety_gate"
+    TIMEOUT = "timeout"
 
 
 _GATE_REJECTION_RE = re.compile(rf"^{re.escape(GATE_ERROR_MARKER)}:", re.MULTILINE)
@@ -161,6 +162,11 @@ def _classify_error(stderr: str) -> SceneErrorType:
     # Check precheck-specific errors BEFORE generic TypeError/AttributeError —
     # precheck output contains the word "TypeError" in its explanation text,
     # which would otherwise cause a false match on the generic TypeError branch.
+    # A render killed for running too long is not a crash: the code may be
+    # correct and only too expensive per frame. "Simplify the scene logic"
+    # guidance made the model rewrite working scenes.
+    if "TimeoutExpired: scene rendering exceeded" in stderr:
+        return SceneErrorType.TIMEOUT
     if (
         "Precheck failed" in stderr
         and "VGroup" in stderr
@@ -203,6 +209,16 @@ _FIX_GUIDANCE: dict[SceneErrorType, str] = {
         "`disallowed top-level ...`, move or delete the statement so only "
         "imports, constants and the Scene class exist at module level. Do not "
         "add imports beyond `from manimlib import *`, numpy and math."
+    ),
+    SceneErrorType.TIMEOUT: (
+        "The scene did not crash: it was stopped because it took too long to "
+        "render. Keep the content, the cue structure and every cue's total "
+        "duration exactly as they are. Make each frame cheaper to draw: fewer "
+        "mobjects on screen at once (a 5x5 grid of tiles as one NumberPlane or "
+        "a few Lines rather than 25 Squares), no updater or always_redraw that "
+        "rebuilds a large group every frame, no long LaggedStart over dozens "
+        "of objects, and remove objects that are no longer visible with "
+        "self.remove instead of fading them to zero opacity."
     ),
     SceneErrorType.TIMING: (
         "Fix the animation timing. Each CUE block must have animations + self.wait() that "
