@@ -55,6 +55,10 @@ def _install_overlap_probe():
     except Exception as exc:
         sys.modules.pop(name, None)
         _write_load_error(report, exc)
+    finally:
+        # Only this process owns the report; keep descendants from loading
+        # the probe and overwriting it (spawned helpers inherit the env).
+        os.environ.pop("MANIMGEN_OVERLAP_REPORT", None)
 
 
 def _write_load_error(report, exc):

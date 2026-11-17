@@ -464,7 +464,13 @@ def collect_text_items(scene, min_opacity: float = MIN_OPACITY) -> list[TextItem
 # Installation in the render child
 # ---------------------------------------------------------------------------
 
-_state: dict = {"recorder": None, "scene": "", "error": None, "path": None}
+_state: dict = {
+    "recorder": None,
+    "scene": "",
+    "error": None,
+    "path": None,
+    "pid": None,  # the process that installed the probe; only it writes
+}
 
 
 def _record_error(where: str, exc: BaseException) -> None:
@@ -476,6 +482,9 @@ def write_report() -> None:
     path = _state["path"]
     if not path:
         return
+    owner = _state.get("pid")
+    if owner is not None and owner != os.getpid():
+        return  # a forked copy of the state must not clobber the owner's report
     try:
         recorder = _state["recorder"] or OverlapRecorder()
         data = recorder.report(_state["scene"], _state["error"])
@@ -614,6 +623,11 @@ def install() -> None:
     if not path:
         return
     _state["path"] = path
+    _state["pid"] = os.getpid()
+    # Helper processes (multiprocessing's resource tracker, which spawn-based
+    # platforms start) inherit the environment and would load this probe too;
+    # they must not own or overwrite the report.
+    os.environ.pop(REPORT_ENV, None)
     try:
         module = sys.modules.get(_TARGET)
         if module is not None:

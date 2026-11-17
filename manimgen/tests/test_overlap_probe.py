@@ -507,3 +507,55 @@ def test_probe_can_be_disabled(monkeypatch):
     assert not overlap_report.probe_enabled()
     monkeypatch.delenv(overlap_report.DISABLE_ENV)
     assert overlap_report.probe_enabled()
+
+
+# ---------------------------------------------------------------------------
+# Only the installing process owns the report (macOS/Windows spawn helpers)
+# ---------------------------------------------------------------------------
+
+
+def test_install_removes_the_report_var_from_the_environment(
+    monkeypatch, clean_state, tmp_path
+):
+    report = str(tmp_path / "r.json")
+    monkeypatch.setenv(probe.REPORT_ENV, report)
+    monkeypatch.setattr(probe.atexit, "register", lambda fn: None)
+    # install() may insert its import hook; keep it out of later tests.
+    monkeypatch.setattr(sys, "meta_path", list(sys.meta_path))
+    probe.install()
+    assert clean_state["path"] == report
+    assert probe.REPORT_ENV not in os.environ
+
+
+def test_write_report_is_skipped_in_a_process_that_did_not_install(
+    clean_state, tmp_path
+):
+    path = tmp_path / "r.json"
+    clean_state["path"] = str(path)
+    clean_state["pid"] = os.getpid() + 1  # a copied state, as after fork
+    probe.write_report()
+    assert not path.exists()
+
+
+_PARENT_SCRIPT = """
+import os, subprocess, sys
+probe = sys.modules["_manimgen_overlap_probe"]
+probe._state["error"] = "parent-owned"
+probe.write_report()
+import atexit
+atexit.unregister(probe.write_report)  # only the child could now clobber it
+subprocess.run([sys.executable, "-c", "pass"], check=True)
+"""
+
+
+def test_a_child_python_process_does_not_overwrite_the_parents_report(tmp_path):
+    report = tmp_path / "r.json"
+    env = dict(os.environ)
+    env["PYTHONPATH"] = overlap_report.bootstrap_dir()
+    env[overlap_report.REPORT_ENV] = str(report)
+    import subprocess
+
+    subprocess.run(
+        [sys.executable, "-c", _PARENT_SCRIPT], env=env, check=True, timeout=60
+    )
+    assert json.loads(report.read_text())["probe_error"] == "parent-owned"
