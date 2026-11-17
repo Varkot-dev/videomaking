@@ -37,6 +37,7 @@ That box is 3.4 units wide and 4.0 units tall, and its centre is at **x = -0.3**
 - Equations are broken at `=` and stacked, never one long line.
 - Comparisons are stacked top over bottom, never left and right.
 - Labels go beside the thing they label, inside the box. Two labels never share one position.
+- Replacing text in a band (a new hook line, a new key line): the old text must be fully gone before the new text starts to appear. Never put `FadeOut(old)` and `FadeIn(new)` for the same position in one `self.play`; the two lines ghost over each other and neither can be read. Fade the old one out in its own short play, `self.play(FadeOut(old_hook), FadeOut(old_key), run_time=0.25)`, then `FadeIn` the new text, alone or together with the cue's other animations. Count the 0.25 s in the cue's time. This overrides the one-play `FadeOut(a), FadeIn(b)` pattern shown earlier.
 - Keep objects on screen and transform them. One visual change per narrated statement.
 - Before the key reveal, a short `self.wait` of 0.5 to 1.0 seconds of stillness; hold the frame after it.
 - The last cue ends on the payoff frame. No `FadeOut` of everything at the end, no outro.
