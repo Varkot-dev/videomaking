@@ -27,14 +27,14 @@ def _kinds(recorder):
 
 def test_safe_box_matches_the_documented_coordinates():
     xmin, ymin, xmax, ymax = probe.inset_rect(FRAME, MARGINS)
-    assert (xmin, ymin, xmax, ymax) == pytest.approx((-2.05, -1.2, 1.45, 2.8))
+    assert (xmin, ymin, xmax, ymax) == pytest.approx((-2.05, -2.0, 1.45, 2.8))
 
 
 def test_safe_box_scales_with_a_zoomed_camera():
     zoomed = tuple(v * 0.8 for v in FRAME)
     xmin, ymin, xmax, ymax = probe.inset_rect(zoomed, MARGINS)
     assert (xmin, ymin, xmax, ymax) == pytest.approx(
-        (-2.05 * 0.8, -1.2 * 0.8, 1.45 * 0.8, 2.8 * 0.8)
+        (-2.05 * 0.8, -2.0 * 0.8, 1.45 * 0.8, 2.8 * 0.8)
     )
 
 

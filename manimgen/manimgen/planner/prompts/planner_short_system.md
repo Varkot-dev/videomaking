@@ -77,10 +77,10 @@ For a vertical short, do NOT use `split_screen` or any 3D technique. Prefer `fad
 
 ## Rules for the `visual` field (vertical frame)
 
-The frame is TALL and NARROW: 4.5 units wide, 8 units tall. Everything that must be read sits in a box 3.4 units wide and 4.0 units tall, in the upper-middle of the frame. The bottom third is covered by the app's buttons and stays empty.
+The frame is TALL and NARROW: 4.5 units wide, 8 units tall. Everything sits in a box 3.4 units wide and 4.8 units tall; the strip along the bottom is covered by the app's title and buttons and stays empty.
 
-- Describe ONE main object per cue, at most 3.3 units wide and 1.8 units tall.
-- Three stacked bands, top to bottom: a hook line (one or two short lines of text, at most 16 characters per line), the main visual, and a key-term band (one to four words, or one equation broken over two lines).
+- ONE main diagram for the whole short, as big as the frame allows (about 3.4 by 3.4 units). Each cue adds to it or changes it.
+- Three stacked bands, top to bottom: the hook (one or two short lines, at most 18 characters per line), a single key line (a few words or one short equation), and the diagram, which takes most of the screen.
 - Wide things must be rebuilt tall: number lines with 5 to 7 ticks, equations broken at the equals sign and stacked, comparisons stacked top over bottom, never side by side.
 - On-screen text is key terms and numbers only. Never put the narration on screen as sentences.
 - Nothing decorative. If an element is not being talked about, it is not on screen.

@@ -163,10 +163,12 @@ def render_size_flags() -> list[str]:
 
 
 # Strips of a 1080x1920 frame the Shorts app draws over, as fractions of the
-# frame: 48 px left, 672 px bottom (caption, channel), 192 px right (buttons),
-# 288 px top. Third-party measurements of Google's vertical template; the
-# conservative end of what is published.
-_SHORT_SAFE_MARGINS = (48 / 1080, 672 / 1920, 192 / 1080, 288 / 1920)
+# frame: 48 px left, 480 px bottom (title, channel), 192 px right (buttons),
+# 288 px top. No official figure exists. Google's vertical ads template
+# reserves 672 px at the bottom (it adds ad buttons); measurements of organic
+# Shorts put the covered strip at 300 to 390 px. 480 px sits between them and
+# leaves the diagram room to be read on a phone. Confirm with a test upload.
+_SHORT_SAFE_MARGINS = (48 / 1080, 480 / 1920, 192 / 1080, 288 / 1920)
 
 
 def short_safe_margins() -> tuple[float, float, float, float]:

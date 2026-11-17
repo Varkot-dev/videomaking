@@ -456,7 +456,7 @@ manimgen "limits" --short --format misconception \
 - `--format` is one of `puzzle` (pose it and leave it open; the default), `misconception` (break a wrong belief), `proof` (one visual argument) or `worked` (one worked example). Rotate them across uploads.
 - `--confused` and `--clicked` are your own words about what tripped you up and what made it click. They become the hook and the reveal.
 - Copy `manimgen/voice_profile.example.md`, drop `.example` from the copy's name, and describe how you talk; the planner reads it so the script sounds like you. Your copy is git-ignored.
-- The frame is 4.5 units wide and 8 tall. Readable content stays inside x -2.0 to 1.4 and y -1.2 to 2.8, the area the Shorts buttons and caption leave clear (third-party measurements; upload an unlisted test to confirm on your phone).
+- The frame is 4.5 units wide and 8 tall. Readable content stays inside x -2.0 to 1.4 and y -2.0 to 2.8, the area the Shorts buttons and caption leave clear (third-party measurements; upload an unlisted test to confirm on your phone).
 - `manimgen --resume` keeps the short format of the cached plan.
 - Before posting, use the `manimgen-shorts-publish` skill: it runs the review checklist, checks the upload is not a near-copy of recent ones, and writes the title and description.
 

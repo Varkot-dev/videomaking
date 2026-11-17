@@ -109,14 +109,14 @@ class TestVerticalDirectorPrompt:
         assert inspect_scene_code(code).ok
         fixed = precheck_and_autofix(code)
         assert fixed == code, "codeguard would rewrite the reference scene"
-        result = verify_timing(code, [3.0, 3.0, 3.5])
+        result = verify_timing(code, [3.0, 3.0, 3.5])  # cue lengths in the comments
         assert result["ok"] and len(result["cues"]) == 3
 
     def test_reference_scene_stays_inside_the_safe_box(self):
         with open(_VERTICAL, encoding="utf-8") as f:
             text = f.read()
         ys = [float(y) for y in re.findall(r"move_to\(\[CX, (-?[\d.]+), 0\]\)", text)]
-        assert ys and all(-1.2 <= y <= 2.8 for y in ys)
+        assert ys and all(-2.0 <= y <= 2.8 for y in ys)
 
 
 @pytest.mark.unit

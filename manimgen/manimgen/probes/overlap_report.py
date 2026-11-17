@@ -161,7 +161,7 @@ def format_issue(overlap: Overlap) -> str:
             f"{ISSUE_PREFIX} text {overlap.a!r} sits outside the safe area of "
             f"the vertical frame at t={overlap.time:.1f}s ({overlap.fraction:.0%} "
             "of it is under the app's buttons or caption). Keep all text inside "
-            "x -2.0 to 1.4 and y -1.2 to 2.8: move it up or left, split it over "
+            "x -2.0 to 1.4 and y -2.0 to 2.8: move it up or left, split it over "
             "two lines, or guard its width with set_width(3.3)."
         )
     return (
