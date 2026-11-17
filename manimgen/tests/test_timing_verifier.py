@@ -1100,6 +1100,10 @@ class TestCueHeaderRecognition:
             "# ===== CUE 3 =====",
             "# *** CUE 3 ***",
             "#~~ CUE 3",
+            "# ── CUE 3 ──",
+            "# ━━━ CUE 3 — 2.19s ━━━",
+            "# [CUE 3]",
+            "# >>> CUE 3",
         ],
     )
     def test_header_variants_are_boundaries(self, header):
@@ -1108,7 +1112,13 @@ class TestCueHeaderRecognition:
 
     @pytest.mark.parametrize(
         "line",
-        ["self.wait(1.0)  # CUE_FILL auto-inserted", "# see CUE 2 above", "# the CUE comment"],
+        [
+            "self.wait(1.0)  # CUE_FILL auto-inserted",
+            "# see CUE 2 above",
+            "# the CUE comment",
+            "# CUES 2",
+            "# ── see CUE 2 ──",
+        ],
     )
     def test_non_headers_are_not_boundaries(self, line):
         code = f"class S(Scene):\n    def construct(self):\n        {line}\n"
