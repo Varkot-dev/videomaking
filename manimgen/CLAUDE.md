@@ -216,7 +216,8 @@ python3 -m pytest -q
 - **Director:** `generator/prompts/director_vertical.md` is appended to the Director prompt and overrides the landscape layout numbers. It embeds one verified vertical reference scene; a test checks that scene against the safety gate, codeguard and the timing verifier. Landscape few-shot examples and reference frames are not sent for a short.
 - **Font sizes:** codeguard snaps to the canonical scale, so shorts use 28 (hook), 22 (labels), 36 (key line).
 - **Publishing:** the `manimgen-shorts-publish` skill (review gate, sameness check, title and description, upload sheet).
-- **Not built yet:** own-voice recording, an automatic safe-zone check on rendered frames, burned-in captions, music.
+- **Not built yet:** own-voice recording, burned-in captions, music. (Text off-screen or under the Shorts UI is now reported by the render probe.)
+- **Research behind these choices:** `../docs/research/educational-shorts-playbook.md` (sources and evidence labels in `../docs/research/shorts-notes/`).
 
 ## LLM provider toggle
 
