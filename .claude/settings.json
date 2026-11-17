@@ -31,6 +31,16 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '[Hook] Work unit done. If Python files changed and the /python-review command is installed (everything-claude-code), run it on them: the per-edit hook only catches syntax and lint, not logic or design.'"
+          }
+        ]
+      }
     ]
   }
 }

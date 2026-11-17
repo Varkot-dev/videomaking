@@ -436,6 +436,28 @@ On Windows PowerShell, set the variables with `$env:MANIMGEN_MAX_RETRY_LLM_CALLS
 
 Output: `manimgen/output/videos/<title>.mp4`, where the name is the plan's title in lower case with spaces as underscores.
 
+### Vertical shorts (`--short`)
+
+`--short` makes one vertical 1080x1920 video for YouTube Shorts: one idea, 30 to 60 seconds, one section.
+
+```bash
+manimgen "why 3-4-5 is a right triangle" --short
+
+# Pick the structure, and give your own angle: the script is built around it
+manimgen "limits" --short --format misconception \
+  --confused "I thought a limit was just plugging the number in" \
+  --clicked "it is about what the function approaches, not what it equals"
+```
+
+- `--format` is one of `puzzle` (pose it and leave it open; the default), `misconception` (break a wrong belief), `proof` (one visual argument) or `worked` (one worked example). Rotate them across uploads.
+- `--confused` and `--clicked` are your own words about what tripped you up and what made it click. They become the hook and the reveal.
+- Copy `manimgen/voice_profile.example.md`, drop `.example` from the copy's name, and describe how you talk; the planner reads it so the script sounds like you. Your copy is git-ignored.
+- The frame is 4.5 units wide and 8 tall. Readable content stays inside x -2.0 to 1.4 and y -1.2 to 2.8, the area the Shorts buttons and caption leave clear (third-party measurements; upload an unlisted test to confirm on your phone).
+- `manimgen --resume` keeps the short format of the cached plan.
+- Before posting, use the `manimgen-shorts-publish` skill: it runs the review checklist, checks the upload is not a near-copy of recent ones, and writes the title and description.
+
+What is not built yet: recording your own narration (the voice is still the configured TTS voice), an automatic safe-zone check on rendered frames, burned-in captions, and music.
+
 ### Environment variables
 
 `manimgen --help` lists the command line flags. Everything else is configured in

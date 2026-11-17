@@ -817,6 +817,94 @@ def plan_lesson(topic: str) -> dict:
     return _extract_cues(plan)
 
 
+SHORT_ARCHETYPES = ("puzzle", "misconception", "proof", "worked")
+# A short is one idea in 30 to 60 seconds of narration.
+_SHORT_MAX_WORDS = 170
+
+
+def _load_short_system_prompt() -> str:
+    here = os.path.dirname(__file__)
+    with open(
+        os.path.join(here, "prompts", "planner_short_system.md"), encoding="utf-8"
+    ) as f:
+        text = f.read()
+    menu = sorted(_technique_menu() - techniques.THREE_D_TECHNIQUES - {"split_screen"})
+    return text.replace("{{TECHNIQUES}}", ", ".join(f"`{t}`" for t in menu))
+
+
+def _short_user_message(
+    topic: str,
+    archetype: str,
+    confusion: str,
+    insight: str,
+    voice_profile: str,
+    research_material: str,
+) -> str:
+    parts = [f"Plan one vertical short about: {topic}", f"FORMAT: {archetype}"]
+    if confusion.strip():
+        parts.append(f"What confused me: {confusion.strip()}")
+    if insight.strip():
+        parts.append(f"What made it click: {insight.strip()}")
+    if voice_profile.strip():
+        parts.append("VOICE PROFILE (how I talk; match it):\n" + voice_profile.strip())
+    if research_material:
+        parts.append(
+            "Background for accuracy only. Do NOT try to cover it; use the one "
+            "fact the short needs:\n" + research_material
+        )
+    return "\n\n".join(parts)
+
+
+def plan_short(
+    topic: str,
+    archetype: str = "puzzle",
+    confusion: str = "",
+    insight: str = "",
+    voice_profile: str = "",
+) -> dict:
+    """Plan a single-idea vertical short.
+
+    ``confusion`` and ``insight`` are the owner's own angle (what tripped them
+    up, what made it click); the script is built around them. ``voice_profile``
+    is free text describing how they talk. The plan has exactly one section.
+    """
+    if archetype not in SHORT_ARCHETYPES:
+        raise ValueError(
+            f"unknown short format {archetype!r}; use one of {SHORT_ARCHETYPES}"
+        )
+    logger.info("[planner] Researching topic for a short: %s", topic)
+    brief = research_topic(topic)
+    try:
+        research_material = _format_research_brief(brief)
+    except (TypeError, AttributeError, KeyError, ValueError) as e:
+        logger.warning(
+            "[planner] Research brief is off-schema (%s: %s), continuing without it",
+            type(e).__name__,
+            e,
+        )
+        research_material = ""
+
+    user = _short_user_message(
+        topic, archetype, confusion, insight, voice_profile, research_material
+    )
+    plan = _cap_sections(
+        _chat_plan(_load_short_system_prompt(), user, role="planner"), 1
+    )
+    ensure_titles(plan, default_title=topic)
+    plan = _extract_cues(plan)
+    plan["_format"] = "short"
+    plan["_archetype"] = archetype
+    words = len(plan["sections"][0].get("narration", "").split())
+    if words > _SHORT_MAX_WORDS:
+        logger.warning(
+            "[planner] Short narration is %d words (limit %d): it will run "
+            "over a minute. Tighten the script before posting.",
+            words,
+            _SHORT_MAX_WORDS,
+        )
+    return plan
+
+
 def plan_lesson_from_pdf(pdf_path: str) -> dict:
     from manimgen.input.pdf_parser import parse_pdf
 

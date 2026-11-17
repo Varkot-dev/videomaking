@@ -205,6 +205,18 @@ python3 -m pytest -q
 
 ---
 
+## Vertical shorts mode (`--short`)
+
+`manimgen "limits" --short --format misconception --confused "..." --clicked "..."` makes one idea, 30 to 60 seconds, one section, rendered 1080x1920 for YouTube Shorts.
+
+- **Format switch:** `paths.set_video_format("short")` is called once by `cli.py` (from `--short`, or from `_format: "short"` in a resumed plan). Everything else reads `paths.is_short()`: `render_size_flags()` passes `-r 1080x1920` and no quality flag (manimgl's `-l/-m/--hd` are landscape presets), `render_resolution()` returns `1080x1920` so the assembler and muxer follow, and the fallback card uses its vertical template.
+- **Frame:** manimgl derives the frame from the resolution, so it is 4.5 units wide and 8 tall (verified by a real render). Readable content stays in x -2.0..1.4, y -1.2..2.8, centred on x = -0.3.
+- **Planner:** `lesson_planner.plan_short()` with `planner/prompts/planner_short_system.md`. Exactly one section; `--format` picks `puzzle`, `misconception`, `proof` or `worked`; `--confused` / `--clicked` carry the owner's angle; the owner's voice profile (a git-ignored copy of `voice_profile.example.md`, path from `shorts.voice_profile` in config.yaml) carries how they talk.
+- **Director:** `generator/prompts/director_vertical.md` is appended to the Director prompt and overrides the landscape layout numbers. It embeds one verified vertical reference scene; a test checks that scene against the safety gate, codeguard and the timing verifier. Landscape few-shot examples and reference frames are not sent for a short.
+- **Font sizes:** codeguard snaps to the canonical scale, so shorts use 28 (hook), 22 (labels), 36 (key line).
+- **Publishing:** the `manimgen-shorts-publish` skill (review gate, sameness check, title and description, upload sheet).
+- **Not built yet:** own-voice recording, an automatic safe-zone check on rendered frames, burned-in captions, music.
+
 ## LLM provider toggle
 
 Resolution order (first wins):

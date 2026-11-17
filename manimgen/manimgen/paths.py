@@ -11,7 +11,7 @@ from manimgen import config
 _RENDER_DEFAULTS = config.DEFAULTS["rendering"]
 
 
-def _load() -> tuple[dict, dict]:
+def _load() -> tuple[dict, dict, dict]:
     """Output folders (absolute, anchored at config.yaml) and render settings."""
     cfg = config.load()
     out = cfg["output"]
@@ -24,10 +24,10 @@ def _load() -> tuple[dict, dict]:
         "exports": out["exports_dir"],
         "plan": out["plan_cache"],
     }
-    return paths, dict(cfg["rendering"])
+    return paths, dict(cfg["rendering"]), dict(cfg["shorts"])
 
 
-_PATHS, _RENDERING = _load()
+_PATHS, _RENDERING, _SHORTS = _load()
 
 
 def scenes_dir() -> str:
@@ -101,9 +101,52 @@ def render_timeout(kind: str) -> float:
     return value if value > 0 else float(_RENDER_DEFAULTS[key])
 
 
+# Output formats. "landscape" is the configured long-form video; "short" is a
+# vertical 9:16 video for YouTube Shorts. The format is chosen once per run
+# (cli --short, or the plan being resumed) before anything renders.
+SHORT_RESOLUTION = "1080x1920"
+_VIDEO_FORMATS = ("landscape", "short")
+_video_format = "landscape"
+
+
+def set_video_format(fmt: str) -> None:
+    """Select the output format for this run ("landscape" or "short")."""
+    global _video_format
+    if fmt not in _VIDEO_FORMATS:
+        raise ValueError(f"unknown video format {fmt!r}; use one of {_VIDEO_FORMATS}")
+    _video_format = fmt
+
+
+def video_format() -> str:
+    return _video_format
+
+
+def is_short() -> bool:
+    return _video_format == "short"
+
+
 def render_resolution() -> str:
-    """Return resolution string, e.g. '1920x1080'."""
+    """Return resolution string, e.g. '1920x1080' (1080x1920 for a short)."""
+    if is_short():
+        return SHORT_RESOLUTION
     return _RENDERING["resolution"]
+
+
+def render_size_flags() -> list[str]:
+    """manimgl flags that set the frame size.
+
+    A short passes an explicit ``-r 1080x1920``: manimgl derives the frame
+    (4.5 x 8 units) from the resolution, and its quality flags (-l/-m/--hd)
+    are landscape presets that would override it, so they are never combined.
+    """
+    if is_short():
+        return ["-r", SHORT_RESOLUTION]
+    return [render_quality_flag()]
+
+
+def short_voice_profile_path() -> str:
+    """Where the optional voice profile for shorts lives (may not exist)."""
+    return _SHORTS["voice_profile"]
 
 
 def render_fps() -> int:

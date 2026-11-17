@@ -34,6 +34,16 @@ def _isolate_logs_dir(tmp_path, monkeypatch):
     monkeypatch.setitem(paths._PATHS, "logs", str(tmp_path / "logs"))
 
 
+@pytest.fixture(autouse=True)
+def _reset_video_format():
+    """The output format is process-wide state; every test starts in landscape."""
+    from manimgen import paths
+
+    paths.set_video_format("landscape")
+    yield
+    paths.set_video_format("landscape")
+
+
 # ---------------------------------------------------------------------------
 # Network guard
 # ---------------------------------------------------------------------------

@@ -21,3 +21,6 @@ manimgen/manimgen/output_*/
 
 # Evidence logs (runtime instrumentation output, not source)
 codeguard_events.jsonl
+
+# Optional notes on how you talk, used by `manimgen --short` (personal, not tracked)
+voice_profile.md

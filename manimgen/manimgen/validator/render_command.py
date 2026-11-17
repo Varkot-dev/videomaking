@@ -41,7 +41,7 @@ def build_manimgl_command(scene_path: str, class_name: str) -> list[str]:
         scene_path,
         class_name,
         "-w",
-        paths.render_quality_flag(),
+        *paths.render_size_flags(),
         "-c",
         _BACKGROUND_COLOR,
     ]

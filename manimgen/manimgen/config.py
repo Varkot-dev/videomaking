@@ -87,6 +87,11 @@ DEFAULTS: dict = {
         "render_timeout_3d": 360,
         "render_timeout_fallback": 180,
     },
+    "shorts": {
+        # Optional notes on how the owner talks and explains; read by the
+        # shorts planner so scripts sound like them. Relative to config.yaml.
+        "voice_profile": "voice_profile.md",
+    },
     "tts": {
         "engine": "edge-tts",
         "voice": "en-US-AndrewMultilingualNeural",
@@ -213,6 +218,10 @@ def _validate(path: Path, raw: dict) -> dict:
             )
         # An absolute value wins; a relative one is anchored at config.yaml.
         out[key] = str(root / value)
+
+    shorts = cfg["shorts"]
+    profile = shorts.get("voice_profile") or "voice_profile.md"
+    shorts["voice_profile"] = str(root / str(profile))
 
     rend = cfg["rendering"]
     for key in ("fps", "max_retries", "parallel_sections"):

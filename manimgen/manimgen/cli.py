@@ -15,9 +15,11 @@ from manimgen.generator.scene_generator import ScenePrecheckError, generate_scen
 from manimgen.input.parser import parse_input
 from manimgen.input.pdf_parser import PdfInputError
 from manimgen.planner.lesson_planner import (
+    SHORT_ARCHETYPES,
     ensure_titles,
     plan_lesson,
     plan_lesson_from_pdf,
+    plan_short,
 )
 from manimgen.renderer.assembler import assemble_video
 from manimgen.renderer.muxer import clear_mismatch_log, get_mismatch_log
@@ -232,6 +234,36 @@ def _content_hash(topic_hash: str, cfg: dict) -> str:
             ]
         )
     )
+
+
+def _requested_topic_hash(args) -> str:
+    """Identity of the requested input, as stored in the plan's _topic_hash.
+
+    A short is identified by its topic together with the format and the
+    owner's angle, so a different angle on the same topic is a different plan.
+    """
+    topic = parse_input(args.topic)
+    if getattr(args, "short", False):
+        return _topic_hash(
+            "\x1f".join(["short", topic, args.archetype, args.confused, args.clicked])
+        )
+    return _topic_hash(topic)
+
+
+def _read_voice_profile() -> str:
+    """The owner's voice notes for shorts, or "" when the file is absent."""
+    path = paths.short_voice_profile_path()
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read().strip()
+    except FileNotFoundError:
+        return ""
+    except OSError as e:
+        logger.warning("[manimgen] Could not read voice profile %s: %s", path, e)
+        return ""
+    if text:
+        logger.info("[manimgen] Using voice profile: %s", path)
+    return text
 
 
 def _file_hash(path: str) -> str:
@@ -1150,7 +1182,42 @@ def main():
             "flagged in the summary and the run exits 3."
         ),
     )
+    parser.add_argument(
+        "--short",
+        action="store_true",
+        help=(
+            "Make one vertical 9:16 short (YouTube Shorts): one idea, 30 to 60 "
+            "seconds, rendered at 1080x1920. Topic only, not --pdf."
+        ),
+    )
+    parser.add_argument(
+        "--format",
+        dest="archetype",
+        choices=SHORT_ARCHETYPES,
+        default="puzzle",
+        help=(
+            "Structure of a --short: puzzle (pose it, leave it open), "
+            "misconception (break a wrong belief), proof (one visual argument), "
+            "worked (one worked example). Rotate these across uploads."
+        ),
+    )
+    parser.add_argument(
+        "--confused",
+        default="",
+        metavar="TEXT",
+        help="For --short: what confused you about this topic, in your own words.",
+    )
+    parser.add_argument(
+        "--clicked",
+        default="",
+        metavar="TEXT",
+        help="For --short: what made it click for you. The short is built on it.",
+    )
     args = parser.parse_args()
+    if args.short and args.pdf:
+        parser.error("--short takes a topic, not --pdf")
+    if args.short and not (args.topic or args.resume):
+        parser.error("--short needs a topic")
     if not (args.topic or args.pdf or args.resume):
         parser.error("one of the arguments topic, --pdf or --resume is required")
 
@@ -1177,6 +1244,9 @@ def main():
     if args.resume:
         # Refuse rather than replan: replanning spends LLM quota (#64).
         lesson_plan = _load_cached_plan()
+        # A resumed plan keeps the format it was planned for.
+        if lesson_plan.get("_format") == "short":
+            paths.set_video_format("short")
         current_topic_hash = lesson_plan.get("_topic_hash", "")
         requested = None
         if args.pdf:
@@ -1188,7 +1258,7 @@ def main():
                     f"cannot read --pdf {args.pdf} to check it against the cached plan ({e})."
                 )
         elif args.topic:
-            requested = (args.topic, _topic_hash(parse_input(args.topic)))
+            requested = (args.topic, _requested_topic_hash(args))
         if requested and requested[1] != current_topic_hash:
             _die(
                 f"cached plan {_PLAN_CACHE} is for "
@@ -1215,6 +1285,18 @@ def main():
                     lesson_plan = plan_lesson_from_pdf(args.pdf)
                 except PdfInputError as e:
                     _die(str(e))
+            elif args.short:
+                logger.info("[manimgen] Short (%s): %s", args.archetype, args.topic)
+                paths.set_video_format("short")
+                topic = parse_input(args.topic)
+                current_topic_hash = _requested_topic_hash(args)
+                lesson_plan = plan_short(
+                    topic,
+                    archetype=args.archetype,
+                    confusion=args.confused,
+                    insight=args.clicked,
+                    voice_profile=_read_voice_profile(),
+                )
             else:
                 logger.info("[manimgen] Input: %s", args.topic)
                 topic = parse_input(args.topic)
