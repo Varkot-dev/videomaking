@@ -30,6 +30,8 @@ That box is 3.4 units wide and 4.0 units tall, and its centre is at **x = -0.3**
 - `Axes(width=3.0, height=1.7)` at most, with 5 to 7 ticks per axis and tick label `font_size` 20.
 - A row of boxes holds at most 5 boxes of side 0.55. More items go in a second row or a column.
 - Stroke widths of 4 for main shapes so they read on a phone.
+- **Fill the visual band.** A phone screen is small, so the main diagram must be big. Build the whole diagram as one `VGroup`, then scale it to the band before animating it in: `main.scale(min(3.2 / main.get_width(), 1.8 / main.get_height()))` and `main.move_to([-0.3, 0.8, 0])`. A diagram that ends up under 2.5 units wide AND under 1.4 units tall is too small.
+- **Labels must read.** A number or word on top of a filled or gridded shape goes on a fill of opacity 0.35 or less, at font_size 22 or more, in WHITE, with no `set_backstroke`. Otherwise put the label just outside the shape with `next_to`.
 
 ## Vertical rules
 
