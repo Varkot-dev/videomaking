@@ -30,6 +30,20 @@ from pathlib import Path
 
 import yaml
 
+# manimgl accepts exactly these quality flags (`manimgl --help`): -l is 480p,
+# -m is 720p, --hd is 1080p, --uhd is 4K. The configured name is mapped to one
+# of them; building "--" + name produced invalid flags such as "--l".
+RENDER_QUALITY_FLAGS = {
+    "l": "-l",
+    "low": "-l",
+    "m": "-m",
+    "medium": "-m",
+    "hd": "--hd",
+    "high": "--hd",
+    "uhd": "--uhd",
+    "4k": "--uhd",
+}
+
 ENV_VAR = "MANIMGEN_CONFIG"
 CONFIG_FILENAME = "config.yaml"
 
@@ -201,6 +215,14 @@ def _validate(path: Path, raw: dict) -> dict:
         rend[key] = _as(path, f"rendering.{key}", rend[key], int, "an integer")
     for key in ("render_timeout_2d", "render_timeout_3d", "render_timeout_fallback"):
         rend[key] = _as(path, f"rendering.{key}", rend[key], float, "a number")
+
+    quality = str(rend.get("quality", "")).strip().lower()
+    if quality not in RENDER_QUALITY_FLAGS:
+        raise ConfigError(
+            f"{path}: rendering.quality {rend.get('quality')!r} is not valid; "
+            f"use one of {sorted(RENDER_QUALITY_FLAGS)} "
+            "(l = 480p, m = 720p, hd = 1080p, uhd = 4K)."
+        )
 
     if not isinstance(cfg["tts"]["enabled"], bool):
         raise ConfigError(

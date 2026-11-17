@@ -59,6 +59,25 @@ def _check_plan_shape(plan: dict) -> None:
             raise ValueError(f"plan 'sections' entry {i} has no narration")
 
 
+def ensure_titles(plan: dict, default_title: str = "Untitled lesson") -> dict:
+    """Give the plan and every section a non-empty string ``title``.
+
+    The LLM (or a critic rewrite) can omit a title. The pipeline reads titles
+    for logs, the fallback card and the output file name, so a missing one is
+    filled in here instead of surfacing later as a KeyError.
+    """
+    title = plan.get("title")
+    if not isinstance(title, str) or not title.strip():
+        plan["title"] = default_title
+    for idx, section in enumerate(plan.get("sections") or [], start=1):
+        if not isinstance(section, dict):
+            continue
+        sec_title = section.get("title")
+        if not isinstance(sec_title, str) or not sec_title.strip():
+            section["title"] = str(section.get("id") or f"Section {idx}")
+    return plan
+
+
 def _technique_names(section: dict) -> set[str]:
     names = set()
     for cue in section.get("cues") or []:
@@ -225,8 +244,14 @@ def _sanitize_section_ids(plan: dict) -> dict:
         raw = section.get("id")
         safe = sanitize_section_id(raw, idx)
         if safe in seen:
-            suffix = hashlib.sha256(str(raw).encode()).hexdigest()[:6]
-            safe = f"{safe[: 64 - 7]}_{suffix}"
+            # idx is part of the hash so a third section with the same raw id
+            # does not get the same suffix as the second.
+            base = safe
+            attempt = 0
+            while safe in seen:
+                digest = hashlib.sha256(f"{raw}|{idx}|{attempt}".encode())
+                safe = f"{base[: 64 - 7]}_{digest.hexdigest()[:6]}"
+                attempt += 1
         seen.add(safe)
         if safe != raw:
             logger.warning(
@@ -249,6 +274,7 @@ def _extract_cues(plan: dict) -> dict:
     # Security: sanitize untrusted LLM-controlled ids BEFORE they reach any
     # filesystem sink (path traversal → arbitrary .py write + manimgl exec).
     plan = _sanitize_section_ids(plan)
+    ensure_titles(plan)
     for section in plan.get("sections", []):
         raw = section.get("narration", "")
         clean, indices = parse_cues(raw)
@@ -258,7 +284,14 @@ def _extract_cues(plan: dict) -> dict:
         # Ensure section["cues"] exists and is indexed correctly.
         # cues[] must have len(indices) entries — one per segment (including the
         # opening segment at index 0, before the first [CUE]).
-        existing_cues = section.get("cues", [])
+        # JSON null or a list of non-objects must not crash the plan: keep only
+        # well-formed cue objects and let the count check below repair the rest.
+        raw_cues = section.get("cues")
+        existing_cues = [
+            c
+            for c in (raw_cues if isinstance(raw_cues, list) else [])
+            if isinstance(c, dict)
+        ]
         n_segments = len(indices)
         if len(existing_cues) != n_segments:
             logger.warning(
@@ -278,7 +311,7 @@ def _extract_cues(plan: dict) -> dict:
                 section.get("title", ""), clean, indices, existing_cues
             )
             if refilled is not None:
-                existing_cues = refilled
+                existing_cues = [c if isinstance(c, dict) else {} for c in refilled]
 
         title = section.get("title", "")
         # The per-segment narration is the PRIMARY, always-answerable input for
@@ -754,7 +787,17 @@ def _format_research_brief(brief: dict) -> str:
 def plan_lesson(topic: str) -> dict:
     logger.info("[planner] Researching topic: %s", topic)
     brief = research_topic(topic)
-    research_material = _format_research_brief(brief)
+    try:
+        research_material = _format_research_brief(brief)
+    except (TypeError, AttributeError, KeyError, ValueError) as e:
+        # Research is optional: a brief that drifts from the schema must not
+        # cost the whole plan.
+        logger.warning(
+            "[planner] Research brief is off-schema (%s: %s), continuing without it",
+            type(e).__name__,
+            e,
+        )
+        research_material = ""
 
     system = _load_system_prompt()
     if research_material:
@@ -770,6 +813,7 @@ def plan_lesson(topic: str) -> dict:
     # which can re-inflate section count past the cap. Re-assert the
     # invariant so "≤ _MAX_SECTIONS_TOPIC sections" holds unconditionally.
     plan = _cap_sections(plan, _MAX_SECTIONS_TOPIC)
+    ensure_titles(plan, default_title=topic)
     return _extract_cues(plan)
 
 

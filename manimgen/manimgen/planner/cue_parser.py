@@ -71,6 +71,12 @@ def parse_cues(narration_with_cues: str) -> tuple[str, list[int]]:
         word_count += len(words_in_segment)
         clean_parts.append(segment)
 
+    # A [CUE] after the last word points one past the end of the narration:
+    # there is no word for that cue to start on, so it is dropped (it would
+    # otherwise raise IndexError in tts.cue_times and read as a TTS failure).
+    while len(cue_indices) > 1 and cue_indices[-1] >= word_count:
+        cue_indices.pop()
+
     clean_text = "".join(clean_parts)
     # Normalise whitespace left by removed tags (e.g. double spaces)
     clean_text = re.sub(r"  +", " ", clean_text).strip()

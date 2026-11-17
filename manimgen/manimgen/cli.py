@@ -11,7 +11,12 @@ from collections.abc import Callable
 from manimgen import config, paths
 from manimgen.generator.scene_generator import ScenePrecheckError, generate_scenes
 from manimgen.input.parser import parse_input
-from manimgen.planner.lesson_planner import plan_lesson, plan_lesson_from_pdf
+from manimgen.input.pdf_parser import PdfInputError
+from manimgen.planner.lesson_planner import (
+    ensure_titles,
+    plan_lesson,
+    plan_lesson_from_pdf,
+)
 from manimgen.renderer.assembler import assemble_video
 from manimgen.renderer.muxer import clear_mismatch_log, get_mismatch_log
 from manimgen.types import (
@@ -1105,7 +1110,9 @@ def _load_cached_plan() -> dict:
         lesson_plan.get("sections"), list
     ):
         _die(f"cached plan {_PLAN_CACHE} is corrupt: no sections list. Delete it.")
-    return lesson_plan
+    # A plan saved by an older run may lack titles; fill them in rather than
+    # crash with KeyError partway through the run.
+    return ensure_titles(lesson_plan)
 
 
 def main():
@@ -1198,8 +1205,14 @@ def main():
                 logger.info("[manimgen] PDF input: %s", args.pdf)
                 # Hash the file's bytes, not its path: a PDF edited in
                 # place must not reuse the old plan's renders (#66).
-                current_topic_hash = _file_hash(args.pdf)
-                lesson_plan = plan_lesson_from_pdf(args.pdf)
+                try:
+                    current_topic_hash = _file_hash(args.pdf)
+                except OSError as e:
+                    _die(f"cannot read --pdf {args.pdf} ({e}).")
+                try:
+                    lesson_plan = plan_lesson_from_pdf(args.pdf)
+                except PdfInputError as e:
+                    _die(str(e))
             else:
                 logger.info("[manimgen] Input: %s", args.topic)
                 topic = parse_input(args.topic)

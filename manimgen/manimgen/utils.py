@@ -146,7 +146,9 @@ def strip_fencing(raw: str) -> str:
     """Strip markdown code fences from an LLM response."""
     raw = raw.strip()
     if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1]
+        # A reply that is only a fence line has no body after the first line.
+        parts = raw.split("\n", 1)
+        raw = parts[1] if len(parts) > 1 else ""
         raw = raw.rsplit("```", 1)[0]
     return raw.strip()
 

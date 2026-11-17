@@ -293,7 +293,17 @@ def _gemini(
         contents=contents,
         config=types.GenerateContentConfig(**config_kwargs),
     )
-    return response.text.strip()
+    text = response.text
+    if text is None:
+        # Blocked or empty reply: .text is None, not "".
+        candidates = getattr(response, "candidates", None) or []
+        reason = getattr(candidates[0], "finish_reason", None) if candidates else None
+        feedback = getattr(response, "prompt_feedback", None)
+        raise RuntimeError(
+            "Gemini returned no text "
+            f"(finish_reason={reason!r}, prompt_feedback={feedback!r})"
+        )
+    return text.strip()
 
 
 def _anthropic(
@@ -334,6 +344,10 @@ def _anthropic(
             "[llm] Anthropic response hit max_tokens=%d and is truncated — "
             "raise llm.max_tokens in config.yaml",
             cfg["anthropic_max_tokens"],
+        )
+    if not text.strip():
+        raise RuntimeError(
+            f"Anthropic returned no text (stop_reason={message.stop_reason!r})"
         )
     return text.strip()
 
