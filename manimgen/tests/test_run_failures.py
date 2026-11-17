@@ -135,7 +135,10 @@ class TestUsageLimitStop:
         started = _director_raises_for(fakes, monkeypatch, "section_02", exc)
         rc = _main(fakes, monkeypatch, THREE, "failures")
         assert rc == 4
-        assert started == ["section_01", "section_02"], "section 3 must not start"
+        # Sections 1 and 2 run at the same time, so their start order varies.
+        assert sorted(started) == ["section_01", "section_02"], (
+            "section 3 must not start"
+        )
         assert fakes.assembled == [], "a stopped run must not assemble"
         m = _manifest(fakes)
         assert m["result"] == "usage_limit"

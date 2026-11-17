@@ -2,6 +2,7 @@ import enum
 import logging
 import os
 import re
+import threading
 
 from manimgen import paths
 from manimgen.llm import chat
@@ -67,6 +68,8 @@ MAX_TOTAL_LLM_CALLS = int(
 # per-RUN and must survive across the many per-section retry_scene() calls that
 # the per-category counters deliberately do not.
 _run_llm_calls_used = 0
+# Sections run in parallel threads, so the check-and-charge must be atomic.
+_run_budget_lock = threading.Lock()
 
 
 def reset_run_budget() -> None:
@@ -102,7 +105,11 @@ def _consume_run_budget(category: str) -> bool:
     observable rather than silent.
     """
     global _run_llm_calls_used
-    if _run_llm_calls_used >= MAX_TOTAL_LLM_CALLS:
+    with _run_budget_lock:
+        exhausted = _run_llm_calls_used >= MAX_TOTAL_LLM_CALLS
+        if not exhausted:
+            _run_llm_calls_used += 1
+    if exhausted:
         logger.warning(
             "[retry] GLOBAL LLM budget exhausted: %d/%d calls used this run "
             "(MANIMGEN_MAX_TOTAL_LLM_CALLS) — refusing %s fix call",
@@ -111,7 +118,6 @@ def _consume_run_budget(category: str) -> bool:
             category,
         )
         return False
-    _run_llm_calls_used += 1
     logger.info(
         "[retry] Global LLM budget: %d/%d calls used this run (charged: %s fix)",
         _run_llm_calls_used,

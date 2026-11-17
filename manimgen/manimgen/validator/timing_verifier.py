@@ -459,7 +459,15 @@ def _time_for_statements(
 # Cue boundary detection
 # ---------------------------------------------------------------------------
 
-_CUE_COMMENT_RE = re.compile(r"#\s*CUE\s+(\d+)", re.IGNORECASE)
+# A cue marker is a comment naming the cue: "# CUE 3", and also the decorated
+# forms models write, "# ---------------- CUE 3 — 2.19s ----------------" or
+# "# === CUE 3 ===". Only punctuation and spaces may sit between "#" and "CUE",
+# so prose such as "# see CUE 3 above" is not a marker.
+_CUE_COMMENT_RE = re.compile(r"#[^\w\n]*CUE\s+(\d+)", re.IGNORECASE)
+
+
+def _has_cue_markers(code: str) -> bool:
+    return bool(_CUE_COMMENT_RE.search(code))
 
 
 def _function_line_ranges(code: str) -> list[tuple[int, int]]:
@@ -485,6 +493,25 @@ def _enclosing_function_end(ranges: list[tuple[int, int]], lineno: int) -> int |
         if start <= lineno <= end and (best is None or start >= best[0]):
             best = (start, end)
     return best[1] if best else None
+
+
+def _construct_body_source(code: str) -> str | None:
+    """Source lines of the body of ``construct``, or None if there is none."""
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return None
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "construct"
+            and node.body
+        ):
+            lines = code.splitlines(keepends=True)
+            first = node.body[0].lineno
+            last = node.end_lineno or first
+            return "".join(lines[first - 1 : last])
+    return None
 
 
 def _split_into_cue_blocks(code: str) -> list[tuple[int, str]]:
@@ -524,7 +551,11 @@ def _split_into_cue_blocks(code: str) -> list[tuple[int, str]]:
         blocks.append((current_cue, current_lines))
 
     if not blocks:
-        return [(0, code)]
+        # No markers: the only sensible single block is the body of construct()
+        # (a one-cue section). Returning the whole file would time the module's
+        # top level, which is just an import and a class.
+        body = _construct_body_source(code)
+        return [(0, body if body is not None else code)]
 
     return [(idx, "".join(lines_list)) for idx, lines_list in blocks]
 
@@ -571,6 +602,15 @@ def verify_timing(
         }
     """
     warnings: list[str] = []
+    if not _has_cue_markers(code) and len(cue_durations) != 1:
+        # Without markers nothing says which statements belong to which cue.
+        # Scoring the whole file against the first cue's duration produced
+        # nonsense shortfalls and "fixes" that broke the scene.
+        return {
+            "ok": True,
+            "cues": [],
+            "warnings": ["No CUE comments found — timing not verifiable."],
+        }
     cue_blocks = _split_into_cue_blocks(code)
     helpers = _timed_helper_names(code)
 
@@ -837,6 +877,20 @@ def _insert_missing_wait(
     if parsed is not None and parsed[1]:
         _tree, stmts, line_shift, _col_shift = parsed
         last = stmts[-1]
+        if isinstance(
+            last,
+            (
+                ast.ClassDef,
+                ast.FunctionDef,
+                ast.AsyncFunctionDef,
+                ast.Import,
+                ast.ImportFrom,
+            ),
+        ):
+            # The block is not a cue body (for example a whole file whose last
+            # statement is the scene class). A wait placed after it would sit
+            # outside construct(), where the safety gate rejects the file.
+            return fixed_code, None
         block_lines = _split_source_lines(block_code)
         first_line = last.lineno - line_shift
         end_line = (last.end_lineno or last.lineno) - line_shift
@@ -1107,6 +1161,8 @@ def auto_fix_timing(
     Returns (fixed_code, list_of_applied_fixes).
     """
     applied: list[str] = []
+    if not _has_cue_markers(code) and len(cue_durations) != 1:
+        return code, applied  # nothing to attribute time to; never guess
     fixed_code, phantom_fixes = _strip_phantom_cue_blocks(code, len(cue_durations))
     applied.extend(phantom_fixes)
 

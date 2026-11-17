@@ -112,3 +112,17 @@ def render_fps() -> int:
 
 def render_max_retries() -> int:
     return _RENDERING["max_retries"]
+
+
+def render_parallel_sections() -> int:
+    """How many sections to generate and render at once (at least 1).
+
+    ``MANIMGEN_PARALLEL_SECTIONS`` overrides config.yaml for one run.
+    """
+    raw = os.environ.get("MANIMGEN_PARALLEL_SECTIONS", "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    return max(1, int(_RENDERING.get("parallel_sections") or 1))

@@ -286,3 +286,56 @@ class TestExitCodes:
             data = json.load(f)
         assert data["exit_code"] == 0
         assert data["sections"][0]["status"] == "accepted_with_defects"
+
+
+# --- parallel sections -------------------------------------------------------
+
+
+def test_sections_run_in_parallel_but_assemble_in_plan_order(env, monkeypatch):
+    import threading
+    import time as _time
+
+    plan = _plan()
+    plan["sections"] = [
+        {"id": f"s{i}", "title": f"S{i}", "narration": "words here"}
+        for i in range(1, 5)
+    ]
+    monkeypatch.setattr(cli, "plan_lesson", lambda topic: plan)
+    monkeypatch.setenv("MANIMGEN_PARALLEL_SECTIONS", "4")
+    active, peak, lock = [0], [0], threading.Lock()
+
+    def slow_section(section, idx, *a, **k):
+        with lock:
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+        _time.sleep(0.2 if idx == 1 else 0.05)  # the first finishes last
+        with lock:
+            active[0] -= 1
+        return SectionOutcome(SectionStatus.OK, [f"clip{idx}.mp4"])
+
+    assembled = []
+    monkeypatch.setattr(cli, "_run_section", slow_section)
+    monkeypatch.setattr(
+        cli,
+        "assemble_video",
+        lambda clips, title: assembled.extend(clips) or env["out"],
+    )
+    _run(monkeypatch, "topic")
+
+    assert peak[0] > 1, "sections did not overlap"
+    assert assembled == ["clip1.mp4", "clip2.mp4", "clip3.mp4", "clip4.mp4"]
+
+
+def test_parallel_sections_can_be_turned_off(env, monkeypatch):
+    import threading
+
+    monkeypatch.setenv("MANIMGEN_PARALLEL_SECTIONS", "1")
+    threads = set()
+
+    def section(section, idx, *a, **k):
+        threads.add(threading.current_thread().name)
+        return SectionOutcome(SectionStatus.OK, ["clip.mp4"])
+
+    monkeypatch.setattr(cli, "_run_section", section)
+    _run(monkeypatch, "topic")
+    assert threads == {"MainThread"}

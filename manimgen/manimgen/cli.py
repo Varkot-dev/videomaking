@@ -5,8 +5,10 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 
 from manimgen import config, paths
 from manimgen.generator.scene_generator import ScenePrecheckError, generate_scenes
@@ -1278,7 +1280,16 @@ def main():
     title = lesson_plan["title"]
     rendered_videos: list[str] = []
     records: list[dict] = []
-    for idx, section in enumerate(lesson_plan["sections"], start=1):
+    # Set when a section hits a usage stop: sections that have not started yet
+    # are skipped (they would only fail the same way and spend more quota).
+    stop_run = threading.Event()
+
+    def run_one(
+        idx: int, section: dict
+    ) -> tuple[SectionOutcome, float, Exception | None]:
+        """Run one section; never raises. Returns (outcome, seconds, usage_stop)."""
+        if stop_run.is_set():
+            return SectionOutcome(SectionStatus.NOT_RUN), 0.0, None
         section_id = safe_section_id(section, idx)
         # When tts_on, always pass section_audio (even {} for failed TTS) so
         # _run_section doesn't re-attempt TTS — global phase already ran it.
@@ -1299,23 +1310,35 @@ def main():
         except Exception as e:
             outcome = SectionOutcome(SectionStatus.ERRORED, [], _error_text(e))
             if is_usage_stop(e):
-                records.append(_section_record(idx, section, outcome, 0.0))
-                not_run = SectionOutcome(SectionStatus.NOT_RUN)
-                records.extend(
-                    _section_record(i, s, not_run, 0.0)
-                    for i, s in enumerate(lesson_plan["sections"], start=1)
-                    if i > idx
-                )
-                _stop_for_usage_limit(
-                    e, title, current_topic_hash, records, started, resumable=True
-                )
+                stop_run.set()
+                return outcome, 0.0, e
             # One failed section must not cost the others (#72): report it,
             # keep the traceback in the run log, and go on.
             logger.error("[manimgen] Section %d (%s) failed: %s", idx, section_id, e)
             logger.debug("[manimgen] Section %d traceback", idx, exc_info=True)
+        return outcome, time.time() - section_started, None
+
+    # Sections are independent once narration exists (own scene file, class
+    # name, clips and cache key), so several are generated and rendered at
+    # once. Results are collected in plan order, so the video is assembled in
+    # order whatever finishes first.
+    numbered = list(enumerate(lesson_plan["sections"], start=1))
+    workers = min(paths.render_parallel_sections(), len(numbered))
+    if workers > 1:
+        logger.info("[manimgen] Running %d sections at a time", workers)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(lambda item: run_one(*item), numbered))
+    else:
+        results = [run_one(idx, section) for idx, section in numbered]
+
+    usage_stop: Exception | None = None
+    for (idx, section), (outcome, elapsed, stop_exc) in zip(numbered, results):
+        usage_stop = usage_stop or stop_exc
         rendered_videos.extend(outcome.clips)
-        records.append(
-            _section_record(idx, section, outcome, time.time() - section_started)
+        records.append(_section_record(idx, section, outcome, elapsed))
+    if usage_stop is not None:
+        _stop_for_usage_limit(
+            usage_stop, title, current_topic_hash, records, started, resumable=True
         )
 
     def no_video(message: str):

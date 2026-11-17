@@ -79,6 +79,10 @@ DEFAULTS: dict = {
         "resolution": "1920x1080",
         "fps": 60,
         "max_retries": 3,
+        # Sections generated and rendered at the same time. Each one is an LLM
+        # call plus a manimgl render, so the limit is the machine's CPU/GPU and
+        # the LLM plan's rate limits. 1 restores strictly sequential runs.
+        "parallel_sections": 2,
         "render_timeout_2d": 240,
         "render_timeout_3d": 360,
         "render_timeout_fallback": 180,
@@ -211,8 +215,13 @@ def _validate(path: Path, raw: dict) -> dict:
         out[key] = str(root / value)
 
     rend = cfg["rendering"]
-    for key in ("fps", "max_retries"):
+    for key in ("fps", "max_retries", "parallel_sections"):
         rend[key] = _as(path, f"rendering.{key}", rend[key], int, "an integer")
+    if rend["parallel_sections"] < 1:
+        raise ConfigError(
+            f"{path}: rendering.parallel_sections must be 1 or more, "
+            f"got {rend['parallel_sections']!r}."
+        )
     for key in ("render_timeout_2d", "render_timeout_3d", "render_timeout_fallback"):
         rend[key] = _as(path, f"rendering.{key}", rend[key], float, "a number")
 

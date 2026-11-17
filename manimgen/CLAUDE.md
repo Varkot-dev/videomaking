@@ -154,6 +154,7 @@ For each section:
 - **Storyboard-level planner.** The planner outputs pixel-level visual descriptions per cue — not concept descriptions.
 - **codeguard is the safety net.** `precheck_and_autofix()` runs on the generated code string before saving.
 - **Content-keyed cache with hash sidecars.** Each rendered video and each muxed cue clip has a `.hash` sidecar storing the section's content key (`cli._section_key`: the section dict, topic or PDF-bytes hash, TTS voice and speed, cue durations rounded to 0.05s). Files are shared across plans and named only by section id, so a file whose sidecar is missing, empty or different is rebuilt; same content (`--resume`) is reused. Audio slices are always re-sliced.
+- **Sections run in parallel.** After narration, sections are generated and rendered `rendering.parallel_sections` at a time (default 2; `MANIMGEN_PARALLEL_SECTIONS=1` for one at a time). Clips are assembled in plan order regardless of which section finishes first.
 - **Retry loop always reloads code.** After each fix attempt (codeguard or LLM), the file is always re-read from disk — codeguard may have applied in-place fixes that would otherwise be discarded.
 
 ---
