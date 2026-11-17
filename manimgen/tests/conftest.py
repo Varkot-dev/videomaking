@@ -39,9 +39,16 @@ def _reset_video_format():
     """The output format is process-wide state; every test starts in landscape."""
     from manimgen import paths
 
-    paths.set_video_format("landscape")
+    from manimgen.planner import lesson_planner
+
+    def reset():
+        paths.set_video_format("landscape")
+        paths.set_draft(False)
+        lesson_planner.set_fast(False)
+
+    reset()
     yield
-    paths.set_video_format("landscape")
+    reset()
 
 
 # ---------------------------------------------------------------------------

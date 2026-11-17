@@ -265,3 +265,44 @@ class TestCli:
         go, _ = run
         code, _ = go("--short", "--pdf", "notes.pdf")
         assert code == 2
+
+
+@pytest.mark.unit
+class TestDraftAndFast:
+    def test_draft_renders_small_in_both_formats(self):
+        paths.set_draft(True)
+        assert paths.render_quality_flag() == "-m"
+        assert paths.render_resolution() == "1280x720"
+        paths.set_video_format("short")
+        cmd = render_command.build_manimgl_command("s.py", "S")
+        assert cmd[cmd.index("-r") + 1] == "540x960"
+        assert paths.render_resolution() == "540x960"
+
+    def test_draft_and_final_never_share_a_cache_key(self):
+        final = cli._content_hash("topic", {})
+        paths.set_draft(True)
+        assert cli._content_hash("topic", {}) != final
+
+    def test_fast_skips_the_research_and_critic_calls(self, monkeypatch):
+        calls = []
+
+        def chat(system, user, images=None, json_mode=False, role=None):
+            calls.append(role)
+            return _PLAN_REPLY
+
+        monkeypatch.setattr(lp, "chat", chat)
+        lp.set_fast(True)
+        plan = lp.plan_lesson("the Pythagorean theorem")
+        assert calls == ["planner"]
+        assert plan["sections"]
+
+    def test_normal_mode_still_runs_research_and_critic(self, monkeypatch):
+        calls = []
+
+        def chat(system, user, images=None, json_mode=False, role=None):
+            calls.append(role)
+            return _PLAN_REPLY
+
+        monkeypatch.setattr(lp, "chat", chat)
+        lp.plan_lesson("the Pythagorean theorem")
+        assert calls[0] == "researcher" and "planner" in calls and "critic" in calls

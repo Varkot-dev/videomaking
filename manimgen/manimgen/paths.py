@@ -68,9 +68,27 @@ def plan_cache() -> str:
 _QUALITY_FLAGS = config.RENDER_QUALITY_FLAGS
 
 
+# Draft mode (cli --draft): render small for a quick look. Landscape drops to
+# 720p, a short to 540x960. Everything downstream follows render_resolution().
+_DRAFT_LANDSCAPE = ("m", "1280x720")
+_DRAFT_SHORT_RESOLUTION = "540x960"
+_draft = False
+
+
+def set_draft(enabled: bool) -> None:
+    global _draft
+    _draft = bool(enabled)
+
+
+def is_draft() -> bool:
+    return _draft
+
+
 def render_quality_flag() -> str:
     """Return the manimgl CLI flag for the configured quality, e.g. '--hd'."""
     q = str(_RENDERING["quality"]).strip().lower()
+    if _draft:
+        q = _DRAFT_LANDSCAPE[0]
     try:
         return _QUALITY_FLAGS[q]
     except KeyError:
@@ -128,8 +146,8 @@ def is_short() -> bool:
 def render_resolution() -> str:
     """Return resolution string, e.g. '1920x1080' (1080x1920 for a short)."""
     if is_short():
-        return SHORT_RESOLUTION
-    return _RENDERING["resolution"]
+        return _DRAFT_SHORT_RESOLUTION if _draft else SHORT_RESOLUTION
+    return _DRAFT_LANDSCAPE[1] if _draft else _RENDERING["resolution"]
 
 
 def render_size_flags() -> list[str]:
@@ -140,7 +158,7 @@ def render_size_flags() -> list[str]:
     are landscape presets that would override it, so they are never combined.
     """
     if is_short():
-        return ["-r", SHORT_RESOLUTION]
+        return ["-r", render_resolution()]
     return [render_quality_flag()]
 
 

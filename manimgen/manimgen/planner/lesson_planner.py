@@ -126,7 +126,21 @@ def _critic_rejection(original: dict, candidate: dict) -> str | None:
     return None
 
 
+# Fast mode (cli --fast): skip the two optional LLM passes around the planner,
+# the research brief before it and the critic rewrite after it. On the default
+# claude_cli provider those two calls took about half of the planning time.
+_fast = False
+
+
+def set_fast(enabled: bool) -> None:
+    global _fast
+    _fast = bool(enabled)
+
+
 def _self_correct(plan: dict, limit: int = _SELF_CORRECT_LIMIT) -> dict:
+    if _fast:
+        logger.info("[planner] Fast mode: skipping the storyboard critic pass")
+        return plan
     critic_system = _load_critic_system_prompt()
     for _ in range(limit):
         raw = chat(
@@ -678,6 +692,9 @@ def research_topic(topic: str) -> dict:
     Returns a dict with keys: topic, prerequisites, core_concepts, key_formulas,
     worked_example, failure_modes, real_world_connections, section_suggestions.
     """
+    if _fast:
+        logger.info("[planner] Fast mode: skipping the research brief")
+        return {}
     system = _load_researcher_system_prompt()
     raw = chat(
         system=system,

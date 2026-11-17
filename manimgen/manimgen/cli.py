@@ -1213,6 +1213,22 @@ def main():
         metavar="TEXT",
         help="For --short: what made it click for you. The short is built on it.",
     )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help=(
+            "Skip the research brief and the storyboard critic pass (two LLM "
+            "calls). Much quicker planning; the storyboard is less polished."
+        ),
+    )
+    parser.add_argument(
+        "--draft",
+        action="store_true",
+        help=(
+            "Render small for a quick look: 720p for a normal video, 540x960 "
+            "for a --short. Re-run without --draft for the final."
+        ),
+    )
     args = parser.parse_args()
     if args.short and args.pdf:
         parser.error("--short takes a topic, not --pdf")
@@ -1224,7 +1240,11 @@ def main():
     _configure_logging()
     started = time.time()
 
+    from manimgen.planner import lesson_planner
     from manimgen.validator.retry import reset_run_budget
+
+    lesson_planner.set_fast(args.fast)
+    paths.set_draft(args.draft)
 
     # The retry LLM budget is per run; nothing else resets it (#71).
     reset_run_budget()

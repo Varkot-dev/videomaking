@@ -82,7 +82,7 @@ DEFAULTS: dict = {
         # Sections generated and rendered at the same time. Each one is an LLM
         # call plus a manimgl render, so the limit is the machine's CPU/GPU and
         # the LLM plan's rate limits. 1 restores strictly sequential runs.
-        "parallel_sections": 2,
+        "parallel_sections": 3,
         "render_timeout_2d": 240,
         "render_timeout_3d": 360,
         "render_timeout_fallback": 180,

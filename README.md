@@ -412,6 +412,10 @@ manimgen "dynamic programming"
 # PDF mode, from lecture notes or papers
 manimgen --pdf lecture.pdf
 
+# Quicker runs: --fast skips the research and critic LLM passes,
+# --draft renders at 720p (540x960 for a --short). Use both while iterating.
+manimgen "binary search" --fast --draft
+
 # Resume a previous run from cached plan
 manimgen --resume
 
