@@ -243,22 +243,22 @@ def _concat(
     if len(section_clips) == 1:
         return section_clips[0]
 
-    result = section_clips[0]
-    for i in range(1, len(section_clips)):
-        tmp = os.path.join(work_dir, f"_xfade_{i:03d}.mp4")
-        try:
-            _xfade_pair(result, section_clips[i], tmp)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            # Fallback to hard concat when ffmpeg xfade cannot be computed for
-            # a particular pair (rare codec/timeline edge case) or does not
-            # finish in time. Each crossfade re-encodes the whole video so far,
-            # so a long video on a slow machine can exceed the timeout; a hard
-            # cut is better than losing the assembled video.
-            _hard_concat([result, section_clips[i]], tmp)
-        # Clean up intermediates (but not the normalised originals — caller does that)
-        if result not in norm_paths and os.path.exists(result):
-            os.remove(result)
-        result = tmp
+    # One ffmpeg run applies every crossfade, so the video is encoded once.
+    # The pairwise loop below re-encodes everything joined so far at each
+    # boundary (cost grows with the square of the section count, issue #75);
+    # it is kept only as the fallback when the single pass fails.
+    chained = os.path.join(work_dir, "_xfade_all.mp4")
+    try:
+        _xfade_chain(section_clips, chained)
+        result = chained
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        logging.getLogger(__name__).warning(
+            "[assembler] Single-pass crossfade failed (%s); joining section by section.",
+            type(exc).__name__,
+        )
+        if os.path.exists(chained):
+            os.remove(chained)
+        result = _xfade_pairwise(section_clips, norm_paths, work_dir)
 
     # Clean up per-section merged clips
     for s_idx in range(len(sections)):
@@ -267,6 +267,96 @@ def _concat(
             os.remove(p)
 
     return result
+
+
+def _xfade_pairwise(
+    section_clips: list[str], norm_paths: list[str], work_dir: str
+) -> str:
+    """Fallback join: crossfade one boundary at a time (re-encodes each time)."""
+    result = section_clips[0]
+    for i in range(1, len(section_clips)):
+        tmp = os.path.join(work_dir, f"_xfade_{i:03d}.mp4")
+        try:
+            _xfade_pair(result, section_clips[i], tmp)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            # Fallback to hard concat when ffmpeg xfade cannot be computed for
+            # a particular pair (rare codec/timeline edge case) or does not
+            # finish in time; a hard cut is better than losing the video.
+            _hard_concat([result, section_clips[i]], tmp)
+        # Clean up intermediates (but not the normalised originals — caller does that)
+        if result not in norm_paths and os.path.exists(result):
+            os.remove(result)
+        result = tmp
+    return result
+
+
+# Seconds of encode budget per second of output for the single-pass crossfade
+# (x264 "slow" at 1080p60 on a modest CPU), with a floor for short videos.
+_XFADE_CHAIN_TIMEOUT_PER_SECOND = 20
+_XFADE_CHAIN_MIN_TIMEOUT_SECONDS = 300
+
+
+def _xfade_chain_plan(durations: list[float]) -> list[tuple[float, float]]:
+    """(xfade_duration, offset) for each boundary of a single-pass crossfade.
+
+    ``offset`` is where the fade starts on the timeline of everything joined
+    so far. A fade never takes more than half of either clip it joins, so a
+    very short section is not dissolved away entirely.
+    """
+    plan: list[tuple[float, float]] = []
+    joined = durations[0]
+    for nxt in durations[1:]:
+        d = min(_XFADE_DURATION, max(0.01, min(joined, nxt) / 2.0))
+        offset = max(0.0, joined - d)
+        plan.append((d, offset))
+        joined = joined + nxt - d
+    return plan
+
+
+def _xfade_chain(clips: list[str], out: str) -> None:
+    """Crossfade all section clips in one ffmpeg run (one encode in total)."""
+    durations = [_video_duration(c) for c in clips]
+    plan = _xfade_chain_plan(durations)
+
+    filters: list[str] = []
+    v_prev, a_prev = "[0:v]", "[0:a]"
+    for i, (d, offset) in enumerate(plan, start=1):
+        last = i == len(plan)
+        v_out = "[v]" if last else f"[v{i}]"
+        a_out = "[a]" if last else f"[a{i}]"
+        filters.append(
+            f"{v_prev}[{i}:v]xfade=transition=fade:duration={d}:offset={offset}{v_out}"
+        )
+        filters.append(f"{a_prev}[{i}:a]acrossfade=d={d}{a_out}")
+        v_prev, a_prev = v_out, a_out
+
+    cmd = ["ffmpeg", "-y"]
+    for clip in clips:
+        cmd += ["-i", clip]
+    cmd += [
+        "-filter_complex",
+        ";".join(filters),
+        "-map",
+        "[v]",
+        "-map",
+        "[a]",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "slow",
+        "-crf",
+        "17",
+        "-c:a",
+        "aac",
+        "-ar",
+        "48000",
+        out,
+    ]
+    timeout = max(
+        _XFADE_CHAIN_MIN_TIMEOUT_SECONDS,
+        _XFADE_CHAIN_TIMEOUT_PER_SECOND * sum(durations),
+    )
+    subprocess.run(cmd, check=True, capture_output=True, timeout=timeout)
 
 
 def _hard_concat(paths: list[str], output_path: str) -> None:

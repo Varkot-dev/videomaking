@@ -61,6 +61,23 @@ nabla_label.move_to(gradient_eq).shift(LEFT * 1.5)  # position manually
 
 **text_obj.set_text() / text_obj.animate.set_text():** Text has no set_text() method. To update a counter or label: create a new `Text(...)` object and use `FadeOut(old_label)` then `FadeIn(new_label)`, or `ReplacementTransform(old_label, new_label)`.
 
+## Safety gate rejections
+
+When the error says a name, attribute or import "is not allowed", the scene was
+blocked by the static safety gate before rendering. Fix it by renaming, never by
+working around the gate:
+
+- `private attribute '_name' is not allowed` → rename the helper or attribute
+  without the leading underscore everywhere (`self._make_box()` → `self.make_box()`).
+- `name 'log' is not allowed` (also `input`, `signal`, `types`, `platform`, `op`,
+  `io`, `help`, `Path`, `Image`) → that word is reserved; rename the variable
+  (`log_value`, `wave_signal`, `kinds`). For a logarithm use `np.log(x)`.
+- `import of '...' is not allowed` → remove the import. Only `manimlib`, `numpy`,
+  `math`, `cmath`, `random`, `itertools`, `functools`, `typing`, `colorsys`,
+  `dataclasses`, `enum`, `collections`, `fractions`, `decimal`, `statistics`,
+  `bisect`, `heapq`, `copy` and `textwrap` may be imported.
+- `importing 'log' from 'math' is not allowed` → `import math` and call `math.log(x)`.
+
 ## Timing fixes — freeze-frame tails
 
 If the error says "X.XXs short — animations sum to Y.YYs", the cue has a freeze-frame tail because not enough animations fill the cue duration. Fix: add more animations to fill the time. For each short cue, add supporting visuals:
