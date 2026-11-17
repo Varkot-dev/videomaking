@@ -529,12 +529,16 @@ def _render_with_retry(
     if success and video_path:
         return RenderResult(video_path, SectionStatus.OK, "first render")
 
+    # A first render that ran but was rejected is handed over, so the retry
+    # loop checks it instead of rendering the same code again.
+    retry_kwargs = {"first_render": video_path} if video_path else {}
     success, video_path = retry_scene(
         section,
         gate.code,
         gate.class_name,
         gate.scene_path,
         cue_durations=cue_durations,
+        **retry_kwargs,
     )
     if success and video_path:
         # retry_scene accepts a render with known freeze-frame tails on its

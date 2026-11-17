@@ -42,6 +42,13 @@ llm:
   #   visual_fix: "sonnet"
   #   cue_refill: "haiku"
   #   layout_check: "haiku"
+  # Thinking effort per role for claude_cli (low, medium, high, xhigh, max).
+  # MANIMGEN_EFFORT_<ROLE> overrides one role for a single run. Director on low
+  # was measured on 12 Shorts runs (3 topics x 4 settings): about half the
+  # scene-writing time of the default (71 s vs 128 s on average) with no
+  # visible loss in quality. Haiku was slower (it writes more) and no better.
+  efforts:
+    director: "low"
   gemini_model: "gemini-2.5-flash"
   anthropic_model: "claude-sonnet-5-5"
   max_tokens: 16000       # Only used by Anthropic provider

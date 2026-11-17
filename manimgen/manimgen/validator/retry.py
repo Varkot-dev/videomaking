@@ -6,6 +6,7 @@ import threading
 
 from manimgen import paths
 from manimgen.llm import chat
+from manimgen.probes import overlap_report
 from manimgen.probes.overlap_report import overlap_issues
 from manimgen.utils import strip_fencing
 from manimgen.validator.codeguard import (
@@ -58,6 +59,12 @@ MAX_ERROR_LLM_FIX_CALLS = int(
 MAX_VISUAL_LLM_FIX_CALLS = int(
     os.environ.get("MANIMGEN_MAX_VISUAL_LLM_CALLS", str(MAX_LLM_FIX_CALLS))
 )
+
+# MANIMGEN_MAX_PLACEMENT_FIXES (MAX_PLACEMENT_FIX_CALLS)
+#     PER-SECTION cap on visual fixes requested for text-placement defects
+#     (render probe: overlap, off screen, outside the Shorts safe area). Once
+#     used, a render whose only defects are placement defects is shipped.
+MAX_PLACEMENT_FIX_CALLS = int(os.environ.get("MANIMGEN_MAX_PLACEMENT_FIXES", "1"))
 
 _DEFAULT_MAX_TOTAL_LLM_CALLS = 200
 MAX_TOTAL_LLM_CALLS = int(
@@ -322,11 +329,17 @@ def retry_scene(
     class_name: str,
     scene_path: str,
     cue_durations: list[float] | None = None,
+    first_render: str | None = None,
 ) -> tuple[bool, str | None]:
     """
     Retry generating and running a scene up to MAX_RETRIES times.
     Each retry sends the original code + error back to the LLM for a fix.
     Returns (success, video_path).
+
+    ``first_render`` is a video the caller already rendered from
+    ``original_code`` and rejected for visual defects. Attempt 1 checks that
+    video instead of rendering the same code a second time, as long as the
+    timing gate leaves the code unchanged.
     """
     code = original_code
     logs_dir = paths.logs_dir()
@@ -378,13 +391,39 @@ def retry_scene(
     # started (precheck or safety gate) and a crash a token-free local fix
     # repairs are re-run without using one up, so the LLM fixes that follow
     # still get rendered. Bounded by free_steps_left so the loop always ends.
+    reusable_render = (
+        first_render
+        if first_render and code == original_code and os.path.isfile(first_render)
+        else None
+    )
+    # Text-placement defects (overlap, off screen, outside the Shorts safe
+    # area) rarely clear with more vision fixes: measured on 12 Shorts runs,
+    # 10 of 11 still had them after three attempts, and each attempt is a full
+    # re-render. Allow MAX_PLACEMENT_FIX_CALLS fixes for them, then ship.
+    placement_fixes_used = 0
+
     attempt = 0
     step = 0
     free_steps_left = MAX_RETRIES
     while attempt < MAX_RETRIES:
         attempt += 1
         step += 1
-        result = _run_and_capture(scene_path, class_name)
+        if reusable_render:
+            result = {
+                "success": True,
+                "video_path": reusable_render,
+                "stderr": "",
+                "overlaps": tuple(
+                    overlap_report.load_for_video(reusable_render).overlaps
+                ),
+            }
+            reusable_render = None
+            print(
+                f"[retry] Attempt {attempt}/{MAX_RETRIES} reuses the first render "
+                "(same code) instead of rendering it again."
+            )
+        else:
+            result = _run_and_capture(scene_path, class_name)
         if result["success"]:
             from manimgen.validator.frame_checker import check_frames
             from manimgen.validator.timing_verifier import (
@@ -511,6 +550,15 @@ def retry_scene(
                 )
                 return _ship_best(result["video_path"])
 
+            placement_only = bool(overlaps) and len(combined_issues) == len(overlaps)
+            if placement_only and placement_fixes_used >= MAX_PLACEMENT_FIX_CALLS:
+                print(
+                    "[retry] Only text-placement defects remain and the placement "
+                    f"fix limit ({MAX_PLACEMENT_FIX_CALLS}) is used — accepting "
+                    "the best render instead of rendering again."
+                )
+                return _ship_best(result["video_path"])
+
             # Dedup: if we already paid for a vision call on this exact set of
             # defects and they came back unchanged, the model has nothing new
             # to offer. Mirrors the error path's seen_error_signatures.
@@ -537,6 +585,8 @@ def retry_scene(
                 code, "\n".join(combined_issues), system_prompt, defective_frames
             )
             section_visual_llm_calls_used += 1
+            if overlaps:
+                placement_fixes_used += 1
             seen_visual_signatures.add(visual_signature)
             with open(scene_path, "w", encoding="utf-8") as f:
                 f.write(code)

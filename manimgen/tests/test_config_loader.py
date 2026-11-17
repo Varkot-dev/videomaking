@@ -216,7 +216,8 @@ _OLD_LLM = {
     "claude_cli_model": "sonnet",
     "claude_cli_path": "claude",
     "models": {},
-    "efforts": {},
+    # Director on low effort: measured, see the comment in config.yaml.
+    "efforts": {"director": "low"},
     "ollama_model": "llama3.1",
     "ollama_base_url": "http://localhost:11434",
     "ollama_num_ctx": 32768,

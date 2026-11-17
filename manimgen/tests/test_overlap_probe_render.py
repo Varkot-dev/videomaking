@@ -129,3 +129,38 @@ def test_vertical_short_reports_offscreen_and_unsafe_text(tmp_path, monkeypatch)
     assert ("under the caption", "unsafe") in found
     assert any(kind == "offscreen" for _, kind in found)
     assert not any(text == "fine here" for text, _ in found)
+
+
+_SLIGHTLY_OUT = """from manimlib import *
+
+class SlightlyOut(Scene):
+    def construct(self):
+        hook = VGroup(
+            Text("Why does 3-4-5", font_size=28),
+            Text("make a right angle?", font_size=28),
+        ).arrange(DOWN, buff=0.12).move_to([-0.3, 2.6, 0])
+        self.add(hook)
+        grid = Square(side_length=2).move_to([-0.3, -0.7, 0])
+        label = Text("4", font_size=28).next_to(grid, DOWN, buff=0.15)
+        self.play(ShowCreation(grid), FadeIn(label), run_time=0.3)
+        self.wait(0.2)
+"""
+
+
+@pytest.mark.timeout(300)
+def test_vertical_short_nudges_text_that_is_slightly_out(tmp_path, monkeypatch):
+    """The two mistakes the 12-run experiment kept making (a hook a little too
+    high, a label just under the diagram) are moved inside the safe area before
+    they are drawn, so the probe has nothing to report."""
+    import json
+
+    paths.set_video_format("short")
+    src = tmp_path / "src" / "slightly_out.py"
+    src.parent.mkdir()
+    src.write_text(_SLIGHTLY_OUT, encoding="utf-8")
+    res = _render(tmp_path, monkeypatch, src, "SlightlyOut")
+    assert res.ok, res.stderr
+    assert res.probe_error is None
+    assert not res.overlaps, res.overlaps
+    sidecar = Path(res.video_path + ".overlaps.json")
+    assert json.loads(sidecar.read_text(encoding="utf-8"))["nudges"] == 2

@@ -63,6 +63,13 @@ UNSAFE_THRESHOLD = 0.15
 # "left,bottom,right,top" as fractions of the frame: the strips the Shorts app
 # covers. Set by the host only when rendering a vertical short.
 SAFE_MARGINS_ENV = "MANIMGEN_SAFE_MARGINS"
+# Safe-area nudge (vertical shorts only, i.e. when safe margins are set): text
+# that is about to appear slightly outside the safe area is moved inside before
+# its first frame. Only a text-only mobject that is new to the scene and fits
+# the safe area is moved, and only by up to NUDGE_LIMIT units; anything further
+# out is a layout mistake the probe reports for a real fix.
+NUDGE_ENV = "MANIMGEN_SAFE_NUDGE"
+NUDGE_LIMIT = 0.5
 MAX_PER_TEXT = 3  # findings that may name the same string
 TEXT_CHARS = 40
 
@@ -470,6 +477,7 @@ _state: dict = {
     "error": None,
     "path": None,
     "pid": None,  # the process that installed the probe; only it writes
+    "nudges": 0,  # text moved inside the safe area (see NUDGE_ENV)
 }
 
 
@@ -488,6 +496,7 @@ def write_report() -> None:
     try:
         recorder = _state["recorder"] or OverlapRecorder()
         data = recorder.report(_state["scene"], _state["error"])
+        data["nudges"] = _state.get("nudges", 0)
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)
@@ -509,6 +518,65 @@ def _observe(scene) -> None:
         )
     except Exception as exc:  # a probe bug must never break a render
         _record_error("observe", exc)
+
+
+def nudge_offset(
+    box: tuple[float, float, float, float],
+    rect: tuple[float, float, float, float],
+    limit: float = NUDGE_LIMIT,
+) -> tuple[float, float] | None:
+    """(dx, dy) that moves ``box`` inside ``rect``.
+
+    None when no move is needed, the box does not fit, or the move on either
+    axis exceeds ``limit``.
+    """
+    if box[2] - box[0] > rect[2] - rect[0] or box[3] - box[1] > rect[3] - rect[1]:
+        return None
+    dx = max(0.0, rect[0] - box[0]) - max(0.0, box[2] - rect[2])
+    dy = max(0.0, rect[1] - box[1]) - max(0.0, box[3] - rect[3])
+    if dx == 0.0 and dy == 0.0:
+        return None
+    if abs(dx) > limit or abs(dy) > limit:
+        return None
+    return dx, dy
+
+
+def _text_only(mob) -> bool:
+    """True when every drawn part of ``mob`` belongs to a text-like mobject."""
+    covered: set[int] = set()
+    for m in mob.get_family():
+        if is_text_like(m):
+            covered.update(id(f) for f in m.get_family())
+    if not covered:
+        return False
+    return all(id(m) in covered for m in mob.get_family() if m.has_points())
+
+
+def _nudge_new_text(scene, mobjects) -> None:
+    """Move new, slightly-out text inside the shorts safe area (see NUDGE_ENV)."""
+    if os.environ.get(NUDGE_ENV, "1") == "0":
+        return
+    margins = parse_margins(os.environ.get(SAFE_MARGINS_ENV))
+    if margins is None:
+        return
+    try:
+        fixed, world = _frame_rects(scene)
+        present = {id(m) for top in scene.mobjects for m in top.get_family()}
+        for mob in mobjects:
+            if mob is None or id(mob) in present or not _text_only(mob):
+                continue
+            rect = (
+                fixed if getattr(mob, "is_fixed_in_frame", lambda: False)() else world
+            )
+            box = _box(mob)
+            if rect is None or box is None:
+                continue
+            move = nudge_offset(box, inset_rect(rect, margins))
+            if move is not None:
+                mob.shift([move[0], move[1], 0.0])
+                _state["nudges"] = _state.get("nudges", 0) + 1
+    except Exception as exc:  # a probe bug must never break a render
+        _record_error("nudge", exc)
 
 
 def _glyph_items(anim) -> list[tuple[int, tuple, float]]:
@@ -552,6 +620,11 @@ def patch_scene_module(module) -> None:
     original_post_play = scene_cls.post_play
     original_tear_down = scene_cls.tear_down
     original_begin = scene_cls.begin_animations
+    original_add = getattr(scene_cls, "add", None)
+
+    def add(self, *mobjects, **kwargs):
+        _nudge_new_text(self, mobjects)
+        return original_add(self, *mobjects, **kwargs)
 
     def post_play(self, *args, **kwargs):
         result = original_post_play(self, *args, **kwargs)
@@ -559,6 +632,7 @@ def patch_scene_module(module) -> None:
         return result
 
     def begin_animations(self, animations, *args, **kwargs):
+        _nudge_new_text(self, [getattr(a, "mobject", None) for a in animations])
         result = original_begin(self, animations, *args, **kwargs)
         _observe_morphs(self, animations)
         return result
@@ -572,6 +646,8 @@ def patch_scene_module(module) -> None:
     scene_cls.post_play = post_play
     scene_cls.tear_down = tear_down
     scene_cls.begin_animations = begin_animations
+    if original_add is not None:
+        scene_cls.add = add
     scene_cls._manimgen_overlap_probe = True
 
 

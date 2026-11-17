@@ -77,7 +77,7 @@ def loop(monkeypatch, tmp_path):
 
     monkeypatch.setattr(retry_mod, "chat", _chat)
 
-    def run(outcomes):
+    def run(outcomes, **kwargs):
         it = iter(outcomes)
 
         def _capture(p, c):
@@ -85,7 +85,9 @@ def loop(monkeypatch, tmp_path):
             return next(it)
 
         monkeypatch.setattr(retry_mod, "_run_and_capture", _capture)
-        result = retry_mod.retry_scene({"id": "s"}, _SCENE, "S", str(scene))
+        result = retry_mod.retry_scene(
+            {"id": "s"}, _SCENE, "S", str(scene), **kwargs
+        )
         return result, calls
 
     return run
@@ -267,3 +269,89 @@ def test_a_render_timeout_is_not_treated_as_a_crash():
     assert _classify_error(stderr) is SceneErrorType.TIMEOUT
     guidance = _fix_guidance(SceneErrorType.TIMEOUT, stderr)
     assert "did not crash" in guidance and "duration exactly" in guidance
+
+
+# ---------------------------------------------------------------------------
+# Render budget: measured on 12 Shorts runs (2026-11), most of a 15 to 30 min
+# run went to re-rendering for text-placement defects that never cleared, and
+# attempt 1 always re-rendered the very code the first pass had just rendered.
+# ---------------------------------------------------------------------------
+
+_UNSAFE = Overlap(1.4, "Why does 3-4-5", "", 0.86, "unsafe")
+
+
+def test_placement_only_defects_get_one_fix_then_ship(loop, tmp_path):
+    first, second = str(tmp_path / "a.mp4"), str(tmp_path / "b.mp4")
+    (ok, video), calls = loop(
+        [
+            _rendered(first, (_UNSAFE,)),
+            _rendered(second, (_UNSAFE, _OVERLAP)),
+            _rendered(str(tmp_path / "never.mp4")),
+        ]
+    )
+    assert ok and video == first  # best render: fewer defects
+    assert calls["chat"] == ["visual_fix"]
+    assert calls["render"] == 2
+
+
+def test_placement_fix_limit_is_configurable(loop, tmp_path, monkeypatch):
+    monkeypatch.setattr(retry_mod, "MAX_PLACEMENT_FIX_CALLS", 2)
+    a, b, c = (str(tmp_path / f"{n}.mp4") for n in "abc")
+    (ok, video), calls = loop(
+        [
+            _rendered(a, (_UNSAFE, _OVERLAP)),
+            _rendered(b, (_UNSAFE,)),
+            _rendered(c),
+        ]
+    )
+    assert ok and video == c
+    assert calls["chat"] == ["visual_fix", "visual_fix"]
+
+
+def test_first_render_is_checked_not_rendered_again(loop, tmp_path):
+    # The first pass rejected it, but the retry loop's own checks find nothing
+    # (e.g. a soft issue only the first-pass validator cared about): accept it
+    # without rendering anything.
+    first = tmp_path / "first.mp4"
+    first.write_bytes(b"x")
+    (ok, video), calls = loop([], first_render=str(first))
+    assert ok and video == str(first)
+    assert calls["render"] == 0
+
+
+def test_first_render_with_defects_goes_straight_to_a_fix(loop, tmp_path):
+    import json
+
+    first = tmp_path / "first.mp4"
+    first.write_bytes(b"x")
+    (tmp_path / "first.mp4.overlaps.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "findings": [
+                    {
+                        "time": 1.4,
+                        "a": "Why does 3-4-5",
+                        "b": "",
+                        "fraction": 0.86,
+                        "kind": "unsafe",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    fixed = str(tmp_path / "fixed.mp4")
+    (ok, video), calls = loop([_rendered(fixed)], first_render=str(first))
+    assert ok and video == fixed
+    assert calls["chat"] == ["visual_fix"]
+    assert calls["render"] == 1  # only the fixed code was rendered
+
+
+def test_missing_first_render_is_rendered_normally(loop, tmp_path):
+    clean = str(tmp_path / "clean.mp4")
+    (ok, video), calls = loop(
+        [_rendered(clean)], first_render=str(tmp_path / "gone.mp4")
+    )
+    assert ok and video == clean
+    assert calls["render"] == 1

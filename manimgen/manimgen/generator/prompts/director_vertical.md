@@ -18,8 +18,8 @@ That box is 3.4 units wide and 4.8 units tall, and its centre is at **x = -0.3**
 
 | Band | y range | What goes there |
 |---|---|---|
-| hook | 2.25 to 2.8 | the question: one or two short lines of `Text` at font_size 28 |
-| key | 1.6 to 2.1 | ONE line: the key words or the equation, font_size 36. Empty until the cue that needs it |
+| hook | top edge at 2.75 | the question: one or two short lines of `Text` at font_size 28, placed with `hook.move_to([-0.3, 2.75, 0], aligned_edge=UP)` so its TOP sits at 2.75 whatever its height |
+| key | top edge at 1.9 | ONE line: the key words or the equation, font_size 36, placed with `key.move_to([-0.3, 1.9, 0], aligned_edge=UP)`. Empty until the cue that needs it |
 | diagram | -2.0 to 1.4 | the ONE main diagram, as big as it fits: up to 3.4 wide and 3.4 tall |
 
 The diagram gets most of the screen. A phone screen is small; a diagram that is not big cannot be read.
@@ -29,7 +29,7 @@ The diagram gets most of the screen. A phone screen is small; a diagram that is 
 - `Text` and `Tex` font sizes: hook **28**, key line **36**, labels **28** (22 only for many small labels). Only 18, 20, 22, 28 and 36 are used in a short (other values are snapped to these); never 44 or 48.
 - A line of `Text` at font_size 28 fits about **18 characters**, at 36 about **14**. Longer hook text MUST be split into two `Text` objects in a `VGroup(...).arrange(DOWN, buff=0.12)`. The key line is one line: shorten it rather than wrap it.
 - After building any text or group, guard its width: `if obj.get_width() > 3.3: obj.set_width(3.3)`.
-- **Build the diagram full size, then scale it to the band.** Draw it in convenient units (a 3-4-5 triangle as 3 and 4 units), put every part in one `VGroup`, then before the first animation: `main.scale(min(3.4 / main.get_width(), 3.4 / main.get_height()))` and `main.move_to([-0.3, -0.3, 0])`. Parts added in later cues are positioned relative to parts already in `main` (`next_to`, `move_to(part)`), so they scale with it. Build every part up front (unanimated), scale once, then animate the parts in.
+- **Build the diagram full size, then scale it to the band.** Draw it in convenient units (a 3-4-5 triangle as 3 and 4 units), put every part in one `VGroup`, then before the first animation: `main.scale(min(3.4 / main.get_width(), 3.4 / main.get_height()))` and `main.move_to([-0.3, -0.3, 0])`. Labels, braces and brace labels that go outside the shapes (under a grid, beside a side) are built up front and put in `main` BEFORE the scale, so they are inside the 3.4 box too; a label added after the scale below the diagram lands under the bottom edge. Parts added in later cues are positioned relative to parts already in `main` (`next_to`, `move_to(part)`), so they scale with it. Build every part up front (unanimated), scale once, then animate the parts in.
 - `Axes(width=3.2, height=3.0)` at most, with 5 to 7 ticks per axis and tick label `font_size` 20.
 - A row of boxes holds at most 5 boxes of side 0.6. More items go in a second row or a column.
 - Stroke widths of 4 for main shapes so they read on a phone.
@@ -72,7 +72,7 @@ class ShortExampleScene(Scene):
         hook = VGroup(
             Text("Why is 3-4-5", font_size=28, color=WHITE),
             Text("a right triangle?", font_size=28, color=WHITE),
-        ).arrange(DOWN, buff=0.12).move_to([CX, 2.5, 0])
+        ).arrange(DOWN, buff=0.12).move_to([CX, 2.75, 0], aligned_edge=UP)
         self.add(hook)
         self.play(ShowCreation(tri), run_time=1.0)
         self.wait(2.0)
@@ -85,7 +85,7 @@ class ShortExampleScene(Scene):
         self.wait(1.4)
 
         # CUE 2 — 3.5s: the key line appears in its band, under the hook
-        key = Text("9 + 16 = 25", font_size=36, color=GOLD).move_to([CX, 1.85, 0])
+        key = Text("9 + 16 = 25", font_size=36, color=GOLD).move_to([CX, 1.9, 0], aligned_edge=UP)
         self.play(Write(key), run_time=1.0)
         self.wait(0.7)  # a beat of stillness before the reveal
         self.play(FlashAround(key, color=GOLD), run_time=0.8)

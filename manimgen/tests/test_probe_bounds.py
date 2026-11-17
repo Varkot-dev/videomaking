@@ -137,3 +137,27 @@ def test_reports_without_a_kind_are_read_as_overlaps():
     )
     assert parsed.overlaps[0].kind == "overlap"
     assert "drawn on top of" in report.format_issue(parsed.overlaps[0])
+
+
+
+# --- safe-area nudge -------------------------------------------------------
+
+_SAFE = (-2.0, -2.0, 1.4, 2.8)
+
+
+def test_nudge_moves_slightly_high_text_down():
+    assert probe.nudge_offset((-1.5, 2.2, 0.9, 3.0), _SAFE) == pytest.approx((0.0, -0.2))
+
+
+def test_nudge_moves_slightly_low_text_up_and_left():
+    dx, dy = probe.nudge_offset((1.0, -2.3, 1.6, -1.9), _SAFE)
+    assert (dx, dy) == pytest.approx((-0.2, 0.3))
+
+
+def test_no_nudge_when_inside():
+    assert probe.nudge_offset((-1.0, 0.0, 1.0, 1.0), _SAFE) is None
+
+
+def test_no_nudge_when_far_out_or_too_big():
+    assert probe.nudge_offset((-1.0, -2.9, 0.0, -2.6), _SAFE) is None  # 0.9 down
+    assert probe.nudge_offset((-2.2, 0.0, 1.6, 0.5), _SAFE) is None  # wider than box
