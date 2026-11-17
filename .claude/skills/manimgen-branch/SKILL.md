@@ -20,19 +20,12 @@ Key files by area:
 - Pipeline: `manimgen/cli.py`
 - Segmentation: `manimgen/planner/segmenter.py`
 
-## Branch chain rule
+## Branch rule
 
-All manimgen branches stem from the previous feature branch, not from `main`. Check the current frontier:
-
-```bash
-git branch && git log --oneline -5
-```
-
-Branch from the most recent feature branch:
+`main` is the active branch and CI gates every pull request into it. Branch from an up-to-date `main` unless the user names a different parent:
 
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown
-git checkout <parent-branch>
+git checkout main && git pull
 git checkout -b feature/<short-kebab-description>
 ```
 
@@ -48,13 +41,13 @@ git checkout -b feature/<short-kebab-description>
 
 - Import: `from manimlib import *` — never `from manim import *`
 - `ShowCreation` not `Create`, `Tex` not `MathTex`, `self.frame` not `self.camera.frame`
-- `font_size=` on `Tex()` crashes — codeguard converts it to `.scale()`
+- `font_size=` on `Tex()` is valid — do not convert it to `.scale()` (double-scales)
 - Axes use `width=` and `height=` — never `x_length=` or `y_length=`
 
 ## Adding a new example scene
 
-1. Write the scene in `examples/<technique>_scene.py`
-2. Add `techniques: <name>, <name>` as the first line inside the class docstring
+1. Write the scene in `manimgen/manimgen/examples/<technique>_scene.py`
+2. Add `techniques: <name>, <name>` as the first line inside the class docstring (each name must exist in `manimgen/techniques.py`; a test enforces it)
 3. That's it — `scene_generator._index_examples()` picks it up automatically at runtime
 
 No code changes needed in `scene_generator.py` to register new examples.
@@ -62,11 +55,12 @@ No code changes needed in `scene_generator.py` to register new examples.
 ## Test cycle
 
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
-python3 -m pytest tests/ --ignore=tests/test_scene_generator.py --ignore=tests/test_planner.py -v
+cd manimgen   # from the repository root
+python3 -m pytest -q
+ruff check manimgen/ && ruff format --check manimgen/
 ```
 
-`test_scene_generator` and `test_planner` make real LLM calls — always skip in local runs.
+Run the bare pytest command. Never add `--ignore` flags: every test, including `test_scene_generator` and `test_planner`, is fully mocked and costs nothing.
 
 All tests must pass before declaring done. Fix failures before moving on.
 
@@ -76,7 +70,7 @@ After all tests pass, tell the user:
 - What new files were created and their purpose
 - What existing files were changed and why
 - Whether `CLAUDE.md` or `MASTER GUIDELINES.md` needs updating
-- What the next branch in the chain is
+- What you recommend working on next
 
 Ask "Ready to move on?" before switching branches.
 

@@ -467,8 +467,8 @@ Most visible quality issue. Cues often have 1–8 seconds of frozen still at the
 ### 3. ✅ RESOLVED — frame_checker.py wiring
 Confirmed wired in `validator/retry.py`: `check_frames()` runs after every successful render. Hard failures (black/frozen frames confirmed by timing oracle) block muxing and force retry. Soft failures (layout issues, only when `MANIMGEN_FIRST_PASS_LAYOUT=1`) are advisory on the first pass; `retry_scene` feeds layout issues into its LLM fix prompt.
 
-### 4. LOW — `.hypothesis/` and `.DS_Store` committed
-Should be in `.gitignore`. Clutters diffs.
+### 4. RESOLVED: `.hypothesis/` and `.DS_Store`
+Both are in `.gitignore` and neither is tracked.
 
 ### 5. RESOLVED: `_load_llm_config()` called on every LLM call
 `llm.py` now parses `config.yaml` once at import into `_LLM_CONFIG`.

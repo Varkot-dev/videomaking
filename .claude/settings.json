@@ -5,8 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /Users/varshithkotagiri/videomaking/manimgen/scripts/env_doctor.py 1>&2 || echo '[env-doctor] Blocking setup issues detected above — fix before running the manimgen pipeline.' 1>&2",
-            "description": "Run the manimgen env-doctor at session start to catch known recurring setup landmines (manimlib import, setuptools<81, manimgen path, --fps crash, planner json_mode) with their fixes"
+            "command": "PY=$(command -v python || command -v python3); \"$PY\" \"$CLAUDE_PROJECT_DIR/manimgen/scripts/env_doctor.py\" 1>&2 || echo '[env-doctor] Blocking setup issues detected above. Fix them before running the manimgen pipeline.' 1>&2"
           }
         ]
       }
@@ -17,8 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const i=JSON.parse(d);const p=i.tool_input?.file_path||'';if(/\\/manim\\//.test(p)&&!/\\/manimgen\\//.test(p)){console.error('[Hook] BLOCKED: manim/ is the read-only ManimGL install \\u2014 edit manimgen/ instead');process.exit(2)}process.exit(0)})\"",
-            "description": "Protect the read-only manim/ ManimGL install from edits"
+            "command": "PY=$(command -v python || command -v python3); \"$PY\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/protect_manim.py\""
           }
         ]
       }
@@ -29,19 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "for f in $CLAUDE_FILE_PATHS; do case \"$f\" in *.py) ruff format \"$f\" >/dev/null 2>&1; ruff check --fix \"$f\" >/dev/null 2>&1; if ! python3 -m py_compile \"$f\" 2>/tmp/manimgen_pycompile_err; then echo \"[Hook] SYNTAX ERROR in $f:\"; cat /tmp/manimgen_pycompile_err; fi; if ! ruff check \"$f\" >/tmp/manimgen_ruff_err 2>&1; then echo \"[Hook] ruff still reports issues in $f after autofix:\"; cat /tmp/manimgen_ruff_err; fi;; esac; done",
-            "description": "Auto-format/fix edited Python files, then loudly report any remaining syntax errors or unfixable lint issues"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "echo '[Hook] Work unit done. Before considering this finished, run /python-review on the changed Python files for a deep agent review (the per-edit hook only catches syntax + lint, not logic/design).'",
-            "description": "Remind to run the deep python-reviewer agent at the end of a work unit"
+            "command": "PY=$(command -v python || command -v python3); \"$PY\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/post_edit_python.py\""
           }
         ]
       }

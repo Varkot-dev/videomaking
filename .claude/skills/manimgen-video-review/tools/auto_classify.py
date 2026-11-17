@@ -31,7 +31,12 @@ import sys
 from typing import Any
 
 
-_PACKAGE_ROOT = "/Users/varshithkotagiri/Projects/3Blue1Brown/manimgen"
+# Derived from this file's location (<repo>/.claude/skills/manimgen-video-review/tools)
+# so the tools work wherever the repository is checked out, on any OS.
+_REPO_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..")
+)
+_PACKAGE_ROOT = os.path.join(_REPO_ROOT, "manimgen")
 
 
 def _import_check_frames():

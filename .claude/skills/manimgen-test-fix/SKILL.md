@@ -10,8 +10,8 @@ When tests fail, diagnose first. Never blindly change a test assertion without u
 ## Step 1: Run and read the failure
 
 ```bash
-cd /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
-python3 -m pytest tests/ --ignore=tests/test_scene_generator.py --ignore=tests/test_planner.py -v 2>&1
+cd manimgen   # from the repository root; pyproject.toml lives here
+python3 -m pytest -q
 ```
 
 Read the full traceback — the `AssertionError` line and `E` lines tell you expected vs actual.
@@ -30,8 +30,10 @@ Never change a test assertion just to make it green.
 
 ```bash
 python3 -m pytest tests/test_<file>.py::TestClass::test_name -v
-python3 -m pytest tests/ --ignore=tests/test_scene_generator.py --ignore=tests/test_planner.py -v
+python3 -m pytest -q
 ```
+
+Always run the bare command. Never add `--ignore` flags: every test is fully mocked and free, and skipping files only hides a divergence from CI.
 
 ## Common failure patterns
 
@@ -51,4 +53,4 @@ python3 -m pytest tests/ --ignore=tests/test_scene_generator.py --ignore=tests/t
 
 ## After all tests pass
 
-Report: `N passed`, which files changed, and whether the root cause was a real design issue worth flagging.
+Report the pytest summary line, which files changed, and whether the root cause was a real design issue worth flagging.

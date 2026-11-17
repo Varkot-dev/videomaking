@@ -86,6 +86,37 @@ class TestManimlibImportOnHeadlessBox:
         assert not ed._blocking_failures
         assert ed._warnings == ["manimlib import (no display)"]
 
+    def test_deprecation_warning_does_not_hide_the_display_error(
+        self, monkeypatch, capsys
+    ):
+        """The real stderr on a headless box: manimlib's import prints the
+        setuptools deprecation warning (which names pkg_resources) before the
+        pyglet traceback. That warning must not be read as a missing module."""
+        self._setup(monkeypatch, xvfb=True)
+        warning = (
+            b"manimlib/__init__.py:1: UserWarning: pkg_resources is deprecated "
+            b"as an API. Refrain from using this package or pin to Setuptools<81.\n"
+            b"  import pkg_resources\n"
+        )
+        monkeypatch.setattr(
+            subprocess, "run", _failing_import(warning + DISPLAY_TRACEBACK)
+        )
+        ed.check_manimlib_imports()
+        assert not ed._blocking_failures
+        assert ed._warnings == ["manimlib import (no display)"]
+
+    def test_a_really_missing_pkg_resources_is_still_reported(self, monkeypatch):
+        self._setup(monkeypatch, xvfb=True)
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            _failing_import(
+                b"ModuleNotFoundError: No module named 'pkg_resources'\n"
+            ),
+        )
+        ed.check_manimlib_imports()
+        assert ed._blocking_failures == ["manimlib import (pkg_resources)"]
+
     def test_missing_xvfb_run_is_blocking_and_names_the_package(
         self, monkeypatch, capsys
     ):

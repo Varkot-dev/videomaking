@@ -84,7 +84,10 @@ def check_manimlib_imports() -> None:
         _ok("manimlib imports")
     except subprocess.CalledProcessError as e:
         stderr = e.stderr.decode(errors="replace")
-        if "pkg_resources" in stderr:
+        # Match the import failure only. The bare word also appears in the
+        # harmless setuptools deprecation warning manimlib prints on every
+        # import, which used to hide the real error (e.g. no display).
+        if "No module named 'pkg_resources'" in stderr:
             _fail(
                 "manimlib import (pkg_resources)",
                 "manimlib imports pkg_resources, which setuptools 81+ removed",

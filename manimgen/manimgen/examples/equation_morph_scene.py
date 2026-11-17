@@ -2,7 +2,7 @@ from manimlib import *
 
 
 class EquationMorphScene(Scene):
-    """
+    r"""
     techniques: equation_morph
     Demonstrates algebra steps and equation transformations using TransformMatchingTex.
 
