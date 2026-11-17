@@ -123,7 +123,6 @@ def _consume_run_budget(category: str) -> bool:
 
 RETRY_ERROR_SIGNATURE_CHARS = 500
 RETRY_PROMPT_STDERR_CHARS = 3000
-RETRY_PROMPT_CODE_CHARS = 7000
 
 
 class SceneErrorType(str, enum.Enum):
@@ -577,7 +576,9 @@ def retry_scene(
         prompt_stderr = _truncate_for_prompt(
             result["stderr"], RETRY_PROMPT_STDERR_CHARS
         )
-        prompt_code = _truncate_for_prompt(code, RETRY_PROMPT_CODE_CHARS)
+        # The model's reply replaces the whole file, so it must see the whole
+        # file: a scene with its middle cut out comes back with cues missing.
+        prompt_code = code
         timing_context = ""
         if pending_timing_warnings:
             timing_context = (
@@ -745,7 +746,9 @@ def _request_visual_fix(
     """Ask the LLM to fix code based on structured visual feedback and defective frames."""
     from manimgen.utils import load_reference_frames
 
-    prompt_code = _truncate_for_prompt(code, RETRY_PROMPT_CODE_CHARS)
+    # The model's reply replaces the whole file, so it must see the whole
+    # file: a scene with its middle cut out comes back with cues missing.
+    prompt_code = code
     ref_frames = load_reference_frames()
 
     fixed = chat(

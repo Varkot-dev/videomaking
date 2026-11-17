@@ -98,3 +98,22 @@ def test_font_kwarg_strip_respects_word_boundary():
 def test_fractional_font_size_is_left_alone():
     code = "Text('x', font_size=30.5)"
     assert _fix_font_size_to_scale(code)[0] == code
+
+
+def test_mobject_explosion_check_ignores_unrelated_range():
+    from manimgen.validator.invariants import _I1_mobject_explosion
+
+    code = (
+        "dots = VGroup(*[Dot(p) for p in pts])\n"
+        "for i in range(100):\n"
+        "    samples.append(i)\n"
+        "v = np.array([0, 1, 0])\n"
+    )
+    assert _I1_mobject_explosion(code) == []
+
+
+def test_mobject_explosion_check_still_fires():
+    from manimgen.validator.invariants import _I1_mobject_explosion
+
+    assert _I1_mobject_explosion("g = VGroup(*[Dot() for _ in range(200)])\n")
+    assert not _I1_mobject_explosion("g = VGroup(*[Dot() for _ in range(16)])\n")
