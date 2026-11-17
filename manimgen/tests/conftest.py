@@ -22,6 +22,18 @@ def _isolate_evidence_log(tmp_path, monkeypatch):
     monkeypatch.setenv("MANIMGEN_EVIDENCE_DIR", str(tmp_path / "evidence"))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_logs_dir(tmp_path, monkeypatch):
+    """Send render and retry logs to this test's tmp_path.
+
+    Tests that drive the runner or the retry loop used to write attempt logs
+    and scene copies into the real output/logs/ folder of the checkout.
+    """
+    from manimgen import paths
+
+    monkeypatch.setitem(paths._PATHS, "logs", str(tmp_path / "logs"))
+
+
 # ---------------------------------------------------------------------------
 # Network guard
 # ---------------------------------------------------------------------------

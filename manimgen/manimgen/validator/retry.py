@@ -502,7 +502,9 @@ def retry_scene(
             with open(scene_path, encoding="utf-8") as f:
                 code = f.read()
             if _discard_unsafe_fix(scene_path, code, previous_code, "visual"):
-                return True, best_video_path or result["video_path"]
+                # Ship through _ship_best so the defects this render is known
+                # to have are recorded; a bare return reported it as clean.
+                return _ship_best(result["video_path"])
             # Timing pass — catch timing bugs in the LLM's visual fix
             if cue_durations:
                 code, tw = apply_timing_gate(code, scene_path, cue_durations)

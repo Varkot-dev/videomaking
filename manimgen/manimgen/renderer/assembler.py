@@ -248,9 +248,12 @@ def _concat(
         tmp = os.path.join(work_dir, f"_xfade_{i:03d}.mp4")
         try:
             _xfade_pair(result, section_clips[i], tmp)
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             # Fallback to hard concat when ffmpeg xfade cannot be computed for
-            # a particular pair (rare codec/timeline edge case).
+            # a particular pair (rare codec/timeline edge case) or does not
+            # finish in time. Each crossfade re-encodes the whole video so far,
+            # so a long video on a slow machine can exceed the timeout; a hard
+            # cut is better than losing the assembled video.
             _hard_concat([result, section_clips[i]], tmp)
         # Clean up intermediates (but not the normalised originals — caller does that)
         if result not in norm_paths and os.path.exists(result):
