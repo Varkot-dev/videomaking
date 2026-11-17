@@ -163,3 +163,89 @@ def test_run_and_capture_marks_rejections_as_not_rendered(monkeypatch, tmp_path)
     timeout = RenderResult(False, None, "", "TimeoutExpired", None, True)
     monkeypatch.setattr(retry_mod, "run_manimgl", lambda p, c: timeout)
     assert retry_mod._run_and_capture(str(scene), "S")["rendered"] is True
+
+
+# --- safety-gate rejections get their own error type and guidance ----------
+
+_GATE_NAME = (
+    "SceneSafetyGateError: the scene was not rendered because it uses "
+    "constructs that are not allowed in generated scenes. Remove every "
+    "construct listed below.\n- line 113: name 'se' is not allowed"
+)
+_GATE_TOPLEVEL = (
+    "SceneSafetyGateError: the scene was not rendered because it uses "
+    "constructs that are not allowed in generated scenes. Remove every "
+    "construct listed below.\n- line 166: disallowed top-level Expr"
+)
+
+
+def test_gate_rejection_for_denied_name_is_classified_as_safety_gate():
+    assert retry_mod._classify_error(_GATE_NAME) == retry_mod.SceneErrorType.SAFETY_GATE
+
+
+def test_gate_rejection_for_top_level_expr_is_classified_as_safety_gate():
+    got = retry_mod._classify_error(_GATE_TOPLEVEL)
+    assert got == retry_mod.SceneErrorType.SAFETY_GATE
+
+
+def test_gate_rejection_wins_over_keywords_quoted_in_its_findings():
+    stderr = _GATE_TOPLEVEL + "\n- line 9: name 'TypeError' is not allowed (SyntaxError)"
+    assert retry_mod._classify_error(stderr) == retry_mod.SceneErrorType.SAFETY_GATE
+
+
+def test_traceback_quoting_the_gate_marker_mid_line_is_not_a_gate_rejection():
+    stderr = (
+        "Traceback (most recent call last):\n"
+        '  File "scene.py", line 3, in construct\n'
+        "    x = undefined  # SceneSafetyGateError: quoted in a comment\n"
+        "NameError: name 'undefined' is not defined"
+    )
+    assert retry_mod._classify_error(stderr) == retry_mod.SceneErrorType.RUNTIME
+
+
+@pytest.mark.parametrize(
+    "stderr, expected",
+    [
+        ("AttributeError: 'X' has no attribute 'y'", "ATTRIBUTE"),
+        ("TypeError: bad argument", "TYPE"),
+        ("RuntimeError: boom", "RUNTIME"),
+        ("ValueError: could not broadcast input array", "RUNTIME"),
+        ("SyntaxError: invalid syntax", "SYNTAX"),
+        ("ModuleNotFoundError: No module named 'x'", "IMPORT"),
+    ],
+)
+def test_ordinary_tracebacks_classify_as_before(stderr, expected):
+    assert retry_mod._classify_error(stderr) == retry_mod.SceneErrorType[expected]
+
+
+def test_real_gate_error_text_is_classified_as_safety_gate():
+    from manimgen.validator.scene_ast_gate import format_gate_error, inspect_scene_code
+
+    code = (
+        "from manimlib import *\n\n\nclass S(Scene):\n"
+        "    def construct(self):\n        se = 1\n"
+    )
+    gate = inspect_scene_code(code)
+    assert not gate.ok
+    text = format_gate_error(gate)
+    assert "name 'se' is not allowed" in text
+    assert retry_mod._classify_error(text) == retry_mod.SceneErrorType.SAFETY_GATE
+
+
+def test_gate_rejection_fix_prompt_uses_gate_guidance(monkeypatch, loop, tmp_path):
+    prompts = []
+
+    def _chat(**kw):
+        prompts.append(kw["user"])
+        return _SCENE + "# fixed\n"
+
+    monkeypatch.setattr(retry_mod, "chat", _chat)
+    clean = str(tmp_path / "c.mp4")
+    (ok, _video), _calls = loop([_rejected(_GATE_NAME), _rendered(clean)])
+    assert ok
+    assert len(prompts) == 1
+    prompt = prompts[0]
+    assert f"Error type: {retry_mod.SceneErrorType.SAFETY_GATE}" in prompt
+    assert "static safety check" in prompt
+    assert "sin_t" in prompt and "great_circle" in prompt
+    assert "Simplify the scene logic" not in prompt

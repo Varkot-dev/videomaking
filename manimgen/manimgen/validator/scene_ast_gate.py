@@ -454,8 +454,11 @@ class GateResult:
     class_count: int = 0
 
 
+# Leading token of every gate rejection message; retry classifies on it.
+GATE_ERROR_MARKER = "SceneSafetyGateError"
+
 GATE_ERROR_HEADER = (
-    "SceneSafetyGateError: the scene was not rendered because it uses "
+    GATE_ERROR_MARKER + ": the scene was not rendered because it uses "
     "constructs that are not allowed in generated scenes. Remove every "
     "construct listed below. Scenes may only use `from manimlib import *`, "
     "numpy, math and similar pure modules; no file, process, network, "

@@ -14,7 +14,7 @@ from manimgen.validator.codeguard import (
 )
 from manimgen.validator.layout_checker import check_layout
 from manimgen.validator.render_command import run_manimgl
-from manimgen.validator.scene_ast_gate import inspect_scene_code
+from manimgen.validator.scene_ast_gate import GATE_ERROR_MARKER, inspect_scene_code
 from manimgen.validator.timing_verifier import auto_fix_timing, verify_timing
 
 logger = logging.getLogger(__name__)
@@ -145,9 +145,19 @@ class SceneErrorType(str, enum.Enum):
     TYPE = "type"
     RUNTIME = "runtime"
     TIMING = "timing"
+    SAFETY_GATE = "safety_gate"
+
+
+_GATE_REJECTION_RE = re.compile(rf"^{re.escape(GATE_ERROR_MARKER)}:", re.MULTILINE)
 
 
 def _classify_error(stderr: str) -> SceneErrorType:
+    # A safety-gate rejection can quote words like SyntaxError in its findings,
+    # so it must be recognised before any keyword-based branch. The marker is
+    # matched at the start of a line: a traceback that merely quotes it (in a
+    # comment or string of the scene source) is still an ordinary crash.
+    if _GATE_REJECTION_RE.search(stderr):
+        return SceneErrorType.SAFETY_GATE
     # Check precheck-specific errors BEFORE generic TypeError/AttributeError —
     # precheck output contains the word "TypeError" in its explanation text,
     # which would otherwise cause a false match on the generic TypeError branch.
@@ -183,6 +193,17 @@ _FIX_GUIDANCE: dict[SceneErrorType, str] = {
     SceneErrorType.ATTRIBUTE: "Fix the attribute error. Check the correct ManimGL method name and signature.",
     SceneErrorType.TYPE: "Fix the type error. Check argument types and counts for the method.",
     SceneErrorType.RUNTIME: "Simplify the scene logic. Reduce animations, check object creation order.",
+    SceneErrorType.SAFETY_GATE: (
+        "The scene was rejected BEFORE rendering by a static safety check, "
+        "not by a crash. Change ONLY the lines/constructs listed in the error "
+        "and leave every other line (fonts, kwargs, animations, timing) "
+        "exactly as it is. For `name 'X' is not allowed` where X is a local "
+        "variable or helper function name, rename that identifier everywhere "
+        "to a descriptive name (e.g. se -> sin_t, gc -> great_circle). For "
+        "`disallowed top-level ...`, move or delete the statement so only "
+        "imports, constants and the Scene class exist at module level. Do not "
+        "add imports beyond `from manimlib import *`, numpy and math."
+    ),
     SceneErrorType.TIMING: (
         "Fix the animation timing. Each CUE block must have animations + self.wait() that "
         "sum exactly to the cue duration. The most common bug: loop timing — subtract the "
