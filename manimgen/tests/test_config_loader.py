@@ -216,6 +216,7 @@ _OLD_LLM = {
     "claude_cli_model": "sonnet",
     "claude_cli_path": "claude",
     "models": {},
+    "efforts": {},
     "ollama_model": "llama3.1",
     "ollama_base_url": "http://localhost:11434",
     "ollama_num_ctx": 32768,

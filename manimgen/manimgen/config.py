@@ -60,6 +60,8 @@ DEFAULTS: dict = {
         "claude_cli_path": "claude",
         # Per-role model overrides (role -> alias or model ID).
         "models": {},
+        # Per-role thinking effort for claude_cli (role -> low|medium|high|xhigh|max).
+        "efforts": {},
         "ollama_model": "llama3.1",
         "ollama_base_url": "http://localhost:11434",
         # Ollama's default context window truncates the Director prompt.
@@ -209,6 +211,7 @@ def _validate(path: Path, raw: dict) -> dict:
         llm[key] = str(llm[key])
     llm["ollama_base_url"] = str(llm["ollama_base_url"]).rstrip("/")
     llm["models"] = _parse_role_models(llm["models"])
+    llm["efforts"] = _parse_role_models(llm["efforts"])
 
     out = cfg["output"]
     for key, value in list(out.items()):
