@@ -25,6 +25,10 @@ from dataclasses import dataclass, field
 
 from manimgen.utils import probe_video_duration
 
+# The phrase that identifies a frozen-frame issue line. timing_verifier and
+# render_validator match on this exact constant; do not retype it elsewhere.
+FROZEN_FRAME_MARKER = "animation appears frozen"
+
 logger = logging.getLogger(__name__)
 
 # Try to import PIL — fallback gracefully if not installed
@@ -255,7 +259,7 @@ def _check_frozen_frames(
     if changed <= _FROZEN_MAX_CHANGED:
         return (
             f"ISSUE: Frames at t={ts_a:.1f}s and t={ts_b:.1f}s are {similarity:.2%} identical - "
-            f"animation appears frozen | "
+            f"{FROZEN_FRAME_MARKER} | "
             f"CAUSE: Director likely used self.wait() for too long without any animation, "
             f"or all play() calls have very short run_time | "
             f"FIX: Add visual activity during long waits (annotation, highlight, label update)"

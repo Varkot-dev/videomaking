@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from manimgen.probes import overlap_report
-from manimgen.validator.frame_checker import check_frames
+from manimgen.validator.frame_checker import FROZEN_FRAME_MARKER, check_frames
 from manimgen.validator.layout_checker import (
     check_layout,
     first_pass_layout_enabled,
@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 # timing oracle confirms a dead tail (see the #32 join below) — a static frame
 # during a legit narration HOLD is correct behavior, so it must not be hard
 # unconditionally.
-_HARD_KEYWORDS = ("Black/empty frame", "animation appears frozen")
+_HARD_KEYWORDS = ("Black/empty frame", FROZEN_FRAME_MARKER)
 
 
 @dataclass
