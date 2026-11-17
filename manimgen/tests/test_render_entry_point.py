@@ -284,3 +284,30 @@ class TestRunTreeReal:
         while time.monotonic() < deadline and _pid_alive(pid):
             time.sleep(0.2)
         assert not _pid_alive(pid), "grandchild survived the timeout"
+
+
+def test_long_scene_gets_a_longer_render_budget(tmp_path):
+    """A fixed 240 s limit killed valid 45 s shorts on a machine without a GPU."""
+    from manimgen import paths
+    from manimgen.validator import render_command
+
+    short = tmp_path / "short.py"
+    short.write_text(
+        "from manimlib import *\n\nclass S(Scene):\n    def construct(self):\n"
+        "        self.wait(2)\n",
+        encoding="utf-8",
+    )
+    long = tmp_path / "long.py"
+    long.write_text(
+        "from manimlib import *\n\nclass S(Scene):\n    def construct(self):\n"
+        "        # CUE 0\n        self.play(FadeIn(a), run_time=5)\n"
+        "        for i in range(4):\n            self.wait(10)\n",
+        encoding="utf-8",
+    )
+    base = paths.render_timeout("2d")
+    assert render_command._scene_timeout(str(short)) == base
+    assert render_command._scene_timeout(str(long)) == pytest.approx(
+        render_command._RENDER_STARTUP_SECONDS
+        + render_command._RENDER_SECONDS_PER_VIDEO_SECOND * 45
+    )
+    assert render_command._scene_timeout(str(tmp_path / "missing.py")) == base

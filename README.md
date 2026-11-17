@@ -479,7 +479,7 @@ shell, or in a git-ignored `.env` file in `manimgen/`):
 | `MANIMGEN_MAX_RETRY_LLM_CALLS` | Seeds the two per-section repair budgets below | `rendering.max_retries` |
 | `MANIMGEN_MAX_ERROR_LLM_CALLS`, `MANIMGEN_MAX_VISUAL_LLM_CALLS` | Per-section caps on error-fix and visual-fix LLM calls | the value above |
 | `MANIMGEN_MAX_TOTAL_LLM_CALLS` | Per-run ceiling on repair LLM calls across all sections | `200` |
-| `MANIMGEN_RENDER_TIMEOUT_2D`, `MANIMGEN_RENDER_TIMEOUT_3D`, `MANIMGEN_RENDER_TIMEOUT_FALLBACK` | Seconds a render may run before its process tree is killed | `rendering.render_timeout_*` |
+| `MANIMGEN_RENDER_TIMEOUT_2D`, `MANIMGEN_RENDER_TIMEOUT_3D`, `MANIMGEN_RENDER_TIMEOUT_FALLBACK` | Seconds a render may run before its process tree is killed. Without the variable, a long scene gets more than the configured value (60 s plus 10 s per second of video) so a slow machine does not kill a working render | `rendering.render_timeout_*` |
 | `MANIMGEN_FREEZE_BLOCK_THRESHOLD` | Seconds of dead screen at the end of a cue that block a render | `2.5` |
 | `MANIMGEN_KWARG_ENFORCE` | `1` strips constructor keyword arguments proven invalid | off (log only) |
 | `MANIMGEN_UNKNOWN_SYMBOLS` | `report` logs unknown ManimGL names instead of blocking the render | blocking |
