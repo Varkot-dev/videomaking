@@ -143,7 +143,9 @@ def run_manimgl(
     if overlap_report.probe_enabled():
         probe_dir = tempfile.mkdtemp(prefix="manimgen_probe_")
         report_path = str(Path(probe_dir) / "overlaps.json")
-        env = overlap_report.with_probe_env(env, report_path)
+        env = overlap_report.with_probe_env(
+            env, report_path, paths.short_safe_margins() if paths.is_short() else None
+        )
     try:
         returncode, stdout, stderr, timed_out = procutil.run_tree(
             build_manimgl_command(scene_path, class_name),
@@ -189,7 +191,7 @@ def run_manimgl(
         )
     if report.overlaps:
         logger.warning(
-            "[render] %s: %d text overlap(s) found by the render probe",
+            "[render] %s: %d text placement defect(s) found by the render probe",
             class_name,
             len(report.overlaps),
         )

@@ -55,6 +55,14 @@ MIN_OPACITY = 0.05
 # morphs; see tests/fixtures/overlap/CALIBRATION.md.
 MORPH_THRESHOLD: float | None = None
 MAX_FINDINGS = 10
+# Share of a text's box that must be outside the frame, or outside the safe
+# area of a vertical short, before it is reported. Small overshoots (a
+# descender, a stroke) are ignored.
+OFFSCREEN_THRESHOLD = 0.05
+UNSAFE_THRESHOLD = 0.15
+# "left,bottom,right,top" as fractions of the frame: the strips the Shorts app
+# covers. Set by the host only when rendering a vertical short.
+SAFE_MARGINS_ENV = "MANIMGEN_SAFE_MARGINS"
 MAX_PER_TEXT = 3  # findings that may name the same string
 TEXT_CHARS = 40
 
@@ -77,6 +85,9 @@ class TextItem:
     # exclusion; ancestors[0] is the top-level scene mobject.
     ancestors: tuple[int, ...] = ()
     ident: int = 0
+    # The visible rectangle this text is measured against (the camera frame for
+    # world-space text, the default frame for fixed-in-frame text).
+    rect: tuple[float, float, float, float] | None = None
 
 
 @dataclass
@@ -87,6 +98,9 @@ class Finding:
     fraction: float
     a_kind: str = "Text"
     b_kind: str = "Text"
+    # "overlap": a drawn over b. "offscreen": a is cut off by the frame edge.
+    # "unsafe": a sits under the app's buttons or caption (vertical shorts).
+    kind: str = "overlap"
 
     def as_dict(self) -> dict:
         return {
@@ -96,6 +110,7 @@ class Finding:
             "fraction": round(self.fraction, 2),
             "a_kind": self.a_kind,
             "b_kind": self.b_kind,
+            "kind": self.kind,
         }
 
 
@@ -126,6 +141,45 @@ def overlap_fraction(
     if smaller <= 0:
         return 0.0
     return intersection_area(a, b) / smaller
+
+
+def outside_fraction(
+    box: tuple[float, float, float, float], rect: tuple[float, float, float, float]
+) -> float:
+    """Share of ``box`` that lies outside ``rect`` (0.0 inside, 1.0 fully out)."""
+    area = _area(box)
+    if area <= 0:
+        return 0.0
+    return max(0.0, 1.0 - intersection_area(box, rect) / area)
+
+
+def inset_rect(
+    rect: tuple[float, float, float, float],
+    margins: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
+    """``rect`` shrunk by ``margins`` = (left, bottom, right, top), each a
+    fraction of the rect's width or height. Scales with the camera frame."""
+    w, h = rect[2] - rect[0], rect[3] - rect[1]
+    left, bottom, right, top = margins
+    return (
+        rect[0] + left * w,
+        rect[1] + bottom * h,
+        rect[2] - right * w,
+        rect[3] - top * h,
+    )
+
+
+def parse_margins(raw: str | None) -> tuple[float, float, float, float] | None:
+    """Parse "left,bottom,right,top" fractions; None when absent or invalid."""
+    if not raw:
+        return None
+    try:
+        values = tuple(float(v) for v in raw.split(","))
+    except ValueError:
+        return None
+    if len(values) != 4 or any(v < 0 or v >= 0.5 for v in values):
+        return None
+    return values
 
 
 def _normalize(text: str) -> str:
@@ -216,6 +270,34 @@ class OverlapRecorder:
                 Finding(time, shorten(a.text), shorten(b.text), frac, a.kind, b.kind)
             )
 
+    def observe_bounds(
+        self,
+        time: float,
+        items: list[TextItem],
+        safe_margins: tuple[float, float, float, float] | None = None,
+    ) -> None:
+        """Report text cut off by the frame edge, and (when ``safe_margins`` is
+        given, i.e. a vertical short) text under the app's buttons or caption.
+        """
+        for item in items:
+            if item.rect is None:
+                continue
+            out = outside_fraction(item.box, item.rect)
+            if out >= OFFSCREEN_THRESHOLD:
+                self._add(
+                    Finding(
+                        time, shorten(item.text), "", out, item.kind, "", "offscreen"
+                    )
+                )
+                continue
+            if safe_margins is None:
+                continue
+            out = outside_fraction(item.box, inset_rect(item.rect, safe_margins))
+            if out >= UNSAFE_THRESHOLD:
+                self._add(
+                    Finding(time, shorten(item.text), "", out, item.kind, "", "unsafe")
+                )
+
     def observe_morph(self, time: float, source: str, target: str, glyphs) -> None:
         score = morph_collision(glyphs)
         self.morphs.append(
@@ -233,7 +315,7 @@ class OverlapRecorder:
         )
 
     def _add(self, finding: Finding) -> None:
-        key = tuple(sorted((finding.a, finding.b)))
+        key = (finding.kind, *sorted((finding.a, finding.b)))
         if key in self.seen:
             return
         self.seen.add(key)
@@ -366,6 +448,7 @@ def collect_text_items(scene, min_opacity: float = MIN_OPACITY) -> list[TextItem
                     kind=type(mob).__name__,
                     ancestors=ancestors,
                     ident=id(mob),
+                    rect=rect,
                 )
             )
             return
@@ -410,7 +493,11 @@ def _observe(scene) -> None:
             _state["recorder"] = OverlapRecorder()
         _state["scene"] = type(scene).__name__
         items = collect_text_items(scene)
-        _state["recorder"].observe(float(getattr(scene, "time", 0.0)), items)
+        now = float(getattr(scene, "time", 0.0))
+        _state["recorder"].observe(now, items)
+        _state["recorder"].observe_bounds(
+            now, items, parse_margins(os.environ.get(SAFE_MARGINS_ENV))
+        )
     except Exception as exc:  # a probe bug must never break a render
         _record_error("observe", exc)
 

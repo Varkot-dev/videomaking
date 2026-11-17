@@ -144,6 +144,18 @@ def render_size_flags() -> list[str]:
     return [render_quality_flag()]
 
 
+# Strips of a 1080x1920 frame the Shorts app draws over, as fractions of the
+# frame: 48 px left, 672 px bottom (caption, channel), 192 px right (buttons),
+# 288 px top. Third-party measurements of Google's vertical template; the
+# conservative end of what is published.
+_SHORT_SAFE_MARGINS = (48 / 1080, 672 / 1920, 192 / 1080, 288 / 1920)
+
+
+def short_safe_margins() -> tuple[float, float, float, float]:
+    """(left, bottom, right, top) margins of the safe area in a short."""
+    return _SHORT_SAFE_MARGINS
+
+
 def short_voice_profile_path() -> str:
     """Where the optional voice profile for shorts lives (may not exist)."""
     return _SHORTS["voice_profile"]

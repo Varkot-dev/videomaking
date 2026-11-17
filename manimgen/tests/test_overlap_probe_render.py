@@ -99,3 +99,33 @@ def test_first_run_offending_scenes_are_reported(
     res = _render(tmp_path, monkeypatch, FIXTURES / name, cls)
     assert res.ok, res.stderr
     assert any(expected in o.a or expected in o.b for o in res.overlaps)
+
+
+_OUT_OF_BOUNDS = """from manimlib import *
+
+class Misplaced(Scene):
+    def construct(self):
+        wide = Text("This sentence is far too wide for the frame", font_size=36)
+        wide.move_to([0, 2.3, 0])
+        low = Text("under the caption", font_size=28).move_to([-0.3, -2.6, 0])
+        good = Text("fine here", font_size=28).move_to([-0.3, 0.9, 0])
+        self.add(wide, low, good)
+        self.wait(0.3)
+"""
+
+
+@pytest.mark.timeout(300)
+def test_vertical_short_reports_offscreen_and_unsafe_text(tmp_path, monkeypatch):
+    """A real 1080x1920 render: text past the frame edge and text under the
+    Shorts caption are reported; text inside the safe area is not."""
+    paths.set_video_format("short")
+    src = tmp_path / "src" / "misplaced.py"
+    src.parent.mkdir()
+    src.write_text(_OUT_OF_BOUNDS, encoding="utf-8")
+    res = _render(tmp_path, monkeypatch, src, "Misplaced")
+    assert res.ok, res.stderr
+    assert res.probe_error is None
+    found = {(o.a, o.kind) for o in res.overlaps}
+    assert ("under the caption", "unsafe") in found
+    assert any(kind == "offscreen" for _, kind in found)
+    assert not any(text == "fine here" for text, _ in found)

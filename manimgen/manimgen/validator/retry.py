@@ -394,7 +394,7 @@ def retry_scene(
             if overlaps:
                 print(
                     f"[retry] Attempt {attempt}/{MAX_RETRIES} has "
-                    f"{len(overlaps)} text overlap(s) (render probe)."
+                    f"{len(overlaps)} text placement defect(s) (render probe)."
                 )
                 combined_issues.extend(overlap_issues(overlaps))
 
