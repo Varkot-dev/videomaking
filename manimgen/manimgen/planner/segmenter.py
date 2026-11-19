@@ -18,7 +18,7 @@ from manimgen.planner.cue_parser import align_cue_indices
 from manimgen.renderer.tts import WordTimestamp, cue_times
 from manimgen.types import CueSegment
 
-__all__ = ["CueSegment", "compute_segments"]
+__all__ = ["CueSegment", "compute_segments", "slice_durations"]
 
 
 def compute_segments(
@@ -98,3 +98,23 @@ def compute_segments(
         )
 
     return segments
+
+
+def slice_durations(segments: list[CueSegment]) -> list[float]:
+    """Length of each cue's audio slice, which is also the cue's video length.
+
+    ``audio_slicer.slice_audio`` cuts cue i from its onset (0.0 for cue 0) to
+    the NEXT cue's onset, so the slice includes the pause after the last word.
+    ``CueSegment.duration`` stops at that word's end and is shorter by the
+    pause (0.3 to 0.4 s after a sentence). A video cut to ``duration`` is
+    shorter than its audio, and the muxer fills the gap with a frozen frame.
+    These lengths tile the narration exactly, so they sum to the audio length.
+    """
+    out: list[float] = []
+    for i, seg in enumerate(segments):
+        if i + 1 < len(segments):
+            start = 0.0 if i == 0 else seg.start_time
+            out.append(max(segments[i + 1].start_time - start, 0.1))
+        else:
+            out.append(seg.duration)
+    return out

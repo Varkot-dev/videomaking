@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 # placement or TTS/render timing problem worth investigating.
 _WARN_THRESHOLD_SECONDS = 1.0
 
+# Audio longer than video by up to this many frames is trimmed, not frozen.
+_FREEZE_SLOP_FRAMES = 2
+
 # The pipeline's dark background (matches the -c "#1C1C1C" render flag). Used to
 # synthesize a placeholder clip when a cue's render produced no video stream.
 _BG_COLOR = "#1C1C1C"
@@ -138,11 +141,12 @@ def mux_audio_video(video_path: str, audio_path: str, output_path: str) -> str:
         _mux_synth_background(audio_path, output_path, audio_dur)
         return output_path
 
-    # Audio is usually a little longer than video. A gap under one frame is not
-    # worth a lossy re-encode (a freeze of less than a frame is invisible), so
-    # only freeze when the gap is at least one frame.
-    one_frame = 1.0 / max(1, paths.render_fps())
-    if audio_dur - video_dur >= one_frame:
+    # Audio is usually a little longer than video: frame rounding of the cut
+    # (up to one frame) plus the AAC encoder's padding (about 20 ms). A gap that
+    # small is not a pause worth freezing for, and a re-encode costs quality, so
+    # only freeze when the gap is more than two frames.
+    slop = _FREEZE_SLOP_FRAMES / max(1, paths.render_fps())
+    if audio_dur - video_dur > slop:
         logger.info(
             "[muxer] %s: freeze-frame branch (audio %.3fs > video %.3fs)",
             os.path.basename(output_path),
@@ -397,16 +401,33 @@ def _run(cmd: list[str], output_path: str) -> None:
 _MAX_PARALLEL_CUTS = min(4, (os.cpu_count() or 1))
 
 
+def cue_frame_span(start: float, dur: float, fps: int) -> tuple[int, int]:
+    """(first frame, frame count) of a cue on the fps grid.
+
+    Both edges are rounded from absolute time, so a cue's last frame is the
+    next cue's first frame minus one: the sub-frame remainder of one cue is
+    carried into the next instead of being lost, and the clips add up to the
+    section length to within half a frame however many cues there are.
+    """
+    first = int(start * fps + 0.5)
+    end = int((start + dur) * fps + 0.5)
+    return first, max(1, end - first)
+
+
 def _cut_one(video_path: str, start: float, dur: float, out_path: str, i: int) -> str:
+    fps = paths.render_fps()
+    first, n_frames = cue_frame_span(start, dur, fps)
     cmd = [
         "ffmpeg",
         "-y",
         "-i",
         video_path,
+        # Seek half a frame early so rounding never drops the first frame, and
+        # stop by frame count, not time, so the clip is exactly n_frames long.
         "-ss",
-        f"{start:.6f}",
-        "-t",
-        f"{dur:.6f}",
+        f"{max(0.0, (first - 0.5) / fps):.6f}",
+        "-frames:v",
+        str(n_frames),
         "-c:v",
         "libx264",
         "-preset",
@@ -416,7 +437,7 @@ def _cut_one(video_path: str, start: float, dur: float, out_path: str, i: int) -
         "-pix_fmt",
         "yuv420p",
         "-r",
-        str(paths.render_fps()),
+        str(fps),
         "-an",
     ]
     with atomic_output(out_path) as tmp:
