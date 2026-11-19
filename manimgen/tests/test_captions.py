@@ -324,8 +324,21 @@ def _frame(path, t, out):
     )
 
 
+def _methods():
+    """Overlay always; the others only when this ffmpeg has them."""
+    out = ["overlay"]
+    if shutil.which("ffmpeg"):
+        cap.available_filters.cache_clear()
+        if cap.has_libass():
+            out.append("ass")
+        if "drawtext" in cap.available_filters():
+            out.append("drawtext")
+    return out
+
+
 @needs_ffmpeg
-def test_real_burn_changes_caption_region_and_keeps_duration(tmp_path):
+@pytest.mark.parametrize("method", [None, *_methods()])
+def test_real_burn_changes_caption_region_and_keeps_duration(tmp_path, method):
     PIL = pytest.importorskip("PIL.Image")
     np = pytest.importorskip("numpy")
     src = tmp_path / "src.mp4"
@@ -346,7 +359,7 @@ def test_real_burn_changes_caption_region_and_keeps_duration(tmp_path):
     ws = words(("Captions", 0.2, 0.8), ("work", 0.85, 1.4), ("here", 1.45, 2.5))
     chunks = cap.chunk_words(ws)
     out = tmp_path / "out.mp4"
-    cap.burn_captions(str(src), chunks, str(out), CaptionStyle())
+    cap.burn_captions(str(src), chunks, str(out), CaptionStyle(), method=method)
     assert out.exists()
 
     def dur(p):
@@ -374,3 +387,66 @@ def test_real_burn_changes_caption_region_and_keeps_duration(tmp_path):
     c = np.asarray(PIL.open(tmp_path / "c.png").convert("L"), dtype=int)
     d = np.asarray(PIL.open(tmp_path / "d.png").convert("L"), dtype=int)
     assert np.abs(c[top:bottom] - d[top:bottom]).mean() < 3.0
+
+
+@needs_ffmpeg
+def test_default_method_falls_back_to_overlay_without_libass_or_drawtext(
+    tmp_path, monkeypatch
+):
+    """Simulates the CI ffmpeg: no subtitles, no drawtext."""
+    monkeypatch.setattr(cap, "available_filters", lambda: frozenset({"overlay"}))
+    assert cap.caption_method() == "overlay"
+    src = tmp_path / "src.mp4"
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=size=1080x1920:rate=10:duration=2",
+         "-pix_fmt", "yuv420p", str(src)],
+        check=True, capture_output=True, timeout=120,
+    )  # fmt: skip
+    out = tmp_path / "out.mp4"
+    cap.burn_captions(str(src), [Caption("No libass here", 0.2, 1.5)], str(out))
+    assert out.exists() and out.stat().st_size > 0
+
+
+@needs_ffmpeg
+def test_overlay_burn_of_a_minute_with_many_chunks_on_a_draft_size(tmp_path):
+    """A 60 s Short with 40 chunks, rendered 540x960 (draft): positions scale."""
+    PIL = pytest.importorskip("PIL.Image")
+    np = pytest.importorskip("numpy")
+    src = tmp_path / "src.mp4"
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=size=540x960:rate=10:duration=60",
+         "-pix_fmt", "yuv420p", str(src)],
+        check=True, capture_output=True, timeout=120,
+    )  # fmt: skip
+    chunks = [Caption(f"caption number {i}", i * 1.5, i * 1.5 + 1.2) for i in range(40)]
+    out = tmp_path / "out.mp4"
+    cap.burn_captions(str(src), chunks, str(out), CaptionStyle(), method="overlay")
+    _frame(src, 30.6, tmp_path / "a.png")
+    _frame(out, 30.6, tmp_path / "b.png")
+    a = np.asarray(PIL.open(tmp_path / "a.png").convert("L"), dtype=int)
+    b = np.asarray(PIL.open(tmp_path / "b.png").convert("L"), dtype=int)
+    top, bottom = 960 - 244 - 60, 960 - 244 + 5
+    assert np.abs(a[top:bottom] - b[top:bottom]).mean() > 1.0
+    assert np.abs(a[960 - 235 :] - b[960 - 235 :]).mean() < 3.0
+
+
+def test_overlay_inputs_use_same_margins_as_the_ass_style(tmp_path):
+    st = CaptionStyle(margin_bottom_px=600, margin_left_px=60, margin_right_px=200)
+    inputs, graph = cap.build_overlay_inputs(
+        [Caption("hi", 1.0, 2.0)], st, str(tmp_path), (1080, 1920)
+    )
+    assert inputs[0] == "-i" and inputs[1].endswith("cap_0000.png")
+    assert "overlay=x=60:" in graph
+    assert "between(t,1.000,2.000)" in graph
+    y = int(graph.split(":y=")[1].split(":")[0])
+    assert 1920 - 600 - 120 < y < 1920 - 600  # image bottom edge at the margin
+
+
+def test_render_caption_png_is_transparent_with_text(tmp_path):
+    PIL = pytest.importorskip("PIL.Image")
+    path = tmp_path / "c.png"
+    w, h = cap.render_caption_png("Hello", str(path), 840, 64, 6)
+    img = PIL.open(path)
+    assert img.size == (w, h) == (840, h) and img.mode == "RGBA"
+    alpha = img.getchannel("A")
+    assert alpha.getpixel((0, 0)) == 0 and alpha.getbbox() is not None

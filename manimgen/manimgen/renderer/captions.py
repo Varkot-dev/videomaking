@@ -375,49 +375,191 @@ def _probe_duration(path: str) -> float:
         return 0.0
 
 
+_FONT_CANDIDATES = (
+    "DejaVuSans-Bold.ttf",
+    "LiberationSans-Bold.ttf",
+    "arialbd.ttf",
+    "Arial Bold.ttf",
+    "Arial Bold",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    "C:/Windows/Fonts/arialbd.ttf",
+)
+
+
+def _load_font(size: int):
+    """A bold sans PIL font at ``size`` px: a known file, else PIL's default."""
+    from PIL import ImageFont
+
+    for name in _FONT_CANDIDATES:
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            continue
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:  # Pillow before 10.1: fixed-size bitmap font
+        return ImageFont.load_default()
+
+
+def render_caption_png(
+    text: str, path: str, band_width: int, font_px: int, outline_px: int
+) -> tuple[int, int]:
+    """Draw one caption (white, dark outline) onto a transparent PNG.
+
+    The image is ``band_width`` wide with the text centred; its bottom edge is
+    the text's bottom edge. Returns the image size. A line wider than the band
+    is shrunk to fit.
+    """
+    from PIL import Image, ImageDraw
+
+    size = font_px
+    while True:
+        font = _load_font(size)
+        probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+        width = probe.textlength(text, font=font)
+        if width + 2 * outline_px <= band_width or size <= 12:
+            break
+        size -= 2
+    height = int(size * 1.4) + 2 * outline_px
+    img = Image.new("RGBA", (band_width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    try:
+        descent = font.getmetrics()[1]
+    except AttributeError:
+        descent = 0
+    draw.text(
+        (band_width / 2, height - outline_px - descent),
+        text,
+        font=font,
+        fill=(255, 255, 255, 255),
+        stroke_width=outline_px,
+        stroke_fill=(16, 16, 16, 255),
+        anchor="ms",
+    )
+    img.save(path)
+    return band_width, height
+
+
+def _probe_size(path: str) -> tuple[int, int]:
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "csv=p=0",
+                path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=_DURATION_PROBE_TIMEOUT_SECONDS,
+        )
+        w, h = proc.stdout.strip().split(",")[:2]
+        return int(w), int(h)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return FRAME_WIDTH, FRAME_HEIGHT
+
+
+def build_overlay_inputs(
+    captions: list[Caption],
+    st: CaptionStyle,
+    work: str,
+    video_size: tuple[int, int],
+) -> tuple[list[str], str]:
+    """PNG-overlay burn: (extra ffmpeg input args, filter_complex string).
+
+    Works on any ffmpeg (``overlay`` is always built in). The PNGs are drawn at
+    the video's real size, with the ASS style's margins scaled from the
+    1080x1920 frame, one ``overlay`` per caption enabled for its time span.
+    """
+    vw, vh = video_size
+    k = vw / FRAME_WIDTH
+    band = max(1, int((FRAME_WIDTH - st.margin_left_px - st.margin_right_px) * k))
+    x = int(st.margin_left_px * k)
+    bottom = int(st.margin_bottom_px * k)
+    font_px = max(12, int(st.font_size_px * k))
+    outline = max(1, int(6 * k))
+    inputs: list[str] = []
+    steps: list[str] = []
+    prev = "0:v"
+    for i, c in enumerate(captions):
+        png = os.path.join(work, f"cap_{i:04d}.png")
+        _w, h = render_caption_png(c.text, png, band, font_px, outline)
+        inputs += ["-i", png]
+        out = f"v{i + 1}"
+        steps.append(
+            f"[{prev}][{i + 1}:v]overlay=x={x}:y={vh - bottom - h}:"
+            f"enable='between(t,{c.start:.3f},{c.end:.3f})'[{out}]"
+        )
+        prev = out
+    return inputs, ";".join(steps)
+
+
+def caption_method() -> str:
+    """Best burn method this ffmpeg supports: ass, drawtext or overlay."""
+    if has_libass():
+        return "ass"
+    if "drawtext" in available_filters():
+        return "drawtext"
+    return "overlay"
+
+
 def burn_captions(
     video_path: str,
     captions: list[Caption],
     output_path: str | None = None,
     style: CaptionStyle | None = None,
+    method: str | None = None,
 ) -> str:
     """Burn ``captions`` into the video with one encode; return the output path.
 
-    With no ``output_path`` the video is replaced in place (through a temp file
-    next to it, so a failed encode leaves the original untouched). Raises
-    RuntimeError when ffmpeg fails or times out.
+    ``method`` is ``ass`` (libass ``subtitles`` filter), ``drawtext`` or
+    ``overlay`` (PNGs drawn with PIL, works on any ffmpeg); by default the
+    first of those this ffmpeg supports. With no ``output_path`` the video is
+    replaced in place (through a temp file next to it, so a failed encode
+    leaves the original untouched). Raises RuntimeError when ffmpeg fails or
+    times out.
     """
     if not captions:
         raise ValueError("burn_captions called with no captions")
     st = style or CaptionStyle.from_config()
+    method = method or caption_method()
     out_dir = os.path.dirname(os.path.abspath(video_path))
     with tempfile.TemporaryDirectory(
         dir=out_dir, prefix="_cap_", ignore_cleanup_errors=True
     ) as work:
-        if has_libass():
+        extra_inputs: list[str] = []
+        if method == "ass":
             ass_path = os.path.join(work, "captions.ass")
             with open(ass_path, "w", encoding="utf-8") as f:
                 f.write(build_ass(captions, st))
-            vf = f"subtitles=filename='{escape_filter_path(ass_path)}'"
-        elif "drawtext" in available_filters():
+            filt = ["-vf", f"subtitles=filename='{escape_filter_path(ass_path)}'"]
+        elif method == "drawtext":
             logger.warning(
                 "[captions] This ffmpeg has no libass; using drawtext (plainer)."
             )
-            vf = build_drawtext_filter(captions, st)
-        else:
-            raise RuntimeError(
-                "this ffmpeg has neither the subtitles nor the drawtext filter"
+            filt = ["-vf", build_drawtext_filter(captions, st)]
+        elif method == "overlay":
+            logger.info("[captions] No libass or drawtext; drawing captions as PNGs.")
+            extra_inputs, graph = build_overlay_inputs(
+                captions, st, work, _probe_size(video_path)
             )
+            filt = ["-filter_complex", graph, "-map", f"[v{len(captions)}]"]
+            filt += ["-map", "0:a?"]
+        else:
+            raise ValueError(f"unknown caption method {method!r}")
         tmp_out = os.path.join(work, "captioned.mp4")
         duration = _probe_duration(video_path)
         timeout = max(_BURN_MIN_TIMEOUT_SECONDS, _BURN_TIMEOUT_PER_SECOND * duration)
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-i",
-            video_path,
-            "-vf",
-            vf,
+        cmd = ["ffmpeg", "-y", "-i", video_path, *extra_inputs, *filt]
+        cmd += [
             "-c:v",
             "libx264",
             "-preset",
