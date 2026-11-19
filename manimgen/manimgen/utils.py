@@ -229,6 +229,30 @@ def section_class_name(section: dict) -> str:
     return safe_id.replace("_", " ").title().replace(" ", "") + "Scene"
 
 
+def draft_class_name(section: dict, variant: str) -> str:
+    """Scene class name for one draft of a section (e.g. ``Section01DraftAScene``).
+
+    It must not contain the final class name as a substring: the renderer
+    looks up videos by class name and falls back to substring matches, so a
+    draft video could otherwise be mistaken for the final render.
+    """
+    base = section_class_name(section)
+    stem = base[: -len("Scene")] if base.endswith("Scene") else base
+    return f"{stem}Draft{variant.upper()}Scene"
+
+
+def draft_scene_filename(section: dict, variant: str) -> str:
+    """File name of one draft's scene, next to the section's own scene file."""
+    return f"{safe_section_id(section)}_draft{variant.upper()}.py"
+
+
+def rename_scene_class(code: str, old: str, new: str) -> str:
+    """Rename a scene class (and every whole-word mention of it) in ``code``."""
+    if old == new:
+        return code
+    return re.sub(rf"\b{re.escape(old)}\b", new, code)
+
+
 def load_reference_frames() -> list[str]:
     """Load 1080p ManimGL aesthetic reference frames as base64, if any are present.
 

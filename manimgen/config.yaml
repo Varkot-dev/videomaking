@@ -109,3 +109,8 @@ shorts:
   # Optional file describing how you talk and explain things, so scripts sound
   # like you. Copy voice_profile.example.md to this name and edit it.
   voice_profile: voice_profile.md
+  # Scenes the Director writes per short, rendered as small drafts and scored
+  # with the free checks; the best one continues. 2 uses about twice the plan
+  # allowance for scene writing, 1 turns it off. MANIMGEN_SHORT_DRAFTS
+  # overrides it for one run.
+  drafts: 2

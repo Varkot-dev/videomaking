@@ -93,6 +93,9 @@ DEFAULTS: dict = {
         # Optional notes on how the owner talks and explains; read by the
         # shorts planner so scripts sound like them. Relative to config.yaml.
         "voice_profile": "voice_profile.md",
+        # How many independent scenes the Director writes per short; the
+        # better of them continues through the pipeline. 1 turns it off.
+        "drafts": 2,
     },
     "tts": {
         "engine": "edge-tts",
@@ -225,6 +228,12 @@ def _validate(path: Path, raw: dict) -> dict:
     shorts = cfg["shorts"]
     profile = shorts.get("voice_profile") or "voice_profile.md"
     shorts["voice_profile"] = str(root / str(profile))
+    shorts["drafts"] = _as(path, "shorts.drafts", shorts["drafts"], int, "an integer")
+    if shorts["drafts"] < 1:
+        raise ConfigError(
+            f"{path}: shorts.drafts must be 1 or more (1 turns drafts off), "
+            f"got {shorts['drafts']!r}."
+        )
 
     rend = cfg["rendering"]
     for key in ("fps", "max_retries", "parallel_sections"):
