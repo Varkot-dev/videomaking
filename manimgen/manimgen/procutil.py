@@ -13,9 +13,13 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import threading
+import time
 
 # How long to wait for the pipes to drain after the tree has been killed.
 _DRAIN_SECONDS = 30
+# How often a run with a ``cancel`` event looks at the event.
+_CANCEL_POLL_SECONDS = 0.25
 
 
 def kill_process_tree(proc: subprocess.Popen) -> None:
@@ -43,13 +47,17 @@ def run_tree(
     timeout: float,
     cwd: str | None = None,
     env: dict[str, str] | None = None,
+    cancel: threading.Event | None = None,
 ) -> tuple[int | None, str, str, bool]:
     """Run ``cmd`` (no shell) and return ``(returncode, stdout, stderr, timed_out)``.
 
     Output is decoded as UTF-8 with replacement. On timeout the whole process
     tree is killed and the result is ``(None, partial_out, partial_err, True)``.
     A command that cannot be started returns ``(None, "", message, False)``
-    instead of raising.
+    instead of raising. When ``cancel`` is set while the command runs, the tree
+    is killed the same way and the result is ``(None, out, err, False)``: the
+    caller that set the event knows why (a sibling failed), so it is not a
+    timeout.
     """
     popen_kwargs: dict = (
         {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
@@ -71,9 +79,26 @@ def run_tree(
         )
     except OSError as e:
         return None, "", f"could not start {cmd[0]!r}: {e}", False
+    deadline = time.monotonic() + timeout
     try:
-        out, err = proc.communicate(timeout=timeout)
-        return proc.returncode, out or "", err or "", False
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            wait = left if cancel is None else min(left, _CANCEL_POLL_SECONDS)
+            try:
+                out, err = proc.communicate(timeout=wait)
+                return proc.returncode, out or "", err or "", False
+            except subprocess.TimeoutExpired:
+                if cancel is None:
+                    raise
+                if cancel.is_set():
+                    kill_process_tree(proc)
+                    try:
+                        out, err = proc.communicate(timeout=_DRAIN_SECONDS)
+                    except subprocess.TimeoutExpired:
+                        out, err = "", ""
+                    return None, out or "", err or "", False
     except subprocess.TimeoutExpired:
         kill_process_tree(proc)
         try:

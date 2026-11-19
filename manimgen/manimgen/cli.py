@@ -1575,6 +1575,10 @@ def main():
     # order whatever finishes first.
     numbered = list(enumerate(lesson_plan["sections"], start=1))
     workers = min(paths.render_parallel_sections(), len(numbered))
+    # Split the core budget between the renders that run at once.
+    from manimgen.validator import segmented_render
+
+    segmented_render.set_concurrent_renders(workers)
     if workers > 1:
         logger.info("[manimgen] Running %d sections at a time", workers)
         with ThreadPoolExecutor(max_workers=workers) as pool:
