@@ -60,8 +60,11 @@ a surrounding markdown `json` code fence before the planner parses the reply.
 assigns the raw string into `camera_config.fps`. The flag is irreparably broken
 in this build.
 **Fix:** never pass `--fps`. Render via
-`validator/render_command.build_manimgl_command()`, which omits it. manimgl
-renders at its bundled default (30fps); the assembler normalizes the final cut.
+`validator/render_command.build_manimgl_command()`, which omits it. A final
+render uses manimgl's bundled default (30fps) and the assembler normalizes the
+cut. A `--draft` render sets `rendering.draft_fps` the working way, through
+`--config_file` pointing at a yaml with `camera: {fps: N}` (manimgl reads that
+as an int), written by `render_command.fps_config_file()`.
 **Guard:** `check_no_broken_fps_flag()` (scans render code for `"--fps"`).
 
 ## 6. `claude -p` not found / not logged in (default `claude_cli` provider)

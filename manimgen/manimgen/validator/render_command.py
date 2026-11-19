@@ -4,13 +4,15 @@ Three call sites (runner, fallback, retry) used to each build their own
 ``["manimgl", ...]`` argv inline, which let them drift. They now share this
 builder so a render-flag fix lands in exactly one place.
 
-Why no ``--fps``: manimgl 1.7.2 declares ``--fps`` without ``type=int`` and
-then assigns the raw string into ``camera_config.fps`` (see manimlib/config.py
+Frame rate: manimgl 1.7.2 declares ``--fps`` without ``type=int`` and then
+assigns the raw string into ``camera_config.fps`` (see manimlib/config.py
 ``if args.fps: camera_config.fps = args.fps``). ``Scene.run`` later computes
 ``1 / self.camera.fps``, which raises ``TypeError: int / str`` and aborts EVERY
-render. The flag is unusable in this build, so we omit it; manimgl renders at
-its bundled default (30fps) and the assembler normalizes the final cut to the
-configured fps. See docs/KNOWN_ISSUES.md.
+render. So ``--fps`` is never passed. A draft render sets the rate through a
+custom config file instead (``--config_file``, a ``camera: {fps: N}`` yaml,
+which manimgl parses as an int). A final render passes nothing: manimgl renders
+at its bundled default (30 fps) and the assembler normalizes the final cut to
+the configured fps. See docs/KNOWN_ISSUES.md.
 """
 
 from __future__ import annotations
@@ -19,10 +21,11 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 from pathlib import Path
 from typing import NamedTuple
 
-from manimgen import paths
+from manimgen import paths, timing
 from manimgen.probes import overlap_report
 from manimgen.validator.scene_ast_gate import format_gate_error, inspect_scene_file
 
@@ -30,6 +33,28 @@ logger = logging.getLogger(__name__)
 
 # The canonical dark background. CLAUDE.md: the flag is -c, NOT --background_color.
 _BACKGROUND_COLOR = "#1C1C1C"
+
+
+def fps_config_file(fps: int) -> str:
+    """Path of a manimgl config file that sets the render frame rate.
+
+    Written once per rate under the temp folder (atomically, so sections
+    rendering in parallel threads never see a half-written file).
+    """
+    fps = int(fps)
+    folder = Path(tempfile.gettempdir()) / "manimgen_fps"
+    path = folder / f"fps_{fps}.yml"
+    text = f"camera:\n  fps: {fps}\n"
+    try:
+        if path.read_text(encoding="utf-8") == text:
+            return str(path)
+    except OSError:
+        pass
+    folder.mkdir(parents=True, exist_ok=True)
+    tmp = folder / f"fps_{fps}.{os.getpid()}.{threading.get_ident()}.tmp"
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+    return str(path)
 
 
 def build_manimgl_command(
@@ -40,9 +65,11 @@ def build_manimgl_command(
     ``draft=True`` renders at the draft size for this command only (see
     ``paths.render_size_flags``); None follows the process-wide draft switch.
 
-    Deliberately omits ``--fps`` (broken in manimgl 1.7.2 — see module docstring).
+    A draft also sets ``rendering.draft_fps``. Deliberately never uses ``--fps``
+    (broken in manimgl 1.7.2, see the module docstring): the rate goes in a
+    ``--config_file``.
     """
-    return [
+    cmd = [
         "manimgl",
         scene_path,
         class_name,
@@ -51,6 +78,9 @@ def build_manimgl_command(
         "-c",
         _BACKGROUND_COLOR,
     ]
+    if paths.draft_active(draft):
+        cmd += ["--config_file", fps_config_file(paths.render_fps(draft))]
+    return cmd
 
 
 def with_utf8_io(env: dict[str, str]) -> dict[str, str]:
@@ -181,6 +211,7 @@ def draft_scene_timeout(scene_path: str) -> float:
     return min(wanted, _scene_timeout(scene_path))
 
 
+@timing.timed_render
 def run_manimgl(
     scene_path: str,
     class_name: str,

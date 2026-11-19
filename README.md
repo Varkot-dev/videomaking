@@ -432,7 +432,8 @@ manimgen "dynamic programming"
 manimgen --pdf lecture.pdf
 
 # Quicker runs: --fast skips the research and critic LLM passes,
-# --draft renders at 720p (540x960 for a --short). Use both while iterating.
+# --draft is the test profile: half size (960x540, or 540x960 for a --short)
+# at 30 fps: a quarter of the pixels. Use both while iterating.
 manimgen "binary search" --fast --draft
 
 # Resume a previous run from cached plan
@@ -478,7 +479,7 @@ manimgen "limits" --short --format misconception \
 - Copy `manimgen/voice_profile.example.md`, drop `.example` from the copy's name, and describe how you talk; the planner reads it so the script sounds like you. Your copy is git-ignored.
 - The frame is 4.5 units wide and 8 tall. Readable content stays inside x -2.0 to 1.4 and y -2.0 to 2.8, the area the Shorts buttons and caption leave clear (third-party measurements; upload an unlisted test to confirm on your phone).
 - `manimgen --resume` keeps the short format of the cached plan.
-- Two drafts: the scene-writing model is asked for two independent scenes at once. Each is rendered small (540x960), scored with the free checks (text overlaps and safe-area findings, freeze-frame tails, black or frozen frames, then timing warnings, then shorter code), and the better one continues through the normal pipeline and is rendered at full size. This uses about twice the plan allowance for scene writing and adds a short draft render. Set `shorts.drafts` in `manimgen/config.yaml` (default `2`, `1` turns it off, at most `3`) or `MANIMGEN_SHORT_DRAFTS` for one run. The scores are in the run log as `[drafts]` lines and in `output/logs/drafts.jsonl`. Landscape videos are not affected.
+- Two drafts: the scene-writing model is asked for two independent scenes at once. Each is rendered small (540x960 at 30 fps), scored with the free checks (text overlaps and safe-area findings, freeze-frame tails, black or frozen frames, then timing warnings, then shorter code), and the better one continues through the normal pipeline and is rendered at full size. This uses about twice the plan allowance for scene writing and adds a short draft render. Set `shorts.drafts` in `manimgen/config.yaml` (default `2`, `1` turns it off, at most `3`) or `MANIMGEN_SHORT_DRAFTS` for one run. The scores are in the run log as `[drafts]` lines and in `output/logs/drafts.jsonl`. Landscape videos are not affected.
 - Before posting, use the `manimgen-shorts-publish` skill: it runs the review checklist, checks the upload is not a near-copy of recent ones, and writes the title and description.
 
 What is not built yet: recording your own narration (the voice is still the configured TTS voice), an automatic safe-zone check on rendered frames, and music.
@@ -611,7 +612,27 @@ python -m manimgen.bench score baseline low                      # per-topic tab
 python -m manimgen.bench sheet baseline                          # frames.png: 4 frames per video, one row per topic
 ```
 
-`run` plans each topic once in fast mode and reuses that plan for every variant, with TTS off. Results go to `manimgen/bench/runs/<variant>/<slug>/` (git-ignored), with a markdown and a JSON scorecard per variant. The scorer reports wall time, director seconds and output tokens, other LLM seconds, outcome (`ok`, `accepted_with_defects`, `fallback`), first-try pass, number of renders, and probe findings by kind. `--dir <exp>` reads an older `<exp>/<slug>/<variant>/` tree. A run spends Claude plan usage, so launch it on purpose.
+`run` plans each topic once in fast mode and reuses that plan for every variant, with TTS off. It renders with the test profile (`--draft`: half size at `rendering.draft_fps`, 30) unless you pass `--final`, which renders at full size and `rendering.fps`; a scorecard is only comparable with others made under the same profile, and the `profile` column says which one it was. Results go to `manimgen/bench/runs/<variant>/<slug>/` (git-ignored), with a markdown and a JSON scorecard per variant. The scorer reports wall time, director seconds and output tokens, other LLM seconds, outcome (`ok`, `accepted_with_defects`, `fallback`), first-try pass, number of renders, probe findings by kind, and the time per step read from each run's `output/logs/timings.json` (render, fixes, everything else; runs from before that file existed show `-`). `--dir <exp>` reads an older `<exp>/<slug>/<variant>/` tree. A run spends Claude plan usage, so launch it on purpose.
+
+## Where the time goes
+
+Every run ends with a table of the time each step took, printed after the run summary and saved as `output/logs/timings.json` next to the other logs:
+
+```
+[manimgen] Time per step (run took 6m21s):
+  planning      41.2s   11%   3 calls
+  narration      9.8s    3%   1 call
+  director      60.1s   16%   2 calls
+  render       330.0s   87%   4 calls (2 at 540x960@30, 2 at 1080x1920@30)
+  fixes         12.4s    3%   2 calls
+  cut_mux        2.1s    1%   1 call
+  assembly       1.9s    0%   1 call
+  unmeasured     3.0s    1%
+```
+
+Seconds are wall time: when several calls of one step overlap (sections and drafts run in parallel threads) the overlap is counted once, so the shares of different steps can add up to more than 100%. The JSON file also has the busy seconds (the plain sum of every call) and one entry per call: each render with its label (`first render`, `retry render`, `draft render A`, `fallback render`), size and frame rate, and each model call with its role. Look at this table before guessing what to speed up.
+
+The test profile is `--draft`. It renders at half size (960x540, or 540x960 for a `--short`) at `rendering.draft_fps` (30 in `config.yaml`), and the cutter, muxer, assembler and captions all follow that size and rate. The two-draft step of a Short always renders its drafts this way. A final render is full size, and the finished video is encoded at `rendering.fps`.
 
 ## Text overlap detection
 

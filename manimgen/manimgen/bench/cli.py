@@ -25,7 +25,13 @@ def _cmd_run(args) -> int:
     from manimgen.bench.topics import load_topics
 
     topics = load_topics(only=args.only.split(",") if args.only else None)
-    dirs = runner.run_all(topics, args.variant, _parse_env(args.env), jobs=args.jobs)
+    dirs = runner.run_all(
+        topics,
+        args.variant,
+        _parse_env(args.env),
+        jobs=args.jobs,
+        draft=not args.final,
+    )
     print(f"ran {len(dirs)} topics under {RUNS_DIR / args.variant}")
     return _score(argparse.Namespace(variants=[args.variant], dir=None))
 
@@ -80,6 +86,11 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--variant", default="default")
     r.add_argument("--env", action="append", default=[], metavar="KEY=VAL")
     r.add_argument("--jobs", type=int, default=1)
+    r.add_argument(
+        "--final",
+        action="store_true",
+        help="render at full quality (default: the test profile, small and 30 fps)",
+    )
     r.set_defaults(func=_cmd_run)
 
     s = sub.add_parser("score", help="scorecard for one or more variants")

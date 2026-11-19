@@ -10,7 +10,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
-from manimgen import config, paths
+from manimgen import config, paths, timing
 from manimgen.generator.scene_generator import ScenePrecheckError, generate_scenes
 from manimgen.input.parser import parse_input
 from manimgen.input.pdf_parser import PdfInputError
@@ -76,7 +76,7 @@ def _run_tts_for_section(section: dict, idx: int) -> tuple[str, list, float] | N
 
     logger.info("[manimgen] TTS: %s", section["title"])
     cue_indices = section.get("cue_word_indices")
-    with cue_hint(cue_indices):
+    with timing.TIMER.section("narration", section_id), cue_hint(cue_indices):
         _, timestamps = generate_narration(narration, audio_path)
     ts_path = audio_path.replace(".mp3", "_timestamps.json")
     save_timestamps(timestamps, ts_path)
@@ -89,7 +89,10 @@ def _run_tts_for_section(section: dict, idx: int) -> tuple[str, list, float] | N
             section["title"],
             energy["silent_ratio"] * 100,
         )
-        with cue_hint(cue_indices):
+        with (
+            timing.TIMER.section("narration", f"{section_id} again"),
+            cue_hint(cue_indices),
+        ):
             _, timestamps = generate_narration(narration, audio_path)
         save_timestamps(timestamps, ts_path)
         audio_duration = get_audio_duration(audio_path)
@@ -115,7 +118,8 @@ def _add_captions(output: str, lesson_plan: dict, section_audio: dict) -> None:
         words = audio.get("timestamps") or []
         if words:
             parts.append((words, section.get("narration", ""), audio["audio_duration"]))
-    add_captions(output, parts)
+    with timing.TIMER.section("captions"):
+        add_captions(output, parts)
 
 
 def _error_text(exc: BaseException) -> str:
@@ -552,7 +556,8 @@ def _render_with_retry(
     if gate.timing_blocked or gate.precheck_blocked:
         success, video_path = False, None
     else:
-        success, video_path = run_scene(gate.scene_path, gate.class_name)
+        with timing.context("first render"):
+            success, video_path = run_scene(gate.scene_path, gate.class_name)
 
     if success and video_path:
         from manimgen.validator.render_validator import validate_render
@@ -901,18 +906,19 @@ def _run_section(
     # --- Cut + mux per cue ---
     if segments and audio_slices:
         try:
-            clips = _cut_and_mux(
-                section,
-                idx,
-                render.path,
-                segments,
-                audio_slices,
-                cue_durations,
-                log,
-                key,
-                render.status,
-                render.reason,
-            )
+            with timing.TIMER.section("cut_mux", section_id):
+                clips = _cut_and_mux(
+                    section,
+                    idx,
+                    render.path,
+                    segments,
+                    audio_slices,
+                    cue_durations,
+                    log,
+                    key,
+                    render.status,
+                    render.reason,
+                )
         except Exception as e:
             # cut_video_at_cues re-raises the first failed ffmpeg cut (#72).
             log.error("[manimgen] Section %d: cutting into cues failed: %s", idx, e)
@@ -1087,6 +1093,28 @@ def _finish_run(
         print(f"[manimgen] Manifest: {manifest_path}")
     for step in steps:
         print(f"[manimgen] Next: {step}")
+    _report_timings(directory or ".", output)
+
+
+def _report_timings(directory: str, output: str | None) -> None:
+    """Print the per-step time table and write timings.json (best effort)."""
+    try:
+        total = timing.TIMER.total()
+        for line in timing.TIMER.table(total):
+            print(line)
+        profile = "draft" if paths.is_draft() else "final"
+        timing.TIMER.write(
+            paths.logs_dir(),
+            total,
+            create=False,
+            profile=profile,
+            format=paths.video_format(),
+            resolution=paths.render_resolution(),
+            fps=paths.render_fps(),
+            output=output,
+        )
+    except Exception as e:  # noqa: BLE001 - timing must never fail a run
+        logger.warning("[manimgen] Could not report step timings: %s", e)
 
 
 def _plan_reset_hint() -> str:
@@ -1293,8 +1321,9 @@ def main():
         "--draft",
         action="store_true",
         help=(
-            "Render small for a quick look: 720p for a normal video, 540x960 "
-            "for a --short. Re-run without --draft for the final."
+            "Test profile: a quarter of the pixels, half size (960x540, or "
+            "540x960 for a --short) at rendering.draft_fps (30). Re-run "
+            "without --draft for the final."
         ),
     )
     parser.add_argument(
@@ -1318,6 +1347,7 @@ def main():
 
     _configure_logging()
     started = time.time()
+    timing.TIMER.reset()
 
     from manimgen.planner import lesson_planner
     from manimgen.validator.retry import reset_run_budget
@@ -1530,7 +1560,8 @@ def main():
 
     if not rendered_videos:
         no_video("No video was produced: no section rendered. See the log above.")
-    output = assemble_video(rendered_videos, title)
+    with timing.TIMER.section("assembly"):
+        output = assemble_video(rendered_videos, title)
     if not output or not os.path.exists(output):
         no_video(f"No video was produced: expected the final output at {output}.")
 

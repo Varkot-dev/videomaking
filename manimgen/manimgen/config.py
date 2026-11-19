@@ -80,6 +80,8 @@ DEFAULTS: dict = {
         "quality": "hd",
         "resolution": "1920x1080",
         "fps": 60,
+        # Frame rate of a --draft render and of everything built from it.
+        "draft_fps": 30,
         "max_retries": 3,
         # Sections generated and rendered at the same time. Each one is an LLM
         # call plus a manimgl render, so the limit is the machine's CPU/GPU and
@@ -277,13 +279,18 @@ def _validate(path: Path, raw: dict) -> dict:
         )
 
     rend = cfg["rendering"]
-    for key in ("fps", "max_retries", "parallel_sections"):
+    for key in ("fps", "draft_fps", "max_retries", "parallel_sections"):
         rend[key] = _as(path, f"rendering.{key}", rend[key], int, "an integer")
     if rend["parallel_sections"] < 1:
         raise ConfigError(
             f"{path}: rendering.parallel_sections must be 1 or more, "
             f"got {rend['parallel_sections']!r}."
         )
+    for key in ("fps", "draft_fps"):
+        if rend[key] < 1:
+            raise ConfigError(
+                f"{path}: rendering.{key} must be 1 or more, got {rend[key]!r}."
+            )
     for key in ("render_timeout_2d", "render_timeout_3d", "render_timeout_fallback"):
         rend[key] = _as(path, f"rendering.{key}", rend[key], float, "a number")
 

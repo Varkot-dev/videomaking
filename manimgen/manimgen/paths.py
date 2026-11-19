@@ -68,9 +68,11 @@ def plan_cache() -> str:
 _QUALITY_FLAGS = config.RENDER_QUALITY_FLAGS
 
 
-# Draft mode (cli --draft): render small for a quick look. Landscape drops to
-# 720p, a short to 540x960. Everything downstream follows render_resolution().
-_DRAFT_LANDSCAPE = ("m", "1280x720")
+# Draft mode (cli --draft): render at half size and at draft_fps, for a quick
+# look or a test run. Landscape drops to 960x540, a short to 540x960 (a quarter
+# of the pixels either way). Everything downstream
+# (cutter, muxer, assembler, captions) follows render_resolution() and
+# render_fps().
 _DRAFT_SHORT_RESOLUTION = "540x960"
 _draft = False
 
@@ -89,15 +91,17 @@ def _use_draft(draft: bool | None) -> bool:
     return _draft if draft is None else bool(draft)
 
 
-def render_quality_flag(draft: bool | None = None) -> str:
+def draft_active(draft: bool | None = None) -> bool:
+    """True when this call renders at the draft size and frame rate."""
+    return _use_draft(draft)
+
+
+def render_quality_flag() -> str:
     """Return the manimgl CLI flag for the configured quality, e.g. '--hd'.
 
-    ``draft`` asks for the small size for this call only; None follows the
-    process-wide draft switch.
+    A draft does not use a quality flag (see ``render_size_flags``).
     """
     q = str(_RENDERING["quality"]).strip().lower()
-    if _use_draft(draft):
-        q = _DRAFT_LANDSCAPE[0]
     try:
         return _QUALITY_FLAGS[q]
     except KeyError:
@@ -157,7 +161,10 @@ def render_resolution(draft: bool | None = None) -> str:
     small = _use_draft(draft)
     if is_short():
         return _DRAFT_SHORT_RESOLUTION if small else SHORT_RESOLUTION
-    return _DRAFT_LANDSCAPE[1] if small else _RENDERING["resolution"]
+    if not small:
+        return _RENDERING["resolution"]
+    w, h = (int(n) for n in _RENDERING["resolution"].lower().split("x"))
+    return f"{w // 2}x{h // 2}"
 
 
 def render_size_flags(draft: bool | None = None) -> list[str]:
@@ -171,11 +178,25 @@ def render_size_flags(draft: bool | None = None) -> list[str]:
     the process-wide switch, so sections rendering in parallel threads are
     not affected.
     """
-    if is_short():
+    if is_short() or _use_draft(draft):
         return ["-r", render_resolution(draft)]
-    # No argument when none was given: callers and tests may replace
-    # render_quality_flag with a zero-argument function.
-    return [render_quality_flag() if draft is None else render_quality_flag(draft)]
+    return [render_quality_flag()]
+
+
+# The frame rate manimgl renders at when no config file sets one (its
+# default_config.yml). A final render passes none, so this is its real rate.
+MANIMGL_DEFAULT_FPS = 30
+
+
+def native_render_fps(draft: bool | None = None) -> int:
+    """Frame rate manimgl itself renders at for this call.
+
+    A draft sets ``rendering.draft_fps``; a final leaves manimgl's own default,
+    which the cutter or assembler later lifts to ``rendering.fps``.
+    """
+    if _use_draft(draft):
+        return render_fps(draft)
+    return MANIMGL_DEFAULT_FPS
 
 
 # Strips of a 1080x1920 frame the Shorts app draws over, as fractions of the
@@ -219,7 +240,14 @@ def short_voice_profile_path() -> str:
     return _SHORTS["voice_profile"]
 
 
-def render_fps() -> int:
+def render_fps(draft: bool | None = None) -> int:
+    """Frame rate of the render and of every clip cut from it.
+
+    A draft (this call's ``draft``, else the process-wide switch) uses
+    ``rendering.draft_fps``; a final uses ``rendering.fps``.
+    """
+    if _use_draft(draft):
+        return int(_RENDERING.get("draft_fps") or _RENDER_DEFAULTS["draft_fps"])
     return _RENDERING["fps"]
 
 
