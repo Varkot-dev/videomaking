@@ -453,6 +453,7 @@ manimgen "limits" --short --format misconception \
   --clicked "it is about what the function approaches, not what it equals"
 ```
 
+- `--captions` burns word captions into the final video, for watching with the sound off (`--short` only; with any other mode it is ignored with a warning). The words and their timing come from the narration's word timestamps, so it needs narration: with `tts.enabled: false` or silent sections it is skipped with a log line. To make it the default, set `shorts.captions.enabled: true` in `manimgen/config.yaml`. The text is bold white with a dark outline, 1 to 4 words at a time, centred just above the bottom 480 px that the Shorts interface covers; `shorts.captions.margin_bottom_px` (and `margin_left_px`, `margin_right_px`, `font_size_px`, `font`) move and size it. Captions are burned in a single extra encode of the finished video (ffmpeg's `subtitles` filter, or `drawtext` when your ffmpeg has no libass), re-applied on every run. The planned layout work will reserve a band for the captions so the animation never sits under them; until then the lowest part of the diagram can be close to the text.
 - `--format` is one of `puzzle` (pose it and leave it open; the default), `misconception` (break a wrong belief), `proof` (one visual argument) or `worked` (one worked example). Rotate them across uploads.
 - `--confused` and `--clicked` are your own words about what tripped you up and what made it click. They become the hook and the reveal.
 - Copy `manimgen/voice_profile.example.md`, drop `.example` from the copy's name, and describe how you talk; the planner reads it so the script sounds like you. Your copy is git-ignored.
@@ -460,7 +461,7 @@ manimgen "limits" --short --format misconception \
 - `manimgen --resume` keeps the short format of the cached plan.
 - Before posting, use the `manimgen-shorts-publish` skill: it runs the review checklist, checks the upload is not a near-copy of recent ones, and writes the title and description.
 
-What is not built yet: recording your own narration (the voice is still the configured TTS voice), an automatic safe-zone check on rendered frames, burned-in captions, and music.
+What is not built yet: recording your own narration (the voice is still the configured TTS voice), an automatic safe-zone check on rendered frames, and music.
 
 ### Environment variables
 
