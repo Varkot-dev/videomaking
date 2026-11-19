@@ -94,6 +94,32 @@ def parse_probes(videos_dir: Path) -> dict:
     return out
 
 
+def parse_timings(path: Path) -> dict:
+    """Per-step seconds from logs/timings.json (all None for an older run)."""
+    out = {"render_s": None, "fixes_s": None, "other_s": None, "profile": None}
+    try:
+        data = json.loads(_read_text(path))
+    except ValueError:
+        return out
+    if not isinstance(data, dict) or "steps" not in data:
+        return out
+    wall = {
+        s.get("step"): float(s.get("seconds") or 0)
+        for s in data["steps"]
+        if isinstance(s, dict)
+    }
+    total = float(data.get("total_seconds") or 0)
+    covered = sum(wall.get(k, 0.0) for k in ("director", "render", "fixes"))
+    out["render_s"] = wall.get("render", 0.0)
+    out["fixes_s"] = wall.get("fixes", 0.0)
+    out["other_s"] = max(0.0, total - covered)
+    if data.get("profile"):
+        out["profile"] = str(data["profile"])
+        if data.get("resolution") and data.get("fps"):
+            out["profile"] += f" {data['resolution']}@{data['fps']}"
+    return out
+
+
 def find_video(run_dir: Path) -> Path | None:
     """The final video: the newest top-level mp4 that is not a Section scene."""
     vids = [p for p in (run_dir / "videos").glob("*.mp4") if p.is_file()]
@@ -109,6 +135,7 @@ def score_run(run_dir: Path) -> dict:
     except ValueError:
         row["wall_s"] = None
     row.update(parse_usage(run_dir / "logs" / "llm_usage.jsonl"))
+    row.update(parse_timings(run_dir / "logs" / "timings.json"))
     row.update(parse_probes(run_dir / "videos"))
     row["has_video"] = find_video(run_dir) is not None
     return row
@@ -149,6 +176,9 @@ def totals(topics: dict[str, dict]) -> dict:
         "director_s",
         "director_tokens",
         "other_llm_s",
+        "render_s",
+        "fixes_s",
+        "other_s",
         "renders",
         *FINDING_KINDS,
         "nudges",
@@ -157,6 +187,8 @@ def totals(topics: dict[str, dict]) -> dict:
     for o in OUTCOMES:
         t[o] = sum(1 for r in rows if r["outcome"] == o)
     t["first_try"] = sum(1 for r in rows if r["first_try"])
+    profiles = sorted({r["profile"] for r in rows if r.get("profile")})
+    t["profile"] = ", ".join(profiles) if profiles else None
     return t
 
 
@@ -166,6 +198,10 @@ _COLS = (
     ("director s", "director_s"),
     ("dir tokens", "director_tokens"),
     ("other llm s", "other_llm_s"),
+    ("render s", "render_s"),
+    ("fixes s", "fixes_s"),
+    ("other s", "other_s"),
+    ("profile", "profile"),
     ("outcome", "outcome"),
     ("1st try", "first_try"),
     ("renders", "renders"),
@@ -207,6 +243,10 @@ def render_markdown(result: dict) -> str:
             _fmt(t["director_s"]),
             _fmt(t["director_tokens"]),
             _fmt(t["other_llm_s"]),
+            _fmt(t["render_s"]),
+            _fmt(t["fixes_s"]),
+            _fmt(t["other_s"]),
+            _fmt(t["profile"]),
             f"{t['ok']} ok / {t['accepted_with_defects']} defects / {t['fallback']} fallback",
             f"{t['first_try']}/{t['topics']}",
             _fmt(t["renders"]),
@@ -226,6 +266,10 @@ def render_comparison(results: list[dict]) -> str:
         "wall s",
         "director s",
         "dir tokens",
+        "render s",
+        "fixes s",
+        "other s",
+        "profile",
         "ok",
         "defects",
         "fallback",
@@ -246,6 +290,10 @@ def render_comparison(results: list[dict]) -> str:
                 _fmt(t["wall_s"]),
                 _fmt(t["director_s"]),
                 _fmt(t["director_tokens"]),
+                _fmt(t["render_s"]),
+                _fmt(t["fixes_s"]),
+                _fmt(t["other_s"]),
+                _fmt(t["profile"]),
                 str(t["ok"]),
                 str(t["accepted_with_defects"]),
                 str(t["fallback"]),

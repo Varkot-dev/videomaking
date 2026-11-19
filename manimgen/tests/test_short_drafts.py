@@ -140,8 +140,8 @@ def test_draft_size_flags_do_not_touch_global_state():
 def test_landscape_flags_unchanged():
     assert paths.render_size_flags() == [paths.render_quality_flag()]
     small = paths.render_size_flags(draft=True)
-    assert small == [paths._QUALITY_FLAGS["m"]]
-    assert paths.render_resolution(draft=True) == "1280x720"
+    assert small == ["-r", "960x540"]
+    assert paths.render_resolution(draft=True) == "960x540"
     assert paths.is_draft() is False
 
 

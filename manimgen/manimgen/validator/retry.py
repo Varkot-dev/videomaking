@@ -4,7 +4,7 @@ import os
 import re
 import threading
 
-from manimgen import paths
+from manimgen import paths, timing
 from manimgen.llm import chat
 from manimgen.probes import overlap_report
 from manimgen.probes.overlap_report import overlap_issues
@@ -14,6 +14,8 @@ from manimgen.validator.codeguard import (
     precheck_and_autofix_file,
 )
 from manimgen.validator.layout_checker import check_layout
+from manimgen.validator.preflight import PreflightResult
+from manimgen.validator.preflight import preflight as run_preflight
 from manimgen.validator.render_command import run_manimgl
 from manimgen.validator.scene_ast_gate import GATE_ERROR_MARKER, inspect_scene_code
 from manimgen.validator.timing_verifier import auto_fix_timing, verify_timing
@@ -330,11 +332,22 @@ def retry_scene(
     scene_path: str,
     cue_durations: list[float] | None = None,
     first_render: str | None = None,
+    initial_preflight: PreflightResult | None = None,
 ) -> tuple[bool, str | None]:
     """
     Retry generating and running a scene up to MAX_RETRIES times.
     Each retry sends the original code + error back to the LLM for a fix.
     Returns (success, video_path).
+
+    Preflight (``rendering.preflight``, see validator/preflight.py): unless a
+    ``first_render`` was handed over, each attempt first dry-runs the scene
+    (seconds) instead of rendering it (minutes). A crash goes down the error
+    path and layout findings down the visual-fix path, exactly as the same
+    defects from a real render would, and the fix is verified by the next dry
+    run. The one real render happens when a dry run is clean, or when the fix
+    budget is spent (then the usual checks and shipping rules apply to it).
+    ``initial_preflight`` is the dry run the caller already did on
+    ``original_code``.
 
     ``first_render`` is a video the caller already rendered from
     ``original_code`` and rejected for visual defects. Attempt 1 checks that
@@ -402,13 +415,46 @@ def retry_scene(
     # re-render. Allow MAX_PLACEMENT_FIX_CALLS fixes for them, then ship.
     placement_fixes_used = 0
 
+    # A handed-over render means the defects are about frames (or timing), which
+    # a dry run cannot see: the fix then goes straight to a real render.
+    preflight_mode = paths.preflight_enabled() and not first_render
+    pending_preflight = (
+        _preflight_to_result(initial_preflight)
+        if preflight_mode and initial_preflight is not None and code == original_code
+        else None
+    )
+
+    def _stop_preflight(why: str) -> None:
+        nonlocal preflight_mode, attempt
+        preflight_mode = False
+        attempt -= 1  # the real render that follows is this attempt
+        print(f"[retry] {why}: doing the real render of the current code.")
+
     attempt = 0
     step = 0
     free_steps_left = MAX_RETRIES
     while attempt < MAX_RETRIES:
         attempt += 1
         step += 1
-        if reusable_render:
+        if preflight_mode:
+            result = pending_preflight or _run_and_capture(
+                scene_path, class_name, dry_run=True
+            )
+            pending_preflight = None
+            pf = result.get("preflight")
+            if result.get("preflight_unusable") or (pf is not None and pf.clean):
+                preflight_mode = False
+                print(
+                    f"[retry] Attempt {attempt}/{MAX_RETRIES}: preflight "
+                    + (
+                        "found nothing to fix"
+                        if pf is not None
+                        else "could not judge the scene"
+                    )
+                    + "; doing the real render."
+                )
+                result = _run_and_capture(scene_path, class_name)
+        elif reusable_render:
             result = {
                 "success": True,
                 "video_path": reusable_render,
@@ -424,6 +470,48 @@ def retry_scene(
             )
         else:
             result = _run_and_capture(scene_path, class_name)
+        if result["success"] and result.get("preflight") is not None:
+            # Dry run with layout findings and no video: fix them (verified by
+            # the next dry run) while the budget lasts, else render for real.
+            pf = result["preflight"]
+            pf_issues = pf.placement_issues
+            print(
+                f"[retry] Attempt {attempt}/{MAX_RETRIES}: preflight found "
+                f"{len(pf_issues)} placement defect(s) in {pf.seconds:.1f}s:"
+            )
+            for line in pf_issues:
+                print(f"[retry]   {line}")
+            pf_signature = _build_visual_signature(pf_issues)
+            if (
+                section_visual_llm_calls_used >= MAX_VISUAL_LLM_FIX_CALLS
+                or attempt == MAX_RETRIES
+            ):
+                _stop_preflight("Fix budget or attempt limit reached")
+                continue
+            if pf_signature in seen_visual_signatures:
+                _stop_preflight("The same defects came back after a fix")
+                continue
+            if not _consume_run_budget("visual"):
+                _stop_preflight("Global run LLM budget exhausted")
+                continue
+            print("[retry] Requesting visual fix from LLM (verified by preflight)...")
+            previous_code = code
+            code = _request_visual_fix(code, "\n".join(pf_issues), system_prompt, [])
+            section_visual_llm_calls_used += 1
+            seen_visual_signatures.add(pf_signature)
+            with open(scene_path, "w", encoding="utf-8") as f:
+                f.write(code)
+            precheck_and_autofix_file(scene_path)
+            with open(scene_path, encoding="utf-8") as f:
+                code = f.read()
+            if _discard_unsafe_fix(scene_path, code, previous_code, "visual"):
+                code = previous_code
+                _stop_preflight("The fix was rejected by the safety gate")
+                continue
+            if cue_durations:
+                code, tw = apply_timing_gate(code, scene_path, cue_durations)
+                pending_timing_warnings = tw
+            continue
         if result["success"]:
             from manimgen.validator.frame_checker import check_frames
             from manimgen.validator.timing_verifier import (
@@ -778,7 +866,31 @@ def _discard_unsafe_fix(
     return True
 
 
-def _run_and_capture(scene_path: str, class_name: str) -> dict:
+def _preflight_to_result(pf: PreflightResult) -> dict:
+    """A dry run as the loop's result dict (see ``_run_and_capture``)."""
+    if pf.timed_out or not (pf.ran or pf.crashed):
+        # Nothing is known about the scene: the real render decides.
+        return {"success": True, "preflight_unusable": True, "video_path": None}
+    if pf.crashed:
+        # A crash of the dry run is a crash. No exit code and no timeout means
+        # the safety gate refused the file, so manimgl never ran.
+        return {
+            "success": False,
+            "video_path": None,
+            "stderr": pf.stderr,
+            "rendered": pf.returncode is not None,
+        }
+    return {
+        "success": True,
+        "video_path": None,
+        "stderr": "",
+        "overlaps": tuple(pf.overlaps),
+        "preflight": pf,
+    }
+
+
+def _run_and_capture(scene_path: str, class_name: str, dry_run: bool = False) -> dict:
+    """Precheck, then render (or dry-run, see validator/preflight.py) a scene."""
     precheck = precheck_and_autofix_file(scene_path)
     if not precheck["ok"]:
         stderr = precheck["stderr"]
@@ -793,10 +905,14 @@ def _run_and_capture(scene_path: str, class_name: str) -> dict:
             "rendered": False,
         }
 
+    if dry_run:
+        return _preflight_to_result(run_preflight(scene_path, class_name))
+
     # Shared entry point (tree-kill timeout, configurable budget, fresh-video
     # check). Exit 0 without a fresh video comes back as a failure, so callers
     # never see success with video_path None.
-    result = run_manimgl(scene_path, class_name)
+    with timing.context("retry render"):
+        result = run_manimgl(scene_path, class_name)
     if result.ok:
         return {
             "success": True,

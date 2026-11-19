@@ -107,6 +107,8 @@ def test_non_mapping_top_level(cfgmod, monkeypatch, tmp_path):
     [
         ("rendering:\n  fps: fast\n", "rendering.fps"),
         ("rendering:\n  fps: true\n", "rendering.fps"),
+        ("rendering:\n  draft_fps: fast\n", "rendering.draft_fps"),
+        ("rendering:\n  draft_fps: 0\n", "rendering.draft_fps"),
         ("llm:\n  ollama_num_ctx: lots\n", "llm.ollama_num_ctx"),
         ("tts:\n  enabled: maybe\n", "tts.enabled"),
         ("llm: just a string\n", "'llm'"),
@@ -202,11 +204,14 @@ _OLD_RENDERING = {
     "quality": "hd",
     "resolution": "1920x1080",
     "fps": 60,
+    "draft_fps": 30,
     "max_retries": 3,
     "parallel_sections": 3,
     "render_timeout_2d": 240.0,
     "render_timeout_3d": 360.0,
     "render_timeout_fallback": 180.0,
+    "preflight": True,
+    "preflight_timeout": 120.0,
 }
 _OLD_LLM = {
     "llm_provider": "claude_cli",
