@@ -128,7 +128,7 @@ topic / PDF
 
 For each section:
   1. TTS (edge-tts WordBoundary)  → full .mp3 + per-word timestamps
-  2. segmenter.compute_segments() → exact duration per cue from word onset times
+  2. segmenter.compute_segments() → cue onsets; slice_durations() → per-cue length (onset to next onset)
   3. audio_slicer.slice_audio()   → section_01_cue00.m4a, _cue01.m4a, ...
 
   4. generate_scenes(section, cue_durations=[...])
@@ -309,8 +309,10 @@ After every fix, the file is **always reloaded from disk** — previously a bug 
 - Word timestamps via `WordBoundary` mode for CUE alignment
 
 ### 8. Muxer
-- Video longer than audio → trim video to audio duration
-- Audio longer than video → freeze last frame (`tpad`)
+- Cue lengths (`cli._cue_durations` = `segmenter.slice_durations`) are the audio slice lengths, onset to next onset. They sum to the narration length. Never use `seg.duration` (ends at the last word's `.end`) for video: it is shorter by the pause between cues and every cue then ends in a frozen frame (the 0.4 s Shorts freeze).
+- The cutter rounds cue edges to the fps grid from absolute time (`muxer.cue_frame_span`) and cuts by frame count, so sub-frame remainders carry into the next cue and clips sum to the section length within half a frame. Per-cue files are kept for the editor.
+- Audio longer than video by more than 2 frames → freeze last frame (`tpad`, gap only); by less (frame rounding, AAC padding) → audio is trimmed to the video
+- Video longer than audio → pad audio with silence
 - Logs WARNING at diff > 1.0s, LARGE MISMATCH at diff > 1.5s
 
 ---

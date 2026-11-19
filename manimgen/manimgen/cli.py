@@ -21,6 +21,7 @@ from manimgen.planner.lesson_planner import (
     plan_lesson_from_pdf,
     plan_short,
 )
+from manimgen.planner.segmenter import slice_durations
 from manimgen.renderer.assembler import assemble_video
 from manimgen.renderer.muxer import clear_mismatch_log, get_mismatch_log
 from manimgen.types import (
@@ -586,6 +587,16 @@ def _scene_file_blocking_freezes(
     return _code_blocking_freezes(code, cue_durations)
 
 
+def _cue_durations(segments: list) -> list[float]:
+    """Per-cue lengths the scene, the cutter and the muxer all work to.
+
+    These are the audio slice lengths (see ``segmenter.slice_durations``), not
+    the word.end based ``seg.duration``: the video of a cue must be as long as
+    its audio slice or every cue ends in a frozen frame.
+    """
+    return slice_durations(segments)
+
+
 def _cut_and_mux(
     section: dict,
     idx: int,
@@ -783,7 +794,7 @@ def _run_section(
             )
 
     # Content key for every cached artifact of this section (#66).
-    cue_durations = [seg.duration for seg in segments] if segments else None
+    cue_durations = _cue_durations(segments) if segments else None
     key = _section_key(section, current_topic_hash, cue_durations)
 
     if segments and _all_cues_muxed(section, idx, len(segments), key):
@@ -1368,7 +1379,7 @@ def main():
                     "audio_duration": audio_duration,
                     "segments": segments,
                     "audio_slices": audio_slices,
-                    "cue_durations": [seg.duration for seg in segments],
+                    "cue_durations": _cue_durations(segments),
                 }
 
     tts_failed = {
