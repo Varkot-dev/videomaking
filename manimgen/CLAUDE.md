@@ -311,7 +311,7 @@ Order: codeguard auto-fix → error-aware fix (token-free) → LLM fix (budget-c
 
 After every fix, the file is **always reloaded from disk** — previously a bug caused the LLM fix to be silently discarded.
 
-`SceneErrorType` enum classifies errors for targeted guidance: `PRECHECK_VGROUP`, `SYNTAX`, `IMPORT`, `ATTRIBUTE`, `TYPE`, `RUNTIME`, `TIMING`, `SAFETY_GATE`.
+`SceneErrorType` enum classifies errors for targeted guidance: `PRECHECK_VGROUP`, `SYNTAX`, `IMPORT`, `ATTRIBUTE`, `TYPE`, `RUNTIME`, `TIMING`, `SAFETY_GATE`, `TIMEOUT`.
 
 ### 6. Visual validation (two-tier)
 - **Tier 1 (frame_checker.py):** zero-cost PIL-based — detects black frames, frozen frames, edge clipping.

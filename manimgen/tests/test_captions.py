@@ -169,8 +169,8 @@ def test_drawtext_fallback_filter_uses_position():
 
 def test_windows_path_escaping():
     assert (
-        cap.escape_filter_path("C:\\Users\\me\\out\\_cap_x\\captions.ass")
-        == "C\\:/Users/me/out/_cap_x/captions.ass"
+        cap.escape_filter_path("C:\\work\\out\\_cap_x\\captions.ass")
+        == "C\\:/work/out/_cap_x/captions.ass"
     )
 
 
