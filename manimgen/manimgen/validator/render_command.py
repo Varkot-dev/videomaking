@@ -16,6 +16,7 @@ configured fps. See docs/KNOWN_ISSUES.md.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -41,7 +42,7 @@ def build_manimgl_command(scene_path: str, class_name: str) -> list[str]:
         scene_path,
         class_name,
         "-w",
-        paths.render_quality_flag(),
+        *paths.render_size_flags(),
         "-c",
         _BACKGROUND_COLOR,
     ]
@@ -87,14 +88,51 @@ class RenderResult(NamedTuple):
     probe_error: str | None = None
 
 
+# Render seconds allowed per second of video, on top of the configured budget.
+# Measured on software OpenGL (no GPU, Mesa llvmpipe): a 1080x1920 short drew
+# 4 to 7 frames a second at 30 fps, about 5 to 8 render seconds per video
+# second, and a 45 s scene overran the fixed 240 s budget although it was
+# rendering normally. A GPU is far faster; this only raises the ceiling.
+_RENDER_SECONDS_PER_VIDEO_SECOND = 10.0
+_RENDER_STARTUP_SECONDS = 60.0
+
+
+def _estimated_video_seconds(code: str) -> float:
+    """Lower-bound length of the scene from its play/wait calls (0 if unknown)."""
+    from manimgen.validator.timing_verifier import (
+        _construct_body_source,
+        _parse_cue_block,
+        _time_for_statements,
+    )
+
+    body = _construct_body_source(code)
+    tree = _parse_cue_block(body) if body else None
+    if tree is None:
+        return 0.0
+    seconds, _unknown = _time_for_statements(tree.body)
+    return seconds
+
+
 def _scene_timeout(scene_path: str) -> float:
-    """Configured render budget for this scene (3D scenes get the 3D budget)."""
+    """Render budget for this scene.
+
+    The configured budget (3D scenes get the 3D budget), raised for long scenes
+    so a render that is working is not killed for being long: a fixed limit
+    killed valid 45 s shorts on a machine without a GPU.
+    """
     try:
         with open(scene_path, encoding="utf-8") as f:
-            is_3d = "ThreeDScene" in f.read()
+            code = f.read()
     except OSError:
-        is_3d = False
-    return paths.render_timeout("3d" if is_3d else "2d")
+        code = ""
+    kind = "3d" if "ThreeDScene" in code else "2d"
+    base = paths.render_timeout(kind)
+    if os.environ.get(f"MANIMGEN_RENDER_TIMEOUT_{kind.upper()}"):
+        return base  # a limit set explicitly for this run is used as given
+    length = _estimated_video_seconds(code) if code else 0.0
+    return max(
+        base, _RENDER_STARTUP_SECONDS + _RENDER_SECONDS_PER_VIDEO_SECOND * length
+    )
 
 
 def run_manimgl(
@@ -143,7 +181,9 @@ def run_manimgl(
     if overlap_report.probe_enabled():
         probe_dir = tempfile.mkdtemp(prefix="manimgen_probe_")
         report_path = str(Path(probe_dir) / "overlaps.json")
-        env = overlap_report.with_probe_env(env, report_path)
+        env = overlap_report.with_probe_env(
+            env, report_path, paths.short_safe_margins() if paths.is_short() else None
+        )
     try:
         returncode, stdout, stderr, timed_out = procutil.run_tree(
             build_manimgl_command(scene_path, class_name),
@@ -189,7 +229,7 @@ def run_manimgl(
         )
     if report.overlaps:
         logger.warning(
-            "[render] %s: %d text overlap(s) found by the render probe",
+            "[render] %s: %d text placement defect(s) found by the render probe",
             class_name,
             len(report.overlaps),
         )

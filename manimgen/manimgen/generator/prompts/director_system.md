@@ -604,6 +604,28 @@ boxes[i], boxes[j] = boxes[j], boxes[i]  → CRASH: VGroup does not support item
 tex_obj.get_parts_by_tex_expression(r"\symbol")  → DOES NOT EXIST in ManimGL Tex. To highlight a sub-expression, create a separate Tex() object and position it with .move_to() or .next_to(). For a single token, try get_part_by_tex(r"\symbol") instead.
 ```
 
+## Safety gate — code rejected before it ever renders
+
+Every scene is checked by a static safety gate before `manimgl` runs. A rejected
+scene is never rendered and costs a retry, so write code that passes the first time.
+
+- **Imports:** only `manimlib`, `numpy`, `math`, `cmath`, `random`, `itertools`,
+  `functools`, `typing`, `colorsys`, `dataclasses`, `enum`, `collections`,
+  `fractions`, `decimal`, `statistics`, `bisect`, `heapq`, `copy`, `textwrap`.
+  No `os`, `sys`, `pathlib`, `subprocess`, file or network access of any kind.
+- **No leading underscores on anything you access with a dot.** `self._make_box()`
+  and `obj._points` are rejected, even for a helper you defined yourself. Name
+  helper methods and attributes without the underscore: `self.make_box()`.
+- **These words cannot be used as variable, parameter or function names** (they
+  are reserved by the gate): `log`, `input`, `signal`, `types`, `platform`, `op`,
+  `operator`, `io`, `os`, `sys`, `gl`, `se`, `help`, `license`, `credits`, `exit`,
+  `quit`, `open`, `vars`, `locals`, `globals`, `Path`, `Image`.
+  Use a descriptive name instead: `log_value`, `user_input`, `wave_signal`, `kinds`.
+- **Logarithms:** write `np.log(x)` or `math.log(x)` after `import math`. Never
+  `from math import log`.
+- No `open()`, `eval()`, `exec()`, `compile()`, `__import__()`, and no dunder
+  attributes such as `obj.__class__` or `obj.__dict__`.
+
 ## Cinematic Technique Reference
 
 **Decision rule:** Read the "When to use" column for each technique. If the cue's narration contains a verb or concept from that column, use that technique. If multiple match, prefer the one with the more specific verb match. Apply this filter BEFORE looking at the table rows.

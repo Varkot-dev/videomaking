@@ -78,7 +78,15 @@ def _load_director_prompt() -> str:
     with open(
         os.path.join(here, "prompts", "director_system.md"), encoding="utf-8"
     ) as f:
-        return f.read()
+        prompt = f.read()
+    if paths.is_short():
+        # The vertical rules come last so they override the landscape layout
+        # numbers in the main prompt.
+        with open(
+            os.path.join(here, "prompts", "director_vertical.md"), encoding="utf-8"
+        ) as f:
+            prompt += f.read()
+    return prompt
 
 
 def _examples_dir() -> Path:
@@ -253,7 +261,10 @@ def generate_scenes(
         durations = [total / n_cues] * n_cues
 
     system = _load_director_prompt()
-    examples = _load_examples_text(section)
+    # The few-shot scenes and reference frames are all landscape. In a short
+    # they would teach the wrong layout, and the vertical rules carry their
+    # own verified reference scene, so they are left out.
+    examples = "" if paths.is_short() else _load_examples_text(section)
     user_message = _build_user_message(section, durations)
 
     if examples:
@@ -262,7 +273,7 @@ def generate_scenes(
             + examples
         )
 
-    ref_frames = load_reference_frames()
+    ref_frames = [] if paths.is_short() else load_reference_frames()
     raw = chat(system=system, user=user_message, images=ref_frames, role="director")
     code = strip_fencing(raw)
 

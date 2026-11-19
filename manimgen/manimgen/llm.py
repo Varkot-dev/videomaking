@@ -90,6 +90,7 @@ def _load_llm_config() -> dict:
         "claude_cli_model": llm_cfg["claude_cli_model"],
         "claude_cli_path": llm_cfg["claude_cli_path"],
         "models": dict(llm_cfg["models"]),
+        "efforts": dict(llm_cfg["efforts"]),
         "ollama_model": llm_cfg["ollama_model"],
         "ollama_base_url": llm_cfg["ollama_base_url"],
         "ollama_num_ctx": llm_cfg["ollama_num_ctx"],
@@ -293,7 +294,17 @@ def _gemini(
         contents=contents,
         config=types.GenerateContentConfig(**config_kwargs),
     )
-    return response.text.strip()
+    text = response.text
+    if text is None:
+        # Blocked or empty reply: .text is None, not "".
+        candidates = getattr(response, "candidates", None) or []
+        reason = getattr(candidates[0], "finish_reason", None) if candidates else None
+        feedback = getattr(response, "prompt_feedback", None)
+        raise RuntimeError(
+            "Gemini returned no text "
+            f"(finish_reason={reason!r}, prompt_feedback={feedback!r})"
+        )
+    return text.strip()
 
 
 def _anthropic(
@@ -334,6 +345,10 @@ def _anthropic(
             "[llm] Anthropic response hit max_tokens=%d and is truncated — "
             "raise llm.max_tokens in config.yaml",
             cfg["anthropic_max_tokens"],
+        )
+    if not text.strip():
+        raise RuntimeError(
+            f"Anthropic returned no text (stop_reason={message.stop_reason!r})"
         )
     return text.strip()
 
@@ -578,6 +593,9 @@ def _claude_cli(
             "--disable-slash-commands",
             "--no-session-persistence",
         ]
+        effort = _effort_for(role)
+        if effort:
+            cmd += ["--effort", effort]
 
         last_error = ""
         for attempt in range(1, _REQUEST_RETRY_ATTEMPTS + 1):
@@ -1035,6 +1053,37 @@ def _model_for(provider: str, role: str | None = None) -> str:
         if value:
             logger.warning("[llm] ignoring unusable model %r for role %s", value, name)
     return default
+
+
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
+
+def _effort_for(role: str | None = None) -> str | None:
+    """Thinking effort for `role` on the claude_cli provider, or None.
+
+    Order: MANIMGEN_EFFORT_<ROLE> env var, then llm.efforts[role] in
+    config.yaml. None (the default) leaves Claude Code's own default. Most of
+    a director call's time is thinking, not writing code, so a lower effort is
+    the main speed lever. An unknown level is ignored with a warning.
+    """
+    name = (role or "").strip().lower()
+    if not name:
+        return None
+    env_name = "MANIMGEN_EFFORT_" + "".join(
+        c if c.isalnum() else "_" for c in name.upper()
+    )
+    configured = _LLM_CONFIG.get("efforts")
+    candidates = (
+        os.environ.get(env_name, ""),
+        configured.get(name, "") if isinstance(configured, dict) else "",
+    )
+    for value in candidates:
+        value = str(value).strip().lower()
+        if value in EFFORT_LEVELS:
+            return value
+        if value:
+            logger.warning("[llm] ignoring unknown effort %r for role %s", value, name)
+    return None
 
 
 def _ollama(system: str, user: str, images: list[str], role: str | None = None) -> str:

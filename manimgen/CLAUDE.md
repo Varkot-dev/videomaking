@@ -154,6 +154,8 @@ For each section:
 - **Storyboard-level planner.** The planner outputs pixel-level visual descriptions per cue — not concept descriptions.
 - **codeguard is the safety net.** `precheck_and_autofix()` runs on the generated code string before saving.
 - **Content-keyed cache with hash sidecars.** Each rendered video and each muxed cue clip has a `.hash` sidecar storing the section's content key (`cli._section_key`: the section dict, topic or PDF-bytes hash, TTS voice and speed, cue durations rounded to 0.05s). Files are shared across plans and named only by section id, so a file whose sidecar is missing, empty or different is rebuilt; same content (`--resume`) is reused. Audio slices are always re-sliced.
+- **Sections run in parallel.** After narration, sections are generated and rendered `rendering.parallel_sections` at a time (default 3; `MANIMGEN_PARALLEL_SECTIONS=1` for one at a time). Clips are assembled in plan order regardless of which section finishes first.
+- **Speed flags.** `--fast` skips the research brief and the storyboard critic pass (`lesson_planner.set_fast`); `--draft` renders small, 720p or 540x960 for a short (`paths.set_draft`). Both are part of the cache key, so a draft never reuses or overwrites a final render.
 - **Retry loop always reloads code.** After each fix attempt (codeguard or LLM), the file is always re-read from disk — codeguard may have applied in-place fixes that would otherwise be discarded.
 
 ---
@@ -203,6 +205,21 @@ python3 -m pytest -q
 - Scene code + logs: `manimgen/output/scenes/`, `manimgen/output/logs/`
 
 ---
+
+## Vertical shorts mode (`--short`)
+
+`manimgen "limits" --short --format misconception --confused "..." --clicked "..."` makes one idea, 30 to 60 seconds, one section, rendered 1080x1920 for YouTube Shorts.
+
+- **Format switch:** `paths.set_video_format("short")` is called once by `cli.py` (from `--short`, or from `_format: "short"` in a resumed plan). Everything else reads `paths.is_short()`: `render_size_flags()` passes `-r 1080x1920` and no quality flag (manimgl's `-l/-m/--hd` are landscape presets), `render_resolution()` returns `1080x1920` so the assembler and muxer follow, and the fallback card uses its vertical template.
+- **Frame:** manimgl derives the frame from the resolution, so it is 4.5 units wide and 8 tall (verified by a real render). Readable content stays in x -2.0..1.4, y -2.0..2.8, centred on x = -0.3.
+- **Planner:** `lesson_planner.plan_short()` with `planner/prompts/planner_short_system.md`. Exactly one section; `--format` picks `puzzle`, `misconception`, `proof` or `worked`; `--confused` / `--clicked` carry the owner's angle; the owner's voice profile (a git-ignored copy of `voice_profile.example.md`, path from `shorts.voice_profile` in config.yaml) carries how they talk.
+- **Director:** `generator/prompts/director_vertical.md` is appended to the Director prompt and overrides the landscape layout numbers. It embeds one verified vertical reference scene; a test checks that scene against the safety gate, codeguard and the timing verifier. Landscape few-shot examples and reference frames are not sent for a short.
+- **Font sizes:** codeguard snaps to the canonical scale, so shorts use 28 (hook), 22 (labels), 36 (key line).
+- **Placement:** the prompt pins the hook's top edge at y 2.75 and the key line's at 1.9 (`move_to(..., aligned_edge=UP)`), and labels under the diagram go into `main` before it is scaled. During the render, the probe also moves new text-only mobjects that sit up to 0.5 units outside the safe area back inside before their first frame (`MANIMGEN_SAFE_NUDGE=0` turns it off; the count is `nudges` in the probe report). Anything further out is still reported.
+- **Speed:** the director runs on `low` effort (`llm.efforts` in config.yaml). The retry loop checks a rejected first render instead of rendering the same code again, and allows one visual fix for text-placement defects (`MANIMGEN_MAX_PLACEMENT_FIXES`) before shipping the best render. Measured on 12 runs: most of a 15 to 30 minute run was re-renders for placement defects that never cleared.
+- **Publishing:** the `manimgen-shorts-publish` skill (review gate, sameness check, title and description, upload sheet).
+- **Not built yet:** own-voice recording, burned-in captions, music. (Text off-screen or under the Shorts UI is now reported by the render probe.)
+- **Research behind these choices:** `../docs/research/educational-shorts-playbook.md` (sources and evidence labels in `../docs/research/shorts-notes/`).
 
 ## LLM provider toggle
 
@@ -278,7 +295,7 @@ Order: codeguard auto-fix → error-aware fix (token-free) → LLM fix (budget-c
 
 After every fix, the file is **always reloaded from disk** — previously a bug caused the LLM fix to be silently discarded.
 
-`SceneErrorType` enum classifies errors for targeted guidance: `PRECHECK_VGROUP`, `SYNTAX`, `IMPORT`, `ATTRIBUTE`, `TYPE`, `RUNTIME`.
+`SceneErrorType` enum classifies errors for targeted guidance: `PRECHECK_VGROUP`, `SYNTAX`, `IMPORT`, `ATTRIBUTE`, `TYPE`, `RUNTIME`, `SAFETY_GATE`.
 
 ### 6. Visual validation (two-tier)
 - **Tier 1 (frame_checker.py):** zero-cost PIL-based — detects black frames, frozen frames, edge clipping.
@@ -467,8 +484,8 @@ Most visible quality issue. Cues often have 1–8 seconds of frozen still at the
 ### 3. ✅ RESOLVED — frame_checker.py wiring
 Confirmed wired in `validator/retry.py`: `check_frames()` runs after every successful render. Hard failures (black/frozen frames confirmed by timing oracle) block muxing and force retry. Soft failures (layout issues, only when `MANIMGEN_FIRST_PASS_LAYOUT=1`) are advisory on the first pass; `retry_scene` feeds layout issues into its LLM fix prompt.
 
-### 4. LOW — `.hypothesis/` and `.DS_Store` committed
-Should be in `.gitignore`. Clutters diffs.
+### 4. RESOLVED: `.hypothesis/` and `.DS_Store`
+Both are in `.gitignore` and neither is tracked.
 
 ### 5. RESOLVED: `_load_llm_config()` called on every LLM call
 `llm.py` now parses `config.yaml` once at import into `_LLM_CONFIG`.

@@ -32,15 +32,18 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 
 
-_DEFAULT_OUT = "/tmp/manimgen_review"
-_PLAN_PATH = (
-    "/Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/manimgen/output/plan.json"
+_DEFAULT_OUT = os.path.join(tempfile.gettempdir(), "manimgen_review")
+# Derived from this file's location (<repo>/.claude/skills/manimgen-video-review/tools)
+# so the tools work wherever the repository is checked out, on any OS.
+_REPO_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..")
 )
-_MUXED_DIR = (
-    "/Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/manimgen/output/muxed"
-)
+_PACKAGE_ROOT = os.path.join(_REPO_ROOT, "manimgen")
+_PLAN_PATH = os.path.join(_PACKAGE_ROOT, "manimgen", "output", "plan.json")
+_MUXED_DIR = os.path.join(_PACKAGE_ROOT, "manimgen", "output", "muxed")
 
 
 def _ffprobe_duration(path: str) -> float:

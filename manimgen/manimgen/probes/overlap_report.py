@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 REPORT_ENV = "MANIMGEN_OVERLAP_REPORT"  # must match overlap_probe.REPORT_ENV
 DISABLE_ENV = "MANIMGEN_OVERLAP_PROBE"
+SAFE_MARGINS_ENV = "MANIMGEN_SAFE_MARGINS"  # must match overlap_probe.SAFE_MARGINS_ENV
 SIDECAR_SUFFIX = ".overlaps.json"
 ISSUE_PREFIX = "OVERLAP:"
 
@@ -36,6 +37,9 @@ class Overlap:
     a: str
     b: str
     fraction: float
+    # "overlap" (a drawn over b), "offscreen" (a cut off by the frame edge) or
+    # "unsafe" (a under the Shorts buttons or caption). b is "" for the last two.
+    kind: str = "overlap"
 
 
 @dataclass(frozen=True)
@@ -54,13 +58,22 @@ def bootstrap_dir() -> str:
     return str(Path(__file__).resolve().parent / "bootstrap")
 
 
-def with_probe_env(env: dict[str, str], report_path: str) -> dict[str, str]:
+def with_probe_env(
+    env: dict[str, str],
+    report_path: str,
+    safe_margins: tuple[float, float, float, float] | None = None,
+) -> dict[str, str]:
     """Return ``env`` with the probe bootstrap first on PYTHONPATH.
 
     Uses ``os.pathsep`` (``;`` on Windows, ``:`` elsewhere) and keeps any
     PYTHONPATH the caller already had after the bootstrap directory.
+    ``safe_margins`` (left, bottom, right, top as fractions of the frame) turns
+    on the safe-area check used for vertical shorts.
     """
     env = dict(env)
+    env.pop(SAFE_MARGINS_ENV, None)
+    if safe_margins is not None:
+        env[SAFE_MARGINS_ENV] = ",".join(f"{m:.5f}" for m in safe_margins)
     existing = env.get("PYTHONPATH", "")
     parts = [bootstrap_dir()] + [p for p in existing.split(os.pathsep) if p]
     env["PYTHONPATH"] = os.pathsep.join(parts)
@@ -80,6 +93,7 @@ def _parse(data: object) -> OverlapReport:
                     a=str(item["a"]),
                     b=str(item["b"]),
                     fraction=float(item["fraction"]),
+                    kind=str(item.get("kind") or "overlap"),
                 )
             )
         except (KeyError, TypeError, ValueError):
@@ -135,6 +149,21 @@ def load_for_video(video_path: str) -> OverlapReport:
 
 def format_issue(overlap: Overlap) -> str:
     """One hard-defect line for the visual-repair prompt."""
+    if overlap.kind == "offscreen":
+        return (
+            f"{ISSUE_PREFIX} text {overlap.a!r} is cut off by the edge of the "
+            f"frame at t={overlap.time:.1f}s ({overlap.fraction:.0%} of it is "
+            "off screen). Move it inward, split it over two lines, or guard its "
+            "width with set_width so the whole text is visible."
+        )
+    if overlap.kind == "unsafe":
+        return (
+            f"{ISSUE_PREFIX} text {overlap.a!r} sits outside the safe area of "
+            f"the vertical frame at t={overlap.time:.1f}s ({overlap.fraction:.0%} "
+            "of it is under the app's buttons or caption). Keep all text inside "
+            "x -2.0 to 1.4 and y -2.0 to 2.8: move it up or left, split it over "
+            "two lines, or guard its width with set_width(3.3)."
+        )
     return (
         f"{ISSUE_PREFIX} text {overlap.a!r} is drawn on top of {overlap.b!r} "
         f"at t={overlap.time:.1f}s ({overlap.fraction:.0%} of the smaller box). "

@@ -17,7 +17,9 @@ from manimgen.probes.overlap_report import Overlap
 from manimgen.validator import retry as retry_mod
 
 _SCENE = "from manimlib import *\n\n\nclass S(Scene):\n    pass\n"
-_KWARG_CRASH = "TypeError: Mobject.__init__() got an unexpected keyword argument 'length'"
+_KWARG_CRASH = (
+    "TypeError: Mobject.__init__() got an unexpected keyword argument 'length'"
+)
 _OVERLAP = Overlap(14.6, "0.4", "0.6", 0.36)
 
 
@@ -62,7 +64,9 @@ def loop(monkeypatch, tmp_path):
 
     def _local_fix(code, stderr):
         if "unexpected keyword argument 'length'" in stderr:
-            return code + "# length removed\n", ["removed unexpected kwarg 'length' (1)"]
+            return code + "# length removed\n", [
+                "removed unexpected kwarg 'length' (1)"
+            ]
         return code, []
 
     monkeypatch.setattr(retry_mod, "apply_error_aware_fixes", _local_fix)
@@ -73,7 +77,7 @@ def loop(monkeypatch, tmp_path):
 
     monkeypatch.setattr(retry_mod, "chat", _chat)
 
-    def run(outcomes):
+    def run(outcomes, **kwargs):
         it = iter(outcomes)
 
         def _capture(p, c):
@@ -81,7 +85,9 @@ def loop(monkeypatch, tmp_path):
             return next(it)
 
         monkeypatch.setattr(retry_mod, "_run_and_capture", _capture)
-        result = retry_mod.retry_scene({"id": "s"}, _SCENE, "S", str(scene))
+        result = retry_mod.retry_scene(
+            {"id": "s"}, _SCENE, "S", str(scene), **kwargs
+        )
         return result, calls
 
     return run
@@ -163,3 +169,189 @@ def test_run_and_capture_marks_rejections_as_not_rendered(monkeypatch, tmp_path)
     timeout = RenderResult(False, None, "", "TimeoutExpired", None, True)
     monkeypatch.setattr(retry_mod, "run_manimgl", lambda p, c: timeout)
     assert retry_mod._run_and_capture(str(scene), "S")["rendered"] is True
+
+
+# --- safety-gate rejections get their own error type and guidance ----------
+
+_GATE_NAME = (
+    "SceneSafetyGateError: the scene was not rendered because it uses "
+    "constructs that are not allowed in generated scenes. Remove every "
+    "construct listed below.\n- line 113: name 'se' is not allowed"
+)
+_GATE_TOPLEVEL = (
+    "SceneSafetyGateError: the scene was not rendered because it uses "
+    "constructs that are not allowed in generated scenes. Remove every "
+    "construct listed below.\n- line 166: disallowed top-level Expr"
+)
+
+
+def test_gate_rejection_for_denied_name_is_classified_as_safety_gate():
+    assert retry_mod._classify_error(_GATE_NAME) == retry_mod.SceneErrorType.SAFETY_GATE
+
+
+def test_gate_rejection_for_top_level_expr_is_classified_as_safety_gate():
+    got = retry_mod._classify_error(_GATE_TOPLEVEL)
+    assert got == retry_mod.SceneErrorType.SAFETY_GATE
+
+
+def test_gate_rejection_wins_over_keywords_quoted_in_its_findings():
+    stderr = (
+        _GATE_TOPLEVEL + "\n- line 9: name 'TypeError' is not allowed (SyntaxError)"
+    )
+    assert retry_mod._classify_error(stderr) == retry_mod.SceneErrorType.SAFETY_GATE
+
+
+def test_traceback_quoting_the_gate_marker_mid_line_is_not_a_gate_rejection():
+    stderr = (
+        "Traceback (most recent call last):\n"
+        '  File "scene.py", line 3, in construct\n'
+        "    x = undefined  # SceneSafetyGateError: quoted in a comment\n"
+        "NameError: name 'undefined' is not defined"
+    )
+    assert retry_mod._classify_error(stderr) == retry_mod.SceneErrorType.RUNTIME
+
+
+@pytest.mark.parametrize(
+    "stderr, expected",
+    [
+        ("AttributeError: 'X' has no attribute 'y'", "ATTRIBUTE"),
+        ("TypeError: bad argument", "TYPE"),
+        ("RuntimeError: boom", "RUNTIME"),
+        ("ValueError: could not broadcast input array", "RUNTIME"),
+        ("SyntaxError: invalid syntax", "SYNTAX"),
+        ("ModuleNotFoundError: No module named 'x'", "IMPORT"),
+    ],
+)
+def test_ordinary_tracebacks_classify_as_before(stderr, expected):
+    assert retry_mod._classify_error(stderr) == retry_mod.SceneErrorType[expected]
+
+
+def test_real_gate_error_text_is_classified_as_safety_gate():
+    from manimgen.validator.scene_ast_gate import format_gate_error, inspect_scene_code
+
+    code = (
+        "from manimlib import *\n\n\nclass S(Scene):\n"
+        "    def construct(self):\n        se = 1\n"
+    )
+    gate = inspect_scene_code(code)
+    assert not gate.ok
+    text = format_gate_error(gate)
+    assert "name 'se' is not allowed" in text
+    assert retry_mod._classify_error(text) == retry_mod.SceneErrorType.SAFETY_GATE
+
+
+def test_gate_rejection_fix_prompt_uses_gate_guidance(monkeypatch, loop, tmp_path):
+    prompts = []
+
+    def _chat(**kw):
+        prompts.append(kw["user"])
+        return _SCENE + "# fixed\n"
+
+    monkeypatch.setattr(retry_mod, "chat", _chat)
+    clean = str(tmp_path / "c.mp4")
+    (ok, _video), _calls = loop([_rejected(_GATE_NAME), _rendered(clean)])
+    assert ok
+    assert len(prompts) == 1
+    prompt = prompts[0]
+    assert f"Error type: {retry_mod.SceneErrorType.SAFETY_GATE}" in prompt
+    assert "static safety check" in prompt
+    assert "sin_t" in prompt and "great_circle" in prompt
+    assert "Simplify the scene logic" not in prompt
+
+
+def test_a_render_timeout_is_not_treated_as_a_crash():
+    from manimgen.validator.retry import SceneErrorType, _classify_error, _fix_guidance
+
+    stderr = (
+        "Traceback ... AttributeError: none\n"
+        "TimeoutExpired: scene rendering exceeded 240 seconds (process tree killed)."
+    )
+    assert _classify_error(stderr) is SceneErrorType.TIMEOUT
+    guidance = _fix_guidance(SceneErrorType.TIMEOUT, stderr)
+    assert "did not crash" in guidance and "duration exactly" in guidance
+
+
+# ---------------------------------------------------------------------------
+# Render budget: measured on 12 Shorts runs (2026-11), most of a 15 to 30 min
+# run went to re-rendering for text-placement defects that never cleared, and
+# attempt 1 always re-rendered the very code the first pass had just rendered.
+# ---------------------------------------------------------------------------
+
+_UNSAFE = Overlap(1.4, "Why does 3-4-5", "", 0.86, "unsafe")
+
+
+def test_placement_only_defects_get_one_fix_then_ship(loop, tmp_path):
+    first, second = str(tmp_path / "a.mp4"), str(tmp_path / "b.mp4")
+    (ok, video), calls = loop(
+        [
+            _rendered(first, (_UNSAFE,)),
+            _rendered(second, (_UNSAFE, _OVERLAP)),
+            _rendered(str(tmp_path / "never.mp4")),
+        ]
+    )
+    assert ok and video == first  # best render: fewer defects
+    assert calls["chat"] == ["visual_fix"]
+    assert calls["render"] == 2
+
+
+def test_placement_fix_limit_is_configurable(loop, tmp_path, monkeypatch):
+    monkeypatch.setattr(retry_mod, "MAX_PLACEMENT_FIX_CALLS", 2)
+    a, b, c = (str(tmp_path / f"{n}.mp4") for n in "abc")
+    (ok, video), calls = loop(
+        [
+            _rendered(a, (_UNSAFE, _OVERLAP)),
+            _rendered(b, (_UNSAFE,)),
+            _rendered(c),
+        ]
+    )
+    assert ok and video == c
+    assert calls["chat"] == ["visual_fix", "visual_fix"]
+
+
+def test_first_render_is_checked_not_rendered_again(loop, tmp_path):
+    # The first pass rejected it, but the retry loop's own checks find nothing
+    # (e.g. a soft issue only the first-pass validator cared about): accept it
+    # without rendering anything.
+    first = tmp_path / "first.mp4"
+    first.write_bytes(b"x")
+    (ok, video), calls = loop([], first_render=str(first))
+    assert ok and video == str(first)
+    assert calls["render"] == 0
+
+
+def test_first_render_with_defects_goes_straight_to_a_fix(loop, tmp_path):
+    import json
+
+    first = tmp_path / "first.mp4"
+    first.write_bytes(b"x")
+    (tmp_path / "first.mp4.overlaps.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "findings": [
+                    {
+                        "time": 1.4,
+                        "a": "Why does 3-4-5",
+                        "b": "",
+                        "fraction": 0.86,
+                        "kind": "unsafe",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    fixed = str(tmp_path / "fixed.mp4")
+    (ok, video), calls = loop([_rendered(fixed)], first_render=str(first))
+    assert ok and video == fixed
+    assert calls["chat"] == ["visual_fix"]
+    assert calls["render"] == 1  # only the fixed code was rendered
+
+
+def test_missing_first_render_is_rendered_normally(loop, tmp_path):
+    clean = str(tmp_path / "clean.mp4")
+    (ok, video), calls = loop(
+        [_rendered(clean)], first_render=str(tmp_path / "gone.mp4")
+    )
+    assert ok and video == clean
+    assert calls["render"] == 1

@@ -963,3 +963,23 @@ class TestOverageGuard:
             json.dumps({"type": "rate_limit_event", "rate_limit_info": "nope"}),
         )
         assert out == "fine"
+
+
+class TestEffortPerRole:
+    def test_default_is_no_effort_flag(self, monkeypatch):
+        monkeypatch.delenv("MANIMGEN_EFFORT_DIRECTOR", raising=False)
+        monkeypatch.setitem(llm_mod._LLM_CONFIG, "efforts", {})
+        assert llm_mod._effort_for("director") is None
+
+    def test_config_then_env_override(self, monkeypatch):
+        monkeypatch.setitem(llm_mod._LLM_CONFIG, "efforts", {"director": "medium"})
+        monkeypatch.delenv("MANIMGEN_EFFORT_DIRECTOR", raising=False)
+        assert llm_mod._effort_for("director") == "medium"
+        assert llm_mod._effort_for("planner") is None
+        monkeypatch.setenv("MANIMGEN_EFFORT_DIRECTOR", "LOW")
+        assert llm_mod._effort_for("director") == "low"
+
+    def test_unknown_level_is_ignored(self, monkeypatch):
+        monkeypatch.setitem(llm_mod._LLM_CONFIG, "efforts", {})
+        monkeypatch.setenv("MANIMGEN_EFFORT_DIRECTOR", "--dangerous")
+        assert llm_mod._effort_for("director") is None

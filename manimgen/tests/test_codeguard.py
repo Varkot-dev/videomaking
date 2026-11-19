@@ -480,11 +480,13 @@ class TestColorGradientIntCast:
         assert label is not None
 
     def test_integer_literal_not_wrapped(self):
-        # integer literal passed as float string - still wraps
+        # An int literal is already valid, so it is left alone. (This test
+        # used to assert int(5): the old regex wrapped everything, which the
+        # test name itself contradicted.)
         code = "color_gradient([RED, BLUE], 5)"
         fixed, label = _fix_color_gradient_int_cast(code)
-        # 5 is not a float, ValueError raised, so wraps with int()
-        assert "int(5)" in fixed
+        assert fixed == code
+        assert label is None
 
     def test_already_wrapped_not_double_wrapped(self):
         # int() is already present — the value should not be double-wrapped

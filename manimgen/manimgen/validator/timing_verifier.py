@@ -28,6 +28,9 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from manimgen.validator.frame_checker import FROZEN_FRAME_MARKER
+from manimgen.validator.manimlib_signatures import _split_source_lines
+
 logger = logging.getLogger(__name__)
 
 
@@ -123,7 +126,7 @@ UNKNOWN = _Unknown()
 Duration = float | _Unknown
 
 
-_FROZEN_FRAME_MARKER = "identical — animation appears frozen"
+_FROZEN_FRAME_MARKER = FROZEN_FRAME_MARKER
 
 
 def join_frozen_with_timing(
@@ -246,6 +249,15 @@ def _get_run_time(call_node: ast.Call) -> Duration:
         if kw.arg == "run_time":
             val = _eval_constant(kw.value)
             return val if val is not None else UNKNOWN
+    # No play-level run_time. An animation carrying its own run_time
+    # (self.play(Write(m, run_time=2.0))) runs for that long, not the 1.0s
+    # default, and several of them combine by max. Not modelled: UNKNOWN.
+    for arg in call_node.args:
+        for sub_node in ast.walk(arg):
+            if isinstance(sub_node, ast.Call) and any(
+                kw.arg == "run_time" for kw in sub_node.keywords
+            ):
+                return UNKNOWN
     return _DEFAULT_PLAY_RUNTIME
 
 
@@ -287,27 +299,73 @@ def _get_wait_duration(call_node: ast.Call) -> Duration:
 
 
 def _get_for_range_count(node: ast.For) -> int | None:
-    """For ``for i in range(N):``, return N.  For range(a, b), return b - a.
+    """Iteration count of ``for i in range(...)`` with constant integer args.
 
-    Returns None if the loop count can't be statically determined.
+    Honours start and step, so ``range(5, 0, -1)`` is 5 and ``range(0, 10, 2)``
+    is 5. Returns None if the count can't be statically determined.
     """
     it = node.iter
     if not (
         isinstance(it, ast.Call)
         and isinstance(it.func, ast.Name)
         and it.func.id == "range"
+        and not it.keywords
+        and 1 <= len(it.args) <= 3
     ):
         return None
-    args = it.args
-    if len(args) == 1:
-        n = _eval_constant(args[0])
-        return int(n) if n is not None else None
-    if len(args) >= 2:
-        start = _eval_constant(args[0])
-        stop = _eval_constant(args[1])
-        if start is not None and stop is not None:
-            return max(0, int(stop) - int(start))
-    return None
+    values: list[int] = []
+    for arg in it.args:
+        val = _eval_constant(arg)
+        if val is None or val != int(val):
+            return None
+        values.append(int(val))
+    try:
+        return len(range(*values))
+    except ValueError:  # range() step of zero
+        return None
+
+
+def _is_timed_call(node: ast.AST) -> bool:
+    return isinstance(node, ast.Call) and (_is_self_play(node) or _is_self_wait(node))
+
+
+def _contains_timed_call(stmts: list[ast.stmt]) -> bool:
+    return any(_is_timed_call(n) for stmt in stmts for n in ast.walk(stmt))
+
+
+def _timed_helper_names(code: str) -> frozenset[str]:
+    """Names of methods (other than construct) that call self.play/self.wait.
+
+    A cue that calls ``self.<helper>()`` spends time the block-level analysis
+    cannot see, so such a cue is treated as UNKNOWN. Empty when ``code`` does
+    not parse.
+    """
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return frozenset()
+    return frozenset(
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name != "construct"
+        and _contains_timed_call(node.body)
+    )
+
+
+def _calls_helper(stmt: ast.stmt, helpers: frozenset[str]) -> bool:
+    if not helpers:
+        return False
+    for node in ast.walk(stmt):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in helpers
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "self"
+        ):
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -315,7 +373,10 @@ def _get_for_range_count(node: ast.For) -> int | None:
 # ---------------------------------------------------------------------------
 
 
-def _time_for_statements(stmts: list[ast.stmt]) -> tuple[float, bool]:
+def _time_for_statements(
+    stmts: list[ast.stmt],
+    helpers: frozenset[str] = frozenset(),
+) -> tuple[float, bool]:
     """Sum the animation time consumed by a list of statements (issue #23).
 
     Returns ``(total_seconds, has_unknown)``. ``total_seconds`` is the sum of
@@ -328,6 +389,9 @@ def _time_for_statements(stmts: list[ast.stmt]) -> tuple[float, bool]:
       - self.wait(X) → X seconds (UNKNOWN if X is dynamic)
       - for i in range(N): body → N × body_time (UNKNOWN if N is undeterminable)
       - if/else → max of the two branches
+      - with: body counted once
+      - while / try / match containing a play or wait → UNKNOWN
+      - a call to ``self.<name>()`` where ``name`` is in ``helpers`` → UNKNOWN
     """
     total = 0.0
     has_unknown = False
@@ -340,15 +404,17 @@ def _time_for_statements(stmts: list[ast.stmt]) -> tuple[float, bool]:
                     has_unknown = True
                 else:
                     total += rt
-            elif _is_self_wait(call):
+                continue
+            if _is_self_wait(call):
                 wt = _get_wait_duration(call)
                 if isinstance(wt, _Unknown):
                     has_unknown = True
                 else:
                     total += wt
-        elif isinstance(stmt, ast.For):
+                continue
+        if isinstance(stmt, ast.For):
             n = _get_for_range_count(stmt)
-            body_time, body_unknown = _time_for_statements(stmt.body)
+            body_time, body_unknown = _time_for_statements(stmt.body, helpers)
             if body_unknown:
                 has_unknown = True
             if n is not None:
@@ -359,15 +425,33 @@ def _time_for_statements(stmts: list[ast.stmt]) -> tuple[float, bool]:
                 # unresolvable. Count one iteration as a lower bound and flag.
                 total += body_time
                 has_unknown = True
+            if _contains_timed_call(stmt.orelse):
+                has_unknown = True
         elif isinstance(stmt, ast.If):
             # Take the max of if/else branches as an estimate.
-            if_time, if_unknown = _time_for_statements(stmt.body)
+            if_time, if_unknown = _time_for_statements(stmt.body, helpers)
             else_time, else_unknown = (
-                _time_for_statements(stmt.orelse) if stmt.orelse else (0.0, False)
+                _time_for_statements(stmt.orelse, helpers)
+                if stmt.orelse
+                else (0.0, False)
             )
             total += max(if_time, else_time)
             if if_unknown or else_unknown:
                 has_unknown = True
+        elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+            body_time, body_unknown = _time_for_statements(stmt.body, helpers)
+            total += body_time
+            has_unknown = has_unknown or body_unknown
+        elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue  # a definition spends no time where it is defined
+        elif isinstance(stmt, (ast.While, ast.Try, ast.Match)) or (
+            hasattr(ast, "TryStar") and isinstance(stmt, ast.TryStar)
+        ):
+            # Iteration count / taken path is not knowable statically.
+            if _contains_timed_call([stmt]) or _calls_helper(stmt, helpers):
+                has_unknown = True
+        elif _calls_helper(stmt, helpers):
+            has_unknown = True
     return total, has_unknown
 
 
@@ -375,37 +459,103 @@ def _time_for_statements(stmts: list[ast.stmt]) -> tuple[float, bool]:
 # Cue boundary detection
 # ---------------------------------------------------------------------------
 
-_CUE_COMMENT_RE = re.compile(r"#\s*CUE\s+(\d+)", re.IGNORECASE)
+# A cue marker is a comment naming the cue: "# CUE 3", and also the decorated
+# forms models write, "# ---------------- CUE 3 — 2.19s ----------------" or
+# "# === CUE 3 ===". Only punctuation and spaces may sit between "#" and "CUE",
+# so prose such as "# see CUE 3 above" is not a marker.
+_CUE_COMMENT_RE = re.compile(r"#[^\w\n]*CUE\s+(\d+)", re.IGNORECASE)
+
+
+def _has_cue_markers(code: str) -> bool:
+    return bool(_CUE_COMMENT_RE.search(code))
+
+
+def _function_line_ranges(code: str) -> list[tuple[int, int]]:
+    """(first_line, last_line), 1-based, of every function in ``code``.
+
+    Empty when ``code`` is not a parseable module (e.g. an indented fragment).
+    """
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return []
+    return [
+        (node.lineno, node.end_lineno or node.lineno)
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+
+
+def _enclosing_function_end(ranges: list[tuple[int, int]], lineno: int) -> int | None:
+    """Last line of the innermost function containing ``lineno``, if any."""
+    best: tuple[int, int] | None = None
+    for start, end in ranges:
+        if start <= lineno <= end and (best is None or start >= best[0]):
+            best = (start, end)
+    return best[1] if best else None
+
+
+def _construct_body_source(code: str) -> str | None:
+    """Source lines of the body of ``construct``, or None if there is none."""
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return None
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "construct"
+            and node.body
+        ):
+            lines = code.splitlines(keepends=True)
+            first = node.body[0].lineno
+            last = node.end_lineno or first
+            return "".join(lines[first - 1 : last])
+    return None
 
 
 def _split_into_cue_blocks(code: str) -> list[tuple[int, str]]:
     """Split code into (cue_index, code_block) pairs using ``# CUE N`` comments.
 
-    Each block contains all code from ``# CUE N`` up to the next ``# CUE`` comment
-    or end of file.  Returns a list of (cue_index, code_text) tuples.
+    Each block contains all code from ``# CUE N`` up to the next ``# CUE``
+    comment, the end of the function the comment sits in (so helper methods
+    defined after ``construct`` are not swallowed by the last cue), or the end
+    of the file. Returns a list of (cue_index, code_text) tuples.
 
     If no CUE comments are found, returns a single block with index 0.
     """
     lines = code.splitlines(keepends=True)
+    ranges = _function_line_ranges(code)
     blocks: list[tuple[int, list[str]]] = []
     current_cue: int | None = None
     current_lines: list[str] = []
+    current_end: int | None = None
 
-    for line in lines:
+    for lineno, line in enumerate(lines, start=1):
         m = _CUE_COMMENT_RE.search(line)
         if m:
             if current_cue is not None:
                 blocks.append((current_cue, current_lines))
             current_cue = int(m.group(1))
             current_lines = [line]
-        else:
-            current_lines.append(line)
+            current_end = _enclosing_function_end(ranges, lineno)
+        elif current_cue is not None:
+            if current_end is not None and lineno > current_end:
+                blocks.append((current_cue, current_lines))
+                current_cue = None
+                current_lines = []
+            else:
+                current_lines.append(line)
 
     if current_cue is not None:
         blocks.append((current_cue, current_lines))
 
     if not blocks:
-        return [(0, code)]
+        # No markers: the only sensible single block is the body of construct()
+        # (a one-cue section). Returning the whole file would time the module's
+        # top level, which is just an import and a class.
+        body = _construct_body_source(code)
+        return [(0, body if body is not None else code)]
 
     return [(idx, "".join(lines_list)) for idx, lines_list in blocks]
 
@@ -452,7 +602,17 @@ def verify_timing(
         }
     """
     warnings: list[str] = []
+    if not _has_cue_markers(code) and len(cue_durations) != 1:
+        # Without markers nothing says which statements belong to which cue.
+        # Scoring the whole file against the first cue's duration produced
+        # nonsense shortfalls and "fixes" that broke the scene.
+        return {
+            "ok": True,
+            "cues": [],
+            "warnings": ["No CUE comments found — timing not verifiable."],
+        }
     cue_blocks = _split_into_cue_blocks(code)
+    helpers = _timed_helper_names(code)
 
     if not cue_blocks:
         return {
@@ -477,7 +637,7 @@ def verify_timing(
             )
             continue
 
-        computed, has_unknown = _time_for_statements(tree.body)
+        computed, has_unknown = _time_for_statements(tree.body, helpers)
         expected = cue_durations[cue_idx]
 
         ct = CueTiming(
@@ -542,23 +702,33 @@ def _strip_phantom_cue_blocks(
     """
     lines = code.splitlines(keepends=True)
     cue_re = _CUE_COMMENT_RE
+    ranges = _function_line_ranges(code)
     out_lines: list[str] = []
     stripped_lines: list[str] = []  # everything we removed — scan for cleanup
     stripping = False
+    strip_end: int | None = None
+    strip_cut: int | None = None  # index in out_lines where the last phantom sat
     removed: list[str] = []
 
-    for line in lines:
+    for lineno, line in enumerate(lines, start=1):
         m = cue_re.search(line)
         if m:
             cue_idx = int(m.group(1))
             if cue_idx >= max_valid_index:
                 stripping = True
+                # Never strip past the function holding the phantom cue: a
+                # helper method defined after construct() is still called by
+                # the valid cues.
+                strip_end = _enclosing_function_end(ranges, lineno)
+                strip_cut = len(out_lines)
                 removed.append(f"CUE {cue_idx}")
                 stripped_lines.append(line)
                 continue
             stripping = False
             out_lines.append(line)
             continue
+        if stripping and strip_end is not None and lineno > strip_end:
+            stripping = False
         if stripping:
             # Lines that are not indented at all belong to the enclosing module,
             # not the cue block — stop stripping at them.
@@ -582,7 +752,12 @@ def _strip_phantom_cue_blocks(
         None,
     )
     if cleanup_line:
-        out_lines.append(cleanup_line)
+        # Put the cleanup where the phantom block was, not at the end of the
+        # file (which may now be a helper method).
+        insert_at = len(out_lines)
+        if strip_cut is not None:
+            insert_at = strip_cut
+        out_lines.insert(insert_at, cleanup_line)
 
     note = [
         f"Stripped phantom {label} (only {max_valid_index} durations provided)"
@@ -595,6 +770,62 @@ _MIN_INSERT_RESIDUAL = _TOLERANCE
 # Only insert a missing wait when the shortfall exceeds the tolerance band.
 # Below tolerance the muxer's pad/trim already covers the drift and inserting a
 # sub-second wait would be churn for no visible benefit.
+
+
+def _parse_block_with_shift(
+    block_code: str,
+) -> tuple[ast.Module, list[ast.stmt], int, int] | None:
+    """Parse a cue block and return ``(tree, top_level_stmts, line_shift, col_shift)``.
+
+    An indented block is parsed inside an ``if True:`` wrapper (see
+    ``_parse_cue_block``); the shifts translate AST positions back to
+    ``block_code`` coordinates and ``top_level_stmts`` are the cue's own
+    statements, not the wrapper.
+    """
+    try:
+        tree = ast.parse(block_code)
+        return tree, tree.body, 0, 0
+    except (SyntaxError, IndentationError, ValueError):
+        pass
+    try:
+        tree = ast.parse(
+            "if True:\n" + "\n".join("    " + line for line in block_code.splitlines())
+        )
+    except (SyntaxError, IndentationError, ValueError):
+        return None
+    wrapper = tree.body[0] if tree.body else None
+    stmts = wrapper.body if isinstance(wrapper, ast.If) else tree.body
+    return tree, stmts, 1, 4
+
+
+def _block_offset(block_code: str, lineno: int, byte_col: int) -> int | None:
+    """Character offset in ``block_code`` of a 1-based line and a UTF-8 BYTE
+    column (what ``ast`` reports). Treating the byte column as a character
+    column misplaces every edit on a line that has non-ASCII text before it.
+    """
+    lines = _split_source_lines(block_code)
+    if lineno < 1 or lineno > len(lines) or byte_col < 0:
+        return None
+    line = lines[lineno - 1]
+    char_col = len(line.encode("utf-8")[:byte_col].decode("utf-8", errors="ignore"))
+    return sum(len(ln) for ln in lines[: lineno - 1]) + char_col
+
+
+def _node_span(
+    block_code: str, node: ast.AST, line_shift: int, col_shift: int
+) -> tuple[int, int] | None:
+    """(start, end) character offsets of ``node`` within ``block_code``."""
+    end_lineno = getattr(node, "end_lineno", None)
+    end_col = getattr(node, "end_col_offset", None)
+    if end_lineno is None or end_col is None:
+        return None
+    start = _block_offset(
+        block_code, node.lineno - line_shift, node.col_offset - col_shift
+    )
+    end = _block_offset(block_code, end_lineno - line_shift, end_col - col_shift)
+    if start is None or end is None or end < start:
+        return None
+    return start, end
 
 
 def _last_meaningful_line(block_code: str) -> tuple[str, str] | None:
@@ -633,20 +864,53 @@ def _insert_missing_wait(
     land the wait in the wrong cue when two cues share byte-identical play text.
     Returns ``(new_code, applied_message_or_None)``.
     """
-    anchor = _last_meaningful_line(block_code)
-    if anchor is None:
-        return fixed_code, None
-    anchor_line, indent = anchor
-
-    # Locate this cue's block in the full code, then find the anchor line only
-    # within that block — never across the whole file (cross-cue contamination).
     block_idx = fixed_code.rfind(block_code)
     if block_idx < 0:
         return fixed_code, None
-    anchor_in_block = block_code.rfind(anchor_line)
-    if anchor_in_block < 0:
-        return fixed_code, None
-    insert_at = block_idx + anchor_in_block + len(anchor_line)
+
+    # Anchor after the last TOP-LEVEL statement of the cue, at that statement's
+    # indent. Anchoring on the last text line put the wait inside a loop body
+    # when the cue ended with a loop, multiplying it by the iteration count.
+    insert_in_block: int | None = None
+    indent = ""
+    parsed = _parse_block_with_shift(block_code)
+    if parsed is not None and parsed[1]:
+        _tree, stmts, line_shift, _col_shift = parsed
+        last = stmts[-1]
+        if isinstance(
+            last,
+            (
+                ast.ClassDef,
+                ast.FunctionDef,
+                ast.AsyncFunctionDef,
+                ast.Import,
+                ast.ImportFrom,
+            ),
+        ):
+            # The block is not a cue body (for example a whole file whose last
+            # statement is the scene class). A wait placed after it would sit
+            # outside construct(), where the safety gate rejects the file.
+            return fixed_code, None
+        block_lines = _split_source_lines(block_code)
+        first_line = last.lineno - line_shift
+        end_line = (last.end_lineno or last.lineno) - line_shift
+        if 1 <= first_line <= end_line <= len(block_lines):
+            first_text = block_lines[first_line - 1]
+            indent = first_text[: len(first_text) - len(first_text.lstrip())]
+            insert_in_block = sum(len(ln) for ln in block_lines[:end_line])
+            # Insert before the line's trailing newline, if any.
+            end_text = block_lines[end_line - 1]
+            insert_in_block -= len(end_text) - len(end_text.rstrip("\r\n"))
+    if insert_in_block is None:
+        anchor = _last_meaningful_line(block_code)
+        if anchor is None:
+            return fixed_code, None
+        anchor_line, indent = anchor
+        anchor_in_block = block_code.rfind(anchor_line)
+        if anchor_in_block < 0:
+            return fixed_code, None
+        insert_in_block = anchor_in_block + len(anchor_line)
+    insert_at = block_idx + insert_in_block
 
     wait_line = f"\n{indent}self.wait({residual:.2f})  # CUE_FILL auto-inserted"
     new_code = fixed_code[:insert_at] + wait_line + fixed_code[insert_at:]
@@ -698,25 +962,10 @@ def _collect_play_run_time_consts(
     A dynamic ``run_time=expr`` contributes no literal (it is UNKNOWN and must
     not be scaled). ``parse_ok`` is False when the block could not be parsed.
     """
-    # A cue block is a slice of construct(), so it is usually indented. Parsing
-    # bare fails on the indent; wrap in ``if True:`` exactly like _parse_cue_block
-    # and record the (line, col) shift so offsets translate back to block_code.
-    line_shift = 0
-    col_shift = 0
-    try:
-        tree = ast.parse(block_code)
-    except (SyntaxError, IndentationError):
-        try:
-            tree = ast.parse(
-                "if True:\n"
-                + "\n".join("    " + line for line in block_code.splitlines())
-            )
-            line_shift = 1  # the synthetic ``if True:`` header line
-            col_shift = 4  # the 4-space re-indent added to every body line
-        except (SyntaxError, IndentationError):
-            return [], False
-
-    line_starts = _block_line_starts(block_code)
+    parsed = _parse_block_with_shift(block_code)
+    if parsed is None:
+        return [], False
+    tree, _stmts, line_shift, col_shift = parsed
     literals: list[_RunTimeLiteral] = []
 
     for node in ast.walk(tree):
@@ -728,19 +977,10 @@ def _collect_play_run_time_consts(
             val = _eval_constant(kw.value)
             if val is None:
                 continue  # dynamic — UNKNOWN, never scale
-            v = kw.value
-            # Translate the value node's wrapped (line, col) back to block_code
-            # coordinates, then to an absolute character offset.
-            # AST lineno is 1-based; line_starts is 0-based ⇒ index lineno-1.
-            start_line = v.lineno - line_shift
-            end_line = (v.end_lineno or v.lineno) - line_shift
-            start_col = v.col_offset - col_shift
-            end_col = (v.end_col_offset or v.col_offset) - col_shift
-            if start_line < 1 or end_line < 1 or end_line > len(line_starts):
+            span = _node_span(block_code, kw.value, line_shift, col_shift)
+            if span is None:
                 continue
-            start = line_starts[start_line - 1] + start_col
-            end = line_starts[end_line - 1] + end_col
-            literals.append(_RunTimeLiteral(start=start, end=end, value=val))
+            literals.append(_RunTimeLiteral(start=span[0], end=span[1], value=val))
 
     # Sort by position so replacement (done in reverse) stays offset-stable.
     literals.sort(key=lambda lit: lit.start)
@@ -786,6 +1026,7 @@ def _try_scale_plays(
     cue_idx: int,
     all_stmts: list[ast.stmt],
     expected: float,
+    helpers: frozenset[str] = frozenset(),
 ) -> tuple[str, str | None]:
     """Scale a cue's self.play(run_time=...) literals so its animations fill the
     narration duration ``expected`` (issue #59).
@@ -807,7 +1048,7 @@ def _try_scale_plays(
       - un-fittable even at the floor → floor every literal + emit a
         planner-issue warning; never drop or mangle content.
     """
-    block_total, block_unknown = _time_for_statements(all_stmts)
+    block_total, block_unknown = _time_for_statements(all_stmts, helpers)
     if block_unknown:
         return fixed_code, None  # UNKNOWN — fall back to wait path / no-op
 
@@ -833,7 +1074,21 @@ def _try_scale_plays(
         # CueTiming.ok so an exactly-1.0s shortfall is fixed, not no-op'd.
         return fixed_code, None
 
-    factor = expected / play_total
+    # Only the literal run_times can be rewritten; a play with no run_time=
+    # keeps its 1.0s default. Measure the scalable share by re-timing the block
+    # with every literal doubled (loop-aware: total = fixed + scalable), then
+    # scale that share alone so the cue lands on ``expected``.
+    doubled_block, _ = _scale_run_times_in_block(block_code, literals, 2.0)
+    doubled_tree = _parse_cue_block(doubled_block)
+    if doubled_tree is None:
+        return fixed_code, None
+    doubled_total, _ = _time_for_statements(doubled_tree.body, helpers)
+    scalable = doubled_total - play_total
+    fixed_share = play_total - scalable
+    if scalable <= 1e-9 or expected - fixed_share <= 0:
+        return fixed_code, None  # nothing scalable can close the gap
+
+    factor = (expected - fixed_share) / scalable
     if _SCALE_NOOP_LO <= factor <= _SCALE_NOOP_HI:
         return fixed_code, None  # already on target — idempotent no-op
     if factor > _MAX_STRETCH_FACTOR:
@@ -858,7 +1113,7 @@ def _try_scale_plays(
     if hit_floor:
         scaled_tree = _parse_cue_block(new_block)
         if scaled_tree is not None:
-            scaled_total, _ = _time_for_statements(scaled_tree.body)
+            scaled_total, _ = _time_for_statements(scaled_tree.body, helpers)
             # "Cannot fit" means the floored animation still overruns the
             # narration itself — compare against ``expected`` directly, not the
             # coarse 1.0s drift tolerance (which would mask a 0.5s overflow on a
@@ -906,6 +1161,8 @@ def auto_fix_timing(
     Returns (fixed_code, list_of_applied_fixes).
     """
     applied: list[str] = []
+    if not _has_cue_markers(code) and len(cue_durations) != 1:
+        return code, applied  # nothing to attribute time to; never guess
     fixed_code, phantom_fixes = _strip_phantom_cue_blocks(code, len(cue_durations))
     applied.extend(phantom_fixes)
 
@@ -913,56 +1170,56 @@ def auto_fix_timing(
     if not cue_blocks:
         return fixed_code, applied
 
-    # Process cue blocks in REVERSE order so that rfind() on the full code
-    # always matches the correct (last remaining) occurrence when two blocks
-    # share the same self.wait() text (e.g. both have self.wait(1.0)).
+    helpers = _timed_helper_names(fixed_code)
+
+    # Process cue blocks in REVERSE order so that rfind(block_code) on the full
+    # code always matches the correct (last remaining unmodified) occurrence.
     for cue_idx, block_code in reversed(cue_blocks):
         if cue_idx >= len(cue_durations):
             continue
 
-        tree = _parse_cue_block(block_code)
-        if tree is None:
+        parsed = _parse_block_with_shift(block_code)
+        if parsed is None:
             continue
-
-        # Find the total animation time excluding the LAST self.wait()
+        tree, top_stmts, line_shift, col_shift = parsed
         all_stmts = tree.body
-        last_wait_line = None
-        last_wait_old_val: Duration | None = None
+        expected = cue_durations[cue_idx]
 
-        # Walk all statements to find the last self.wait()
-        for stmt in ast.walk(tree):
+        # The adjustable wait is the LAST TOP-LEVEL ``self.wait(...)`` statement
+        # of the cue. A wait nested in a loop or branch runs a different number
+        # of times than once, so it is never the one to rewrite.
+        last_wait: ast.Call | None = None
+        for stmt in top_stmts:
             if (
                 isinstance(stmt, ast.Expr)
                 and isinstance(stmt.value, ast.Call)
                 and _is_self_wait(stmt.value)
             ):
-                last_wait_line = stmt.lineno
-                last_wait_old_val = _get_wait_duration(stmt.value)
+                last_wait = stmt.value
+        has_any_wait = any(
+            isinstance(n, ast.Call) and _is_self_wait(n) for n in ast.walk(tree)
+        )
 
-        if last_wait_line is None:
-            # No trailing self.wait() to absorb the gap. This is issue #59's
-            # exact failure mode: a continuous animation whose wall-clock differs
-            # from its narration with no wait to stretch — the case that produced
-            # 262-byte empty cue videos. PRIMARY fix: scale the self.play(
-            # run_time=...) literals so the animation fills D exactly. Scaling is
-            # loop-aware (each literal scaled by the same factor scales its N×
-            # loop contribution) and uses offset-based AST replacement (no regex,
-            # no rfind-of-one-literal — every occurrence is rewritten).
-            expected = cue_durations[cue_idx]
-            scaled_code, scale_msg = _try_scale_plays(
-                fixed_code, block_code, cue_idx, all_stmts, expected
-            )
-            if scale_msg:
-                fixed_code = scaled_code
-                applied.append(scale_msg)
-                continue
+        if last_wait is None:
+            if not has_any_wait:
+                # No self.wait() to absorb the gap. This is issue #59's exact
+                # failure mode: a continuous animation whose wall-clock differs
+                # from its narration with no wait to stretch. PRIMARY fix: scale
+                # the self.play(run_time=...) literals so the animation fills D.
+                scaled_code, scale_msg = _try_scale_plays(
+                    fixed_code, block_code, cue_idx, all_stmts, expected, helpers
+                )
+                if scale_msg:
+                    fixed_code = scaled_code
+                    applied.append(scale_msg)
+                    continue
 
-            # FALLBACK (#22 + #23): scaling did not apply — the block is UNKNOWN
-            # (dynamic run_time/loop count) or zero-play (no plays to scale, e.g.
-            # ambient rotation / pure hold). If the animations fall short of D by
-            # more than tolerance, INSERT a self.wait(residual) at the boundary.
-            # Skip dynamic blocks (residual unknowable) and on-time/overruns.
-            block_total, block_unknown = _time_for_statements(all_stmts)
+            # FALLBACK (#22 + #23): no top-level wait to adjust and scaling did
+            # not apply. If the animations fall short of D by more than
+            # tolerance, INSERT a self.wait(residual) after the cue's last
+            # top-level statement. Skip dynamic blocks (residual unknowable)
+            # and on-time/overruns.
+            block_total, block_unknown = _time_for_statements(all_stmts, helpers)
             if block_unknown:
                 continue
             residual = expected - block_total
@@ -976,61 +1233,59 @@ def auto_fix_timing(
                 applied.append(msg)
             continue
 
-        # If the LAST wait's duration is itself dynamic (UNKNOWN), we cannot
-        # compute a safe replacement — leave it untouched (issue #23). Rewriting
-        # a deliberate dynamic hold to a fabricated constant is exactly the
-        # destructive behaviour we are eliminating.
+        # If the wait's duration is itself dynamic (UNKNOWN), we cannot compute
+        # a safe replacement — leave it untouched (issue #23).
+        last_wait_old_val = _get_wait_duration(last_wait)
         if isinstance(last_wait_old_val, _Unknown):
             continue
 
-        # Compute total time excluding the last wait.
-        full_total, block_unknown = _time_for_statements(all_stmts)
-        total_without_last_wait = full_total - (last_wait_old_val or 0)
-
         # If any OTHER duration in the block is dynamic, the residual is
         # unknowable — adjusting the wait would over- or under-shoot. Skip.
+        full_total, block_unknown = _time_for_statements(all_stmts, helpers)
         if block_unknown:
             continue
-        expected = cue_durations[cue_idx]
+        total_without_last_wait = full_total - last_wait_old_val
         new_wait = max(0.01, expected - total_without_last_wait)
 
-        if abs(new_wait - (last_wait_old_val or 0)) < 0.05:
+        if abs(new_wait - last_wait_old_val) < 0.05:
             continue  # difference is negligible, don't bother
 
-        # Find and replace the last self.wait() in the ORIGINAL code
-        # We search for the pattern in the block and replace it
-        wait_pattern = re.compile(
-            r"self\.wait\(\s*"
-            r"(?:max\(\s*[\d.]+\s*,\s*)?"  # optional max(0.01,
-            r"[^)]*?"  # the inner expression
-            r"(?:\s*\))?"  # optional closing paren of max()
-            r"\s*\)"
+        # Replace exactly the source span of that call, located inside this
+        # cue's block. A text search for "self.wait(1.0)" over the whole file
+        # edited whichever cue happened to contain the same text last, and a
+        # regex could not handle nested parentheses or a wait named in a comment.
+        span = _node_span(block_code, last_wait, line_shift, col_shift)
+        block_idx = fixed_code.rfind(block_code)
+        if span is None or block_idx < 0:
+            continue
+        fixed_code = (
+            fixed_code[: block_idx + span[0]]
+            + f"self.wait({new_wait:.2f})"
+            + fixed_code[block_idx + span[1] :]
+        )
+        applied.append(
+            f"CUE {cue_idx}: self.wait() adjusted from "
+            f"{last_wait_old_val:.2f}s to {new_wait:.2f}s "
+            f"(expected total {expected:.2f}s, anims={total_without_last_wait:.2f}s)"
         )
 
-        # Find all matches in the block_code, replace the last one
-        matches = list(wait_pattern.finditer(block_code))
-        if not matches:
-            continue
-
-        last_match = matches[-1]
-        original_wait_text = last_match.group(0)
-        new_wait_text = f"self.wait({new_wait:.2f})"
-
-        # Replace in the full code (use the exact text match)
-        if original_wait_text in fixed_code:
-            # Only replace the LAST occurrence in case the same pattern appears elsewhere
-            idx = fixed_code.rfind(original_wait_text)
-            if idx >= 0:
-                fixed_code = (
-                    fixed_code[:idx]
-                    + new_wait_text
-                    + fixed_code[idx + len(original_wait_text) :]
+    # Never hand back code the edits broke: a file that no longer compiles is
+    # worse than a timing mismatch.
+    if applied and fixed_code != code:
+        try:
+            ast.parse(code)
+        except (SyntaxError, ValueError):
+            pass  # input was already broken; nothing to protect
+        else:
+            try:
+                ast.parse(fixed_code)
+            except (SyntaxError, ValueError):
+                logger.warning(
+                    "[timing_verifier] auto-fix produced code that does not "
+                    "parse; discarding %d edit(s)",
+                    len(applied),
                 )
-                applied.append(
-                    f"CUE {cue_idx}: self.wait() adjusted from "
-                    f"{last_wait_old_val:.2f}s to {new_wait:.2f}s "
-                    f"(expected total {expected:.2f}s, anims={total_without_last_wait:.2f}s)"
-                )
+                return code, []
 
     if applied:
         for fix in applied:

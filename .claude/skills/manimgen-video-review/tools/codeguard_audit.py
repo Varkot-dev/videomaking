@@ -30,10 +30,13 @@ import re
 import sys
 
 
-_DEFAULT_SCENES_DIR = (
-    "/Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/manimgen/output/scenes"
+# Derived from this file's location (<repo>/.claude/skills/manimgen-video-review/tools)
+# so the tools work wherever the repository is checked out, on any OS.
+_REPO_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..")
 )
-_PACKAGE_ROOT = "/Users/varshithkotagiri/Projects/3Blue1Brown/manimgen"
+_PACKAGE_ROOT = os.path.join(_REPO_ROOT, "manimgen")
+_DEFAULT_SCENES_DIR = os.path.join(_PACKAGE_ROOT, "manimgen", "output", "scenes")
 
 _SECTION_RE = re.compile(r"section_(\d+)\.py$")
 

@@ -2,9 +2,11 @@ import enum
 import logging
 import os
 import re
+import threading
 
 from manimgen import paths
 from manimgen.llm import chat
+from manimgen.probes import overlap_report
 from manimgen.probes.overlap_report import overlap_issues
 from manimgen.utils import strip_fencing
 from manimgen.validator.codeguard import (
@@ -13,7 +15,7 @@ from manimgen.validator.codeguard import (
 )
 from manimgen.validator.layout_checker import check_layout
 from manimgen.validator.render_command import run_manimgl
-from manimgen.validator.scene_ast_gate import inspect_scene_code
+from manimgen.validator.scene_ast_gate import GATE_ERROR_MARKER, inspect_scene_code
 from manimgen.validator.timing_verifier import auto_fix_timing, verify_timing
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,12 @@ MAX_VISUAL_LLM_FIX_CALLS = int(
     os.environ.get("MANIMGEN_MAX_VISUAL_LLM_CALLS", str(MAX_LLM_FIX_CALLS))
 )
 
+# MANIMGEN_MAX_PLACEMENT_FIXES (MAX_PLACEMENT_FIX_CALLS)
+#     PER-SECTION cap on visual fixes requested for text-placement defects
+#     (render probe: overlap, off screen, outside the Shorts safe area). Once
+#     used, a render whose only defects are placement defects is shipped.
+MAX_PLACEMENT_FIX_CALLS = int(os.environ.get("MANIMGEN_MAX_PLACEMENT_FIXES", "1"))
+
 _DEFAULT_MAX_TOTAL_LLM_CALLS = 200
 MAX_TOTAL_LLM_CALLS = int(
     os.environ.get("MANIMGEN_MAX_TOTAL_LLM_CALLS", str(_DEFAULT_MAX_TOTAL_LLM_CALLS))
@@ -67,6 +75,8 @@ MAX_TOTAL_LLM_CALLS = int(
 # per-RUN and must survive across the many per-section retry_scene() calls that
 # the per-category counters deliberately do not.
 _run_llm_calls_used = 0
+# Sections run in parallel threads, so the check-and-charge must be atomic.
+_run_budget_lock = threading.Lock()
 
 
 def reset_run_budget() -> None:
@@ -102,7 +112,11 @@ def _consume_run_budget(category: str) -> bool:
     observable rather than silent.
     """
     global _run_llm_calls_used
-    if _run_llm_calls_used >= MAX_TOTAL_LLM_CALLS:
+    with _run_budget_lock:
+        exhausted = _run_llm_calls_used >= MAX_TOTAL_LLM_CALLS
+        if not exhausted:
+            _run_llm_calls_used += 1
+    if exhausted:
         logger.warning(
             "[retry] GLOBAL LLM budget exhausted: %d/%d calls used this run "
             "(MANIMGEN_MAX_TOTAL_LLM_CALLS) — refusing %s fix call",
@@ -111,7 +125,6 @@ def _consume_run_budget(category: str) -> bool:
             category,
         )
         return False
-    _run_llm_calls_used += 1
     logger.info(
         "[retry] Global LLM budget: %d/%d calls used this run (charged: %s fix)",
         _run_llm_calls_used,
@@ -123,7 +136,6 @@ def _consume_run_budget(category: str) -> bool:
 
 RETRY_ERROR_SIGNATURE_CHARS = 500
 RETRY_PROMPT_STDERR_CHARS = 3000
-RETRY_PROMPT_CODE_CHARS = 7000
 
 
 class SceneErrorType(str, enum.Enum):
@@ -140,12 +152,28 @@ class SceneErrorType(str, enum.Enum):
     TYPE = "type"
     RUNTIME = "runtime"
     TIMING = "timing"
+    SAFETY_GATE = "safety_gate"
+    TIMEOUT = "timeout"
+
+
+_GATE_REJECTION_RE = re.compile(rf"^{re.escape(GATE_ERROR_MARKER)}:", re.MULTILINE)
 
 
 def _classify_error(stderr: str) -> SceneErrorType:
+    # A safety-gate rejection can quote words like SyntaxError in its findings,
+    # so it must be recognised before any keyword-based branch. The marker is
+    # matched at the start of a line: a traceback that merely quotes it (in a
+    # comment or string of the scene source) is still an ordinary crash.
+    if _GATE_REJECTION_RE.search(stderr):
+        return SceneErrorType.SAFETY_GATE
     # Check precheck-specific errors BEFORE generic TypeError/AttributeError —
     # precheck output contains the word "TypeError" in its explanation text,
     # which would otherwise cause a false match on the generic TypeError branch.
+    # A render killed for running too long is not a crash: the code may be
+    # correct and only too expensive per frame. "Simplify the scene logic"
+    # guidance made the model rewrite working scenes.
+    if "TimeoutExpired: scene rendering exceeded" in stderr:
+        return SceneErrorType.TIMEOUT
     if (
         "Precheck failed" in stderr
         and "VGroup" in stderr
@@ -178,6 +206,27 @@ _FIX_GUIDANCE: dict[SceneErrorType, str] = {
     SceneErrorType.ATTRIBUTE: "Fix the attribute error. Check the correct ManimGL method name and signature.",
     SceneErrorType.TYPE: "Fix the type error. Check argument types and counts for the method.",
     SceneErrorType.RUNTIME: "Simplify the scene logic. Reduce animations, check object creation order.",
+    SceneErrorType.SAFETY_GATE: (
+        "The scene was rejected BEFORE rendering by a static safety check, "
+        "not by a crash. Change ONLY the lines/constructs listed in the error "
+        "and leave every other line (fonts, kwargs, animations, timing) "
+        "exactly as it is. For `name 'X' is not allowed` where X is a local "
+        "variable or helper function name, rename that identifier everywhere "
+        "to a descriptive name (e.g. se -> sin_t, gc -> great_circle). For "
+        "`disallowed top-level ...`, move or delete the statement so only "
+        "imports, constants and the Scene class exist at module level. Do not "
+        "add imports beyond `from manimlib import *`, numpy and math."
+    ),
+    SceneErrorType.TIMEOUT: (
+        "The scene did not crash: it was stopped because it took too long to "
+        "render. Keep the content, the cue structure and every cue's total "
+        "duration exactly as they are. Make each frame cheaper to draw: fewer "
+        "mobjects on screen at once (a 5x5 grid of tiles as one NumberPlane or "
+        "a few Lines rather than 25 Squares), no updater or always_redraw that "
+        "rebuilds a large group every frame, no long LaggedStart over dozens "
+        "of objects, and remove objects that are no longer visible with "
+        "self.remove instead of fading them to zero opacity."
+    ),
     SceneErrorType.TIMING: (
         "Fix the animation timing. Each CUE block must have animations + self.wait() that "
         "sum exactly to the cue duration. The most common bug: loop timing — subtract the "
@@ -280,11 +329,17 @@ def retry_scene(
     class_name: str,
     scene_path: str,
     cue_durations: list[float] | None = None,
+    first_render: str | None = None,
 ) -> tuple[bool, str | None]:
     """
     Retry generating and running a scene up to MAX_RETRIES times.
     Each retry sends the original code + error back to the LLM for a fix.
     Returns (success, video_path).
+
+    ``first_render`` is a video the caller already rendered from
+    ``original_code`` and rejected for visual defects. Attempt 1 checks that
+    video instead of rendering the same code a second time, as long as the
+    timing gate leaves the code unchanged.
     """
     code = original_code
     logs_dir = paths.logs_dir()
@@ -336,13 +391,39 @@ def retry_scene(
     # started (precheck or safety gate) and a crash a token-free local fix
     # repairs are re-run without using one up, so the LLM fixes that follow
     # still get rendered. Bounded by free_steps_left so the loop always ends.
+    reusable_render = (
+        first_render
+        if first_render and code == original_code and os.path.isfile(first_render)
+        else None
+    )
+    # Text-placement defects (overlap, off screen, outside the Shorts safe
+    # area) rarely clear with more vision fixes: measured on 12 Shorts runs,
+    # 10 of 11 still had them after three attempts, and each attempt is a full
+    # re-render. Allow MAX_PLACEMENT_FIX_CALLS fixes for them, then ship.
+    placement_fixes_used = 0
+
     attempt = 0
     step = 0
     free_steps_left = MAX_RETRIES
     while attempt < MAX_RETRIES:
         attempt += 1
         step += 1
-        result = _run_and_capture(scene_path, class_name)
+        if reusable_render:
+            result = {
+                "success": True,
+                "video_path": reusable_render,
+                "stderr": "",
+                "overlaps": tuple(
+                    overlap_report.load_for_video(reusable_render).overlaps
+                ),
+            }
+            reusable_render = None
+            print(
+                f"[retry] Attempt {attempt}/{MAX_RETRIES} reuses the first render "
+                "(same code) instead of rendering it again."
+            )
+        else:
+            result = _run_and_capture(scene_path, class_name)
         if result["success"]:
             from manimgen.validator.frame_checker import check_frames
             from manimgen.validator.timing_verifier import (
@@ -389,7 +470,7 @@ def retry_scene(
             if overlaps:
                 print(
                     f"[retry] Attempt {attempt}/{MAX_RETRIES} has "
-                    f"{len(overlaps)} text overlap(s) (render probe)."
+                    f"{len(overlaps)} text placement defect(s) (render probe)."
                 )
                 combined_issues.extend(overlap_issues(overlaps))
 
@@ -469,6 +550,15 @@ def retry_scene(
                 )
                 return _ship_best(result["video_path"])
 
+            placement_only = bool(overlaps) and len(combined_issues) == len(overlaps)
+            if placement_only and placement_fixes_used >= MAX_PLACEMENT_FIX_CALLS:
+                print(
+                    "[retry] Only text-placement defects remain and the placement "
+                    f"fix limit ({MAX_PLACEMENT_FIX_CALLS}) is used — accepting "
+                    "the best render instead of rendering again."
+                )
+                return _ship_best(result["video_path"])
+
             # Dedup: if we already paid for a vision call on this exact set of
             # defects and they came back unchanged, the model has nothing new
             # to offer. Mirrors the error path's seen_error_signatures.
@@ -495,6 +585,8 @@ def retry_scene(
                 code, "\n".join(combined_issues), system_prompt, defective_frames
             )
             section_visual_llm_calls_used += 1
+            if overlaps:
+                placement_fixes_used += 1
             seen_visual_signatures.add(visual_signature)
             with open(scene_path, "w", encoding="utf-8") as f:
                 f.write(code)
@@ -503,7 +595,9 @@ def retry_scene(
             with open(scene_path, encoding="utf-8") as f:
                 code = f.read()
             if _discard_unsafe_fix(scene_path, code, previous_code, "visual"):
-                return True, best_video_path or result["video_path"]
+                # Ship through _ship_best so the defects this render is known
+                # to have are recorded; a bare return reported it as clean.
+                return _ship_best(result["video_path"])
             # Timing pass — catch timing bugs in the LLM's visual fix
             if cue_durations:
                 code, tw = apply_timing_gate(code, scene_path, cue_durations)
@@ -577,7 +671,9 @@ def retry_scene(
         prompt_stderr = _truncate_for_prompt(
             result["stderr"], RETRY_PROMPT_STDERR_CHARS
         )
-        prompt_code = _truncate_for_prompt(code, RETRY_PROMPT_CODE_CHARS)
+        # The model's reply replaces the whole file, so it must see the whole
+        # file: a scene with its middle cut out comes back with cues missing.
+        prompt_code = code
         timing_context = ""
         if pending_timing_warnings:
             timing_context = (
@@ -745,7 +841,9 @@ def _request_visual_fix(
     """Ask the LLM to fix code based on structured visual feedback and defective frames."""
     from manimgen.utils import load_reference_frames
 
-    prompt_code = _truncate_for_prompt(code, RETRY_PROMPT_CODE_CHARS)
+    # The model's reply replaces the whole file, so it must see the whole
+    # file: a scene with its middle cut out comes back with cues missing.
+    prompt_code = code
     ref_frames = load_reference_frames()
 
     fixed = chat(

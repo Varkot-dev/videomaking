@@ -132,6 +132,9 @@ class TestUsageLimitStop:
         ids=["plan_guard", "claude_usage_limit"],
     )
     def test_stops_cleanly_with_exit_4(self, fakes, monkeypatch, capsys, exc):
+        # One worker: section 1 finishes, section 2 stops the run, section 3
+        # never starts. (The parallel case is covered separately below.)
+        monkeypatch.setenv("MANIMGEN_PARALLEL_SECTIONS", "1")
         started = _director_raises_for(fakes, monkeypatch, "section_02", exc)
         rc = _main(fakes, monkeypatch, THREE, "failures")
         assert rc == 4
@@ -160,7 +163,58 @@ class TestUsageLimitStop:
         assert f"around {when} local time" in capsys.readouterr().out
         assert _manifest(fakes)["next_steps"][0].count(when) == 1
 
+    def test_stop_skips_sections_that_have_not_started_in_parallel(
+        self, fakes, monkeypatch
+    ):
+        """With two workers, section 3 is queued behind sections 1 and 2.
+        Section 2 raises the usage stop only once section 1 is running, and
+        section 1 is held until the stop flag is actually set, so section 3 can
+        only be picked up after the flag is up."""
+        import sys
+        import threading
+
+        monkeypatch.setenv("MANIMGEN_PARALLEL_SECTIONS", "2")
+        section_1_running = threading.Event()
+        stop_flags = []
+
+        class RecordingEvent(threading.Event):
+            def __init__(self):
+                super().__init__()
+                # Thread objects build Events too; keep only the run's own flag.
+                if sys._getframe(1).f_globals.get("__name__") == cli.__name__:
+                    stop_flags.append(self)
+
+        monkeypatch.setattr(cli.threading, "Event", RecordingEvent)
+
+        real = fakes._generate_scenes
+        started = []
+        waited = []
+
+        def gen(section, cue_durations=None, overview=None):
+            started.append(section["id"])
+            if section["id"] == "section_02":
+                if not section_1_running.wait(timeout=30):
+                    pytest.fail("section 1 never started within 30s")
+                raise PaidApiBlockedError("plan is at 95% of its five_hour allowance")
+            if section["id"] == "section_01" and not waited:
+                waited.append(True)
+                section_1_running.set()
+                assert len(stop_flags) == 1, "expected exactly one stop flag"
+                if not stop_flags[0].wait(timeout=30):
+                    pytest.fail("usage stop flag was never set within 30s")
+            return real(section, cue_durations, overview)
+
+        monkeypatch.setattr(cli, "generate_scenes", gen)
+        rc = _main(fakes, monkeypatch, THREE, "failures")
+        assert rc == 4
+        assert "section_03" not in started, "section 3 must not start"
+        assert fakes.assembled == [], "a stopped run must not assemble"
+        m = _manifest(fakes)
+        assert m["result"] == "usage_limit"
+        assert [s["status"] for s in m["sections"]] == ["ok", "errored", "not_run"]
+
     def test_resume_after_the_stop_reuses_finished_sections(self, fakes, monkeypatch):
+        monkeypatch.setenv("MANIMGEN_PARALLEL_SECTIONS", "1")
         _director_raises_for(
             fakes, monkeypatch, "section_02", PaidApiBlockedError("limit")
         )

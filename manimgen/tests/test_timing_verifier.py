@@ -1066,3 +1066,92 @@ class TestRunTimeScalingPreservesStructure:
         assert applied
         assert verify_timing(fixed, [10.0])["ok"]
         ast.parse(fixed)
+
+
+# -----------------------------------------------------------------------
+# Banner-style cue headers and module-scope insertion guard
+# -----------------------------------------------------------------------
+
+_BANNER_SCENE = (
+    "from manimlib import *\n\n\n"
+    "class BannerScene(Scene):\n"
+    "    def construct(self):\n"
+    "        # ---------- CUE 0 — 2.00s ----------\n"
+    "        a = Text('a')\n"
+    "        self.play(Write(a), run_time=1.0)\n"
+    "\n"
+    "        # ---------- CUE 1 — 4.63s : hinge triangle, tracker_label ----------\n"
+    "        b = Text('b')\n"
+    "        self.play(Write(b), run_time=1.0)\n"
+    "\n"
+    "        # ================ CUE 2 — 3.00s ================\n"
+    "        self.play(FadeOut(a), run_time=1.0)\n"
+    "        self.wait(2.0)"
+)
+
+
+class TestCueHeaderRecognition:
+    @pytest.mark.parametrize(
+        "header",
+        [
+            "# CUE 3",
+            "# CUE 3 — 2.19s",
+            "# ---------------- CUE 3 — 6.60s ----------------",
+            "# ===== CUE 3 =====",
+            "# *** CUE 3 ***",
+            "#~~ CUE 3",
+            "# ── CUE 3 ──",
+            "# ━━━ CUE 3 — 2.19s ━━━",
+            "# [CUE 3]",
+            "# >>> CUE 3",
+        ],
+    )
+    def test_header_variants_are_boundaries(self, header):
+        code = f"class S(Scene):\n    def construct(self):\n        {header}\n        self.wait(1)\n"
+        assert [i for i, _ in _split_into_cue_blocks(code)] == [3]
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "self.wait(1.0)  # CUE_FILL auto-inserted",
+            "# see CUE 2 above",
+            "# the CUE comment",
+            "# CUES 2",
+            "# ── see CUE 2 ──",
+        ],
+    )
+    def test_non_headers_are_not_boundaries(self, line):
+        code = f"class S(Scene):\n    def construct(self):\n        {line}\n"
+        assert [i for i, _ in _split_into_cue_blocks(code)] == [0]
+        assert len(_split_into_cue_blocks(code)) == 1
+
+    def test_banner_scene_splits_into_three_blocks(self):
+        blocks = _split_into_cue_blocks(_BANNER_SCENE)
+        assert [i for i, _ in blocks] == [0, 1, 2]
+
+
+class TestBannerSceneAutoFix:
+    def test_auto_fix_stays_inside_construct_and_passes_gate(self):
+        from manimgen.validator.scene_ast_gate import inspect_scene_code
+
+        fixed, _ = auto_fix_timing(_BANNER_SCENE, [2.0, 4.63, 3.0])
+        tree = ast.parse(fixed)
+        top_level_exprs = [n for n in tree.body if isinstance(n, ast.Expr)]
+        assert top_level_exprs == []
+        assert not any(ln.startswith("self.wait") for ln in fixed.splitlines())
+        assert "self.wait(" in fixed
+        assert inspect_scene_code(fixed).ok
+
+    def test_whole_file_block_never_gets_module_level_wait(self):
+        # An undecorated, unrecognised header collapses the file to one block;
+        # the fix must skip rather than append a wait at column 0.
+        code = (
+            "from manimlib import *\n\n\n"
+            "class S(Scene):\n"
+            "    def construct(self):\n"
+            "        # no header here\n"
+            "        self.play(Write(Text('a')), run_time=1.0)"
+        )
+        fixed, _ = auto_fix_timing(code, [6.0])
+        ast.parse(fixed)
+        assert not any(ln.startswith("self.wait") for ln in fixed.splitlines())

@@ -22,6 +22,35 @@ def _isolate_evidence_log(tmp_path, monkeypatch):
     monkeypatch.setenv("MANIMGEN_EVIDENCE_DIR", str(tmp_path / "evidence"))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_logs_dir(tmp_path, monkeypatch):
+    """Send render and retry logs to this test's tmp_path.
+
+    Tests that drive the runner or the retry loop used to write attempt logs
+    and scene copies into the real output/logs/ folder of the checkout.
+    """
+    from manimgen import paths
+
+    monkeypatch.setitem(paths._PATHS, "logs", str(tmp_path / "logs"))
+
+
+@pytest.fixture(autouse=True)
+def _reset_video_format():
+    """The output format is process-wide state; every test starts in landscape."""
+    from manimgen import paths
+
+    from manimgen.planner import lesson_planner
+
+    def reset():
+        paths.set_video_format("landscape")
+        paths.set_draft(False)
+        lesson_planner.set_fast(False)
+
+    reset()
+    yield
+    reset()
+
+
 # ---------------------------------------------------------------------------
 # Network guard
 # ---------------------------------------------------------------------------

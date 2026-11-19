@@ -412,6 +412,10 @@ manimgen "dynamic programming"
 # PDF mode, from lecture notes or papers
 manimgen --pdf lecture.pdf
 
+# Quicker runs: --fast skips the research and critic LLM passes,
+# --draft renders at 720p (540x960 for a --short). Use both while iterating.
+manimgen "binary search" --fast --draft
+
 # Resume a previous run from cached plan
 manimgen --resume
 
@@ -436,6 +440,28 @@ On Windows PowerShell, set the variables with `$env:MANIMGEN_MAX_RETRY_LLM_CALLS
 
 Output: `manimgen/output/videos/<title>.mp4`, where the name is the plan's title in lower case with spaces as underscores.
 
+### Vertical shorts (`--short`)
+
+`--short` makes one vertical 1080x1920 video for YouTube Shorts: one idea, 30 to 60 seconds, one section.
+
+```bash
+manimgen "why 3-4-5 is a right triangle" --short
+
+# Pick the structure, and give your own angle: the script is built around it
+manimgen "limits" --short --format misconception \
+  --confused "I thought a limit was just plugging the number in" \
+  --clicked "it is about what the function approaches, not what it equals"
+```
+
+- `--format` is one of `puzzle` (pose it and leave it open; the default), `misconception` (break a wrong belief), `proof` (one visual argument) or `worked` (one worked example). Rotate them across uploads.
+- `--confused` and `--clicked` are your own words about what tripped you up and what made it click. They become the hook and the reveal.
+- Copy `manimgen/voice_profile.example.md`, drop `.example` from the copy's name, and describe how you talk; the planner reads it so the script sounds like you. Your copy is git-ignored.
+- The frame is 4.5 units wide and 8 tall. Readable content stays inside x -2.0 to 1.4 and y -2.0 to 2.8, the area the Shorts buttons and caption leave clear (third-party measurements; upload an unlisted test to confirm on your phone).
+- `manimgen --resume` keeps the short format of the cached plan.
+- Before posting, use the `manimgen-shorts-publish` skill: it runs the review checklist, checks the upload is not a near-copy of recent ones, and writes the title and description.
+
+What is not built yet: recording your own narration (the voice is still the configured TTS voice), an automatic safe-zone check on rendered frames, burned-in captions, and music.
+
 ### Environment variables
 
 `manimgen --help` lists the command line flags. Everything else is configured in
@@ -449,15 +475,18 @@ shell, or in a git-ignored `.env` file in `manimgen/`):
 | `MANIMGEN_ALLOW_PAID_API` | `1` allows the per-token providers (and calls Claude Code makes with an API key) | blocked |
 | `MANIMGEN_MAX_PLAN_UTILIZATION` | Stop before a Claude plan window passes this share (0.01 to 1) when overage could bill | `0.90` |
 | `MANIMGEN_MODEL_<ROLE>` | Model for one role, for example `MANIMGEN_MODEL_DIRECTOR=opus` | `llm.models` in `config.yaml`, then the provider default |
+| `MANIMGEN_EFFORT_<ROLE>` | Thinking effort for one role on `claude_cli` (`low`, `medium`, `high`, `xhigh`, `max`); the role is upper case, as for `MANIMGEN_MODEL_<ROLE>` | `llm.efforts` in `config.yaml` (the director runs on `low`) |
 | `MANIMGEN_CONFIG` | Path of another `config.yaml` | the one in `manimgen/` |
 | `MANIMGEN_MAX_RETRY_LLM_CALLS` | Seeds the two per-section repair budgets below | `rendering.max_retries` |
 | `MANIMGEN_MAX_ERROR_LLM_CALLS`, `MANIMGEN_MAX_VISUAL_LLM_CALLS` | Per-section caps on error-fix and visual-fix LLM calls | the value above |
 | `MANIMGEN_MAX_TOTAL_LLM_CALLS` | Per-run ceiling on repair LLM calls across all sections | `200` |
-| `MANIMGEN_RENDER_TIMEOUT_2D`, `MANIMGEN_RENDER_TIMEOUT_3D`, `MANIMGEN_RENDER_TIMEOUT_FALLBACK` | Seconds a render may run before its process tree is killed | `rendering.render_timeout_*` |
+| `MANIMGEN_MAX_PLACEMENT_FIXES` | Per-section visual fixes for text-placement defects only (text over text, off screen, outside the Shorts safe area); after that the best render ships instead of rendering again | `1` |
+| `MANIMGEN_RENDER_TIMEOUT_2D`, `MANIMGEN_RENDER_TIMEOUT_3D`, `MANIMGEN_RENDER_TIMEOUT_FALLBACK` | Seconds a render may run before its process tree is killed. Without the variable, a long scene gets more than the configured value (60 s plus 10 s per second of video) so a slow machine does not kill a working render | `rendering.render_timeout_*` |
 | `MANIMGEN_FREEZE_BLOCK_THRESHOLD` | Seconds of dead screen at the end of a cue that block a render | `2.5` |
 | `MANIMGEN_KWARG_ENFORCE` | `1` strips constructor keyword arguments proven invalid | off (log only) |
 | `MANIMGEN_UNKNOWN_SYMBOLS` | `report` logs unknown ManimGL names instead of blocking the render | blocking |
 | `MANIMGEN_OVERLAP_PROBE` | `0` turns off the text overlap probe | on |
+| `MANIMGEN_SAFE_NUDGE` | `0` stops a short's render from moving new text that sits up to 0.5 units outside the safe area back inside before it is drawn | on |
 | `MANIMGEN_FIRST_PASS_LAYOUT` | `1` runs the LLM vision layout check on the first render too | off |
 | `MANIMGEN_RENDER_ENV_EXTRA` | Comma-separated extra variable names to pass to the render child | none |
 | `MANIMGEN_EVIDENCE_LOG`, `MANIMGEN_EVIDENCE_DIR` | `0` disables the evidence log; folder it is written to | on, `output/logs` (relative to where you run) |

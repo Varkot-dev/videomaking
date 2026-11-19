@@ -203,6 +203,7 @@ _OLD_RENDERING = {
     "resolution": "1920x1080",
     "fps": 60,
     "max_retries": 3,
+    "parallel_sections": 3,
     "render_timeout_2d": 240.0,
     "render_timeout_3d": 360.0,
     "render_timeout_fallback": 180.0,
@@ -215,6 +216,8 @@ _OLD_LLM = {
     "claude_cli_model": "sonnet",
     "claude_cli_path": "claude",
     "models": {},
+    # Director on low effort: measured, see the comment in config.yaml.
+    "efforts": {"director": "low"},
     "ollama_model": "llama3.1",
     "ollama_base_url": "http://localhost:11434",
     "ollama_num_ctx": 32768,

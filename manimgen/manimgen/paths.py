@@ -11,7 +11,7 @@ from manimgen import config
 _RENDER_DEFAULTS = config.DEFAULTS["rendering"]
 
 
-def _load() -> tuple[dict, dict]:
+def _load() -> tuple[dict, dict, dict]:
     """Output folders (absolute, anchored at config.yaml) and render settings."""
     cfg = config.load()
     out = cfg["output"]
@@ -24,10 +24,10 @@ def _load() -> tuple[dict, dict]:
         "exports": out["exports_dir"],
         "plan": out["plan_cache"],
     }
-    return paths, dict(cfg["rendering"])
+    return paths, dict(cfg["rendering"]), dict(cfg["shorts"])
 
 
-_PATHS, _RENDERING = _load()
+_PATHS, _RENDERING, _SHORTS = _load()
 
 
 def scenes_dir() -> str:
@@ -63,24 +63,32 @@ def plan_cache() -> str:
 # ---------------------------------------------------------------------------
 
 
-# manimgl accepts exactly these quality flags (`manimgl --help`): -l is 480p,
-# -m is 720p, --hd is 1080p, --uhd is 4K. The configured name is mapped to one
-# of them; building "--" + name produced invalid flags such as "--l".
-_QUALITY_FLAGS = {
-    "l": "-l",
-    "low": "-l",
-    "m": "-m",
-    "medium": "-m",
-    "hd": "--hd",
-    "high": "--hd",
-    "uhd": "--uhd",
-    "4k": "--uhd",
-}
+# The one table of quality names lives in config.py, which also validates the
+# configured value when config.yaml is loaded.
+_QUALITY_FLAGS = config.RENDER_QUALITY_FLAGS
+
+
+# Draft mode (cli --draft): render small for a quick look. Landscape drops to
+# 720p, a short to 540x960. Everything downstream follows render_resolution().
+_DRAFT_LANDSCAPE = ("m", "1280x720")
+_DRAFT_SHORT_RESOLUTION = "540x960"
+_draft = False
+
+
+def set_draft(enabled: bool) -> None:
+    global _draft
+    _draft = bool(enabled)
+
+
+def is_draft() -> bool:
+    return _draft
 
 
 def render_quality_flag() -> str:
     """Return the manimgl CLI flag for the configured quality, e.g. '--hd'."""
     q = str(_RENDERING["quality"]).strip().lower()
+    if _draft:
+        q = _DRAFT_LANDSCAPE[0]
     try:
         return _QUALITY_FLAGS[q]
     except KeyError:
@@ -111,9 +119,66 @@ def render_timeout(kind: str) -> float:
     return value if value > 0 else float(_RENDER_DEFAULTS[key])
 
 
+# Output formats. "landscape" is the configured long-form video; "short" is a
+# vertical 9:16 video for YouTube Shorts. The format is chosen once per run
+# (cli --short, or the plan being resumed) before anything renders.
+SHORT_RESOLUTION = "1080x1920"
+_VIDEO_FORMATS = ("landscape", "short")
+_video_format = "landscape"
+
+
+def set_video_format(fmt: str) -> None:
+    """Select the output format for this run ("landscape" or "short")."""
+    global _video_format
+    if fmt not in _VIDEO_FORMATS:
+        raise ValueError(f"unknown video format {fmt!r}; use one of {_VIDEO_FORMATS}")
+    _video_format = fmt
+
+
+def video_format() -> str:
+    return _video_format
+
+
+def is_short() -> bool:
+    return _video_format == "short"
+
+
 def render_resolution() -> str:
-    """Return resolution string, e.g. '1920x1080'."""
-    return _RENDERING["resolution"]
+    """Return resolution string, e.g. '1920x1080' (1080x1920 for a short)."""
+    if is_short():
+        return _DRAFT_SHORT_RESOLUTION if _draft else SHORT_RESOLUTION
+    return _DRAFT_LANDSCAPE[1] if _draft else _RENDERING["resolution"]
+
+
+def render_size_flags() -> list[str]:
+    """manimgl flags that set the frame size.
+
+    A short passes an explicit ``-r 1080x1920``: manimgl derives the frame
+    (4.5 x 8 units) from the resolution, and its quality flags (-l/-m/--hd)
+    are landscape presets that would override it, so they are never combined.
+    """
+    if is_short():
+        return ["-r", render_resolution()]
+    return [render_quality_flag()]
+
+
+# Strips of a 1080x1920 frame the Shorts app draws over, as fractions of the
+# frame: 48 px left, 480 px bottom (title, channel), 192 px right (buttons),
+# 288 px top. No official figure exists. Google's vertical ads template
+# reserves 672 px at the bottom (it adds ad buttons); measurements of organic
+# Shorts put the covered strip at 300 to 390 px. 480 px sits between them and
+# leaves the diagram room to be read on a phone. Confirm with a test upload.
+_SHORT_SAFE_MARGINS = (48 / 1080, 480 / 1920, 192 / 1080, 288 / 1920)
+
+
+def short_safe_margins() -> tuple[float, float, float, float]:
+    """(left, bottom, right, top) margins of the safe area in a short."""
+    return _SHORT_SAFE_MARGINS
+
+
+def short_voice_profile_path() -> str:
+    """Where the optional voice profile for shorts lives (may not exist)."""
+    return _SHORTS["voice_profile"]
 
 
 def render_fps() -> int:
@@ -122,3 +187,17 @@ def render_fps() -> int:
 
 def render_max_retries() -> int:
     return _RENDERING["max_retries"]
+
+
+def render_parallel_sections() -> int:
+    """How many sections to generate and render at once (at least 1).
+
+    ``MANIMGEN_PARALLEL_SECTIONS`` overrides config.yaml for one run.
+    """
+    raw = os.environ.get("MANIMGEN_PARALLEL_SECTIONS", "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    return max(1, int(_RENDERING.get("parallel_sections") or 1))

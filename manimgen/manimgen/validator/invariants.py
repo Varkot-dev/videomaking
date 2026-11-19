@@ -11,6 +11,7 @@ state, swappable without editing call sites.
 
 from __future__ import annotations
 
+import ast
 import enum
 import re
 from dataclasses import dataclass
@@ -51,18 +52,44 @@ _ROLE_CONSTANTS = frozenset({"RED", "GREEN", "YELLOW"})
 def _I1_mobject_explosion(code: str) -> list[str]:
     """Reject VGroup(*[<expr> for _ in range(N)]) where N > 50."""
     errors: list[str] = []
-    pattern = re.compile(
-        r"VGroup\s*\(\s*\*\s*\[.*?for\s+\w+\s+in\s+range\s*\(\s*(\d+)\s*\).*?\]\s*\)",
-        re.DOTALL,
-    )
-    for m in pattern.finditer(code):
-        n = int(m.group(1))
-        if n > 50:
-            errors.append(
-                f"I1: VGroup with range({n}) — rendering {n} mobjects per frame is infeasible. "
-                f"Use a representative grid of ≤16 elements and a label (e.g. '× {n}') "
-                f"to communicate scale symbolically."
-            )
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return errors  # the syntax error is reported by the compile check
+
+    # Decided on the AST: a regex spanning "VGroup(*[" ... "range(N)" ... "])"
+    # matched unrelated code that merely sat between two such fragments.
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "VGroup"
+        ):
+            continue
+        for arg in node.args:
+            if not isinstance(arg, ast.Starred):
+                continue
+            comp = arg.value
+            if not isinstance(comp, (ast.ListComp, ast.GeneratorExp)):
+                continue
+            for gen in comp.generators:
+                it = gen.iter
+                if not (
+                    isinstance(it, ast.Call)
+                    and isinstance(it.func, ast.Name)
+                    and it.func.id == "range"
+                    and len(it.args) == 1
+                    and isinstance(it.args[0], ast.Constant)
+                    and isinstance(it.args[0].value, int)
+                ):
+                    continue
+                n = it.args[0].value
+                if n > 50:
+                    errors.append(
+                        f"I1: VGroup with range({n}) — rendering {n} mobjects per frame is infeasible. "
+                        f"Use a representative grid of ≤16 elements and a label (e.g. '× {n}') "
+                        f"to communicate scale symbolically."
+                    )
     return errors
 
 

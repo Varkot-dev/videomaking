@@ -26,6 +26,7 @@ import hashlib
 import json
 import os
 import sys
+import tempfile
 from typing import Any
 
 
@@ -92,7 +93,7 @@ def list_baselines(base_dir: str) -> list[dict[str, Any]]:
 
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--base", default="/tmp/manimgen_review/baselines",
+    p.add_argument("--base", default=os.path.join(tempfile.gettempdir(), "manimgen_review", "baselines"),
                    help="baseline directory")
     p.add_argument("--list", action="store_true", help="list all baselines")
     p.add_argument("--get", action="store_true", help="get baseline for topic")

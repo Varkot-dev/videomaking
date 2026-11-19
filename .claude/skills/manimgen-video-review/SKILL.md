@@ -25,9 +25,11 @@ The four `tools/` scripts implement a layered audit: cheap deterministic checks 
 expensive vision checks, then structured output, then regression diff against prior runs.
 
 ```bash
-SKILL=/Users/varshithkotagiri/Projects/3Blue1Brown/.claude/skills/manimgen-video-review/tools
+# Run from the repository root (the folder that holds .claude/ and manimgen/).
+SKILL=.claude/skills/manimgen-video-review/tools
 VIDEO=<path/to/final.mp4>
-OUT=/tmp/manimgen_review
+OUT=manimgen/manimgen/output/review   # git-ignored; any writable folder works
+mkdir -p $OUT
 
 # 1. Cheap codeguard pre-check — emits warnings about source code defects
 #    you'd otherwise have to spot in pixels. Run BEFORE looking at frames.
@@ -205,14 +207,14 @@ python3 $SKILL/manage_baselines.py --set --topic "$TOPIC" --audit $OUT/audit.jso
 Or use the all-in-one CI gate script which handles baseline lookup and storage:
 
 ```bash
-bash $SKILL/audit_gate.sh --video /path/to/final.mp4 --prior-topic "Fourier Series" --baseline-dir /tmp/manimgen_review/baselines
+bash $SKILL/audit_gate.sh --video /path/to/final.mp4 --prior-topic "Fourier Series" --baseline-dir $OUT/baselines
 ```
 
 ## Step 8: Show evidence
 
 Pick the single best-looking frame as proof of working pipeline. Pick the single worst frame
 as evidence of each FAIL. Reference frame paths so the user can re-check (e.g.
-`/tmp/manimgen_review/frame_72s.jpg`).
+`$OUT/frame_72s.jpg`).
 
 ## Step 9: Decide what to fix
 
@@ -234,9 +236,11 @@ sections and re-run with `--resume`. If you've only "told the user" how it shoul
 have not fixed anything.
 
 ```bash
-rm /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/manimgen/videos/Section*.mp4
-rm /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/manimgen/videos/Section*.hash
-GEMINI_API_KEY=$(grep GEMINI_API_KEY .env | cut -d= -f2) python3 -m manimgen.cli "<topic>" --resume
+# From manimgen/ (the folder holding config.yaml). Rendered section videos sit
+# under manimgen/output/videos/; search for them rather than assuming a subfolder.
+find manimgen/output/videos -name "Section*.mp4" -delete
+find manimgen/output/videos -name "Section*.hash" -delete
+manimgen --resume   # default provider is claude_cli: no API key needed
 ```
 
 ## What good looks like

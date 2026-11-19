@@ -5,13 +5,22 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 
 from manimgen import config, paths
 from manimgen.generator.scene_generator import ScenePrecheckError, generate_scenes
 from manimgen.input.parser import parse_input
-from manimgen.planner.lesson_planner import plan_lesson, plan_lesson_from_pdf
+from manimgen.input.pdf_parser import PdfInputError
+from manimgen.planner.lesson_planner import (
+    SHORT_ARCHETYPES,
+    ensure_titles,
+    plan_lesson,
+    plan_lesson_from_pdf,
+    plan_short,
+)
 from manimgen.renderer.assembler import assemble_video
 from manimgen.renderer.muxer import clear_mismatch_log, get_mismatch_log
 from manimgen.types import (
@@ -225,6 +234,36 @@ def _content_hash(topic_hash: str, cfg: dict) -> str:
             ]
         )
     )
+
+
+def _requested_topic_hash(args) -> str:
+    """Identity of the requested input, as stored in the plan's _topic_hash.
+
+    A short is identified by its topic together with the format and the
+    owner's angle, so a different angle on the same topic is a different plan.
+    """
+    topic = parse_input(args.topic)
+    if getattr(args, "short", False):
+        return _topic_hash(
+            "\x1f".join(["short", topic, args.archetype, args.confused, args.clicked])
+        )
+    return _topic_hash(topic)
+
+
+def _read_voice_profile() -> str:
+    """The owner's voice notes for shorts, or "" when the file is absent."""
+    path = paths.short_voice_profile_path()
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read().strip()
+    except FileNotFoundError:
+        return ""
+    except OSError as e:
+        logger.warning("[manimgen] Could not read voice profile %s: %s", path, e)
+        return ""
+    if text:
+        logger.info("[manimgen] Using voice profile: %s", path)
+    return text
 
 
 def _file_hash(path: str) -> str:
@@ -490,12 +529,16 @@ def _render_with_retry(
     if success and video_path:
         return RenderResult(video_path, SectionStatus.OK, "first render")
 
+    # A first render that ran but was rejected is handed over, so the retry
+    # loop checks it instead of rendering the same code again.
+    retry_kwargs = {"first_render": video_path} if video_path else {}
     success, video_path = retry_scene(
         section,
         gate.code,
         gate.class_name,
         gate.scene_path,
         cue_durations=cue_durations,
+        **retry_kwargs,
     )
     if success and video_path:
         # retry_scene accepts a render with known freeze-frame tails on its
@@ -1105,7 +1148,9 @@ def _load_cached_plan() -> dict:
         lesson_plan.get("sections"), list
     ):
         _die(f"cached plan {_PLAN_CACHE} is corrupt: no sections list. Delete it.")
-    return lesson_plan
+    # A plan saved by an older run may lack titles; fill them in rather than
+    # crash with KeyError partway through the run.
+    return ensure_titles(lesson_plan)
 
 
 def main():
@@ -1141,14 +1186,69 @@ def main():
             "flagged in the summary and the run exits 3."
         ),
     )
+    parser.add_argument(
+        "--short",
+        action="store_true",
+        help=(
+            "Make one vertical 9:16 short (YouTube Shorts): one idea, 30 to 60 "
+            "seconds, rendered at 1080x1920. Topic only, not --pdf."
+        ),
+    )
+    parser.add_argument(
+        "--format",
+        dest="archetype",
+        choices=SHORT_ARCHETYPES,
+        default="puzzle",
+        help=(
+            "Structure of a --short: puzzle (pose it, leave it open), "
+            "misconception (break a wrong belief), proof (one visual argument), "
+            "worked (one worked example). Rotate these across uploads."
+        ),
+    )
+    parser.add_argument(
+        "--confused",
+        default="",
+        metavar="TEXT",
+        help="For --short: what confused you about this topic, in your own words.",
+    )
+    parser.add_argument(
+        "--clicked",
+        default="",
+        metavar="TEXT",
+        help="For --short: what made it click for you. The short is built on it.",
+    )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help=(
+            "Skip the research brief and the storyboard critic pass (two LLM "
+            "calls). Much quicker planning; the storyboard is less polished."
+        ),
+    )
+    parser.add_argument(
+        "--draft",
+        action="store_true",
+        help=(
+            "Render small for a quick look: 720p for a normal video, 540x960 "
+            "for a --short. Re-run without --draft for the final."
+        ),
+    )
     args = parser.parse_args()
+    if args.short and args.pdf:
+        parser.error("--short takes a topic, not --pdf")
+    if args.short and not (args.topic or args.resume):
+        parser.error("--short needs a topic")
     if not (args.topic or args.pdf or args.resume):
         parser.error("one of the arguments topic, --pdf or --resume is required")
 
     _configure_logging()
     started = time.time()
 
+    from manimgen.planner import lesson_planner
     from manimgen.validator.retry import reset_run_budget
+
+    lesson_planner.set_fast(args.fast)
+    paths.set_draft(args.draft)
 
     # The retry LLM budget is per run; nothing else resets it (#71).
     reset_run_budget()
@@ -1168,6 +1268,9 @@ def main():
     if args.resume:
         # Refuse rather than replan: replanning spends LLM quota (#64).
         lesson_plan = _load_cached_plan()
+        # A resumed plan keeps the format it was planned for.
+        if lesson_plan.get("_format") == "short":
+            paths.set_video_format("short")
         current_topic_hash = lesson_plan.get("_topic_hash", "")
         requested = None
         if args.pdf:
@@ -1179,7 +1282,7 @@ def main():
                     f"cannot read --pdf {args.pdf} to check it against the cached plan ({e})."
                 )
         elif args.topic:
-            requested = (args.topic, _topic_hash(parse_input(args.topic)))
+            requested = (args.topic, _requested_topic_hash(args))
         if requested and requested[1] != current_topic_hash:
             _die(
                 f"cached plan {_PLAN_CACHE} is for "
@@ -1198,8 +1301,26 @@ def main():
                 logger.info("[manimgen] PDF input: %s", args.pdf)
                 # Hash the file's bytes, not its path: a PDF edited in
                 # place must not reuse the old plan's renders (#66).
-                current_topic_hash = _file_hash(args.pdf)
-                lesson_plan = plan_lesson_from_pdf(args.pdf)
+                try:
+                    current_topic_hash = _file_hash(args.pdf)
+                except OSError as e:
+                    _die(f"cannot read --pdf {args.pdf} ({e}).")
+                try:
+                    lesson_plan = plan_lesson_from_pdf(args.pdf)
+                except PdfInputError as e:
+                    _die(str(e))
+            elif args.short:
+                logger.info("[manimgen] Short (%s): %s", args.archetype, args.topic)
+                paths.set_video_format("short")
+                topic = parse_input(args.topic)
+                current_topic_hash = _requested_topic_hash(args)
+                lesson_plan = plan_short(
+                    topic,
+                    archetype=args.archetype,
+                    confusion=args.confused,
+                    insight=args.clicked,
+                    voice_profile=_read_voice_profile(),
+                )
             else:
                 logger.info("[manimgen] Input: %s", args.topic)
                 topic = parse_input(args.topic)
@@ -1265,7 +1386,16 @@ def main():
     title = lesson_plan["title"]
     rendered_videos: list[str] = []
     records: list[dict] = []
-    for idx, section in enumerate(lesson_plan["sections"], start=1):
+    # Set when a section hits a usage stop: sections that have not started yet
+    # are skipped (they would only fail the same way and spend more quota).
+    stop_run = threading.Event()
+
+    def run_one(
+        idx: int, section: dict
+    ) -> tuple[SectionOutcome, float, Exception | None]:
+        """Run one section; never raises. Returns (outcome, seconds, usage_stop)."""
+        if stop_run.is_set():
+            return SectionOutcome(SectionStatus.NOT_RUN), 0.0, None
         section_id = safe_section_id(section, idx)
         # When tts_on, always pass section_audio (even {} for failed TTS) so
         # _run_section doesn't re-attempt TTS — global phase already ran it.
@@ -1286,23 +1416,35 @@ def main():
         except Exception as e:
             outcome = SectionOutcome(SectionStatus.ERRORED, [], _error_text(e))
             if is_usage_stop(e):
-                records.append(_section_record(idx, section, outcome, 0.0))
-                not_run = SectionOutcome(SectionStatus.NOT_RUN)
-                records.extend(
-                    _section_record(i, s, not_run, 0.0)
-                    for i, s in enumerate(lesson_plan["sections"], start=1)
-                    if i > idx
-                )
-                _stop_for_usage_limit(
-                    e, title, current_topic_hash, records, started, resumable=True
-                )
+                stop_run.set()
+                return outcome, 0.0, e
             # One failed section must not cost the others (#72): report it,
             # keep the traceback in the run log, and go on.
             logger.error("[manimgen] Section %d (%s) failed: %s", idx, section_id, e)
             logger.debug("[manimgen] Section %d traceback", idx, exc_info=True)
+        return outcome, time.time() - section_started, None
+
+    # Sections are independent once narration exists (own scene file, class
+    # name, clips and cache key), so several are generated and rendered at
+    # once. Results are collected in plan order, so the video is assembled in
+    # order whatever finishes first.
+    numbered = list(enumerate(lesson_plan["sections"], start=1))
+    workers = min(paths.render_parallel_sections(), len(numbered))
+    if workers > 1:
+        logger.info("[manimgen] Running %d sections at a time", workers)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(lambda item: run_one(*item), numbered))
+    else:
+        results = [run_one(idx, section) for idx, section in numbered]
+
+    usage_stop: Exception | None = None
+    for (idx, section), (outcome, elapsed, stop_exc) in zip(numbered, results):
+        usage_stop = usage_stop or stop_exc
         rendered_videos.extend(outcome.clips)
-        records.append(
-            _section_record(idx, section, outcome, time.time() - section_started)
+        records.append(_section_record(idx, section, outcome, elapsed))
+    if usage_stop is not None:
+        _stop_for_usage_limit(
+            usage_stop, title, current_topic_hash, records, started, resumable=True
         )
 
     def no_video(message: str):

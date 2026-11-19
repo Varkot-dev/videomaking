@@ -31,6 +31,27 @@ class FallbackScene(Scene):
 """
 
 
+# The same card for a vertical short: the frame is 4.5 units wide, so text is
+# smaller, width-guarded, and placed in the area the Shorts UI leaves clear.
+FALLBACK_TEMPLATE_SHORT = """from manimlib import *
+
+class FallbackScene(Scene):
+    def construct(self):
+        title = Text({title!r}, font_size=28, color=WHITE)
+        subtitle = Text({subtitle!r}, font_size=22, color=GREY_A)
+        for mob in (title, subtitle):
+            if mob.get_width() > 3.3:
+                mob.set_width(3.3)
+        title.move_to([-0.3, 1.2, 0])
+        subtitle.next_to(title, DOWN, buff=0.35)
+        rule = Line(LEFT * 1.5, RIGHT * 1.5, color=GREY_B, stroke_width=1.5)
+        rule.next_to(subtitle, DOWN, buff=0.35)
+        self.play(Write(title), run_time=1.0)
+        self.play(FadeIn(subtitle), ShowCreation(rule), run_time=0.8)
+        self.wait({hold_seconds})
+"""
+
+
 def _estimate_hold(section: dict) -> int:
     """Match fallback hold duration to narration length so muxing doesn't distort."""
     narration = section.get("narration", "")
@@ -101,7 +122,8 @@ def fallback_scene(section: dict) -> str | None:
 def _fallback_code(
     class_name: str, section_num: str, title: str, subtitle: str, hold_seconds: int
 ) -> str:
-    code = FALLBACK_TEMPLATE.format(
+    template = FALLBACK_TEMPLATE_SHORT if paths.is_short() else FALLBACK_TEMPLATE
+    code = template.format(
         section_num=section_num,
         title=title,
         subtitle=subtitle,

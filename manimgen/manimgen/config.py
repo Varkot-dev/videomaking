@@ -30,6 +30,20 @@ from pathlib import Path
 
 import yaml
 
+# manimgl accepts exactly these quality flags (`manimgl --help`): -l is 480p,
+# -m is 720p, --hd is 1080p, --uhd is 4K. The configured name is mapped to one
+# of them; building "--" + name produced invalid flags such as "--l".
+RENDER_QUALITY_FLAGS = {
+    "l": "-l",
+    "low": "-l",
+    "m": "-m",
+    "medium": "-m",
+    "hd": "--hd",
+    "high": "--hd",
+    "uhd": "--uhd",
+    "4k": "--uhd",
+}
+
 ENV_VAR = "MANIMGEN_CONFIG"
 CONFIG_FILENAME = "config.yaml"
 
@@ -46,6 +60,8 @@ DEFAULTS: dict = {
         "claude_cli_path": "claude",
         # Per-role model overrides (role -> alias or model ID).
         "models": {},
+        # Per-role thinking effort for claude_cli (role -> low|medium|high|xhigh|max).
+        "efforts": {},
         "ollama_model": "llama3.1",
         "ollama_base_url": "http://localhost:11434",
         # Ollama's default context window truncates the Director prompt.
@@ -65,9 +81,18 @@ DEFAULTS: dict = {
         "resolution": "1920x1080",
         "fps": 60,
         "max_retries": 3,
+        # Sections generated and rendered at the same time. Each one is an LLM
+        # call plus a manimgl render, so the limit is the machine's CPU/GPU and
+        # the LLM plan's rate limits. 1 restores strictly sequential runs.
+        "parallel_sections": 3,
         "render_timeout_2d": 240,
         "render_timeout_3d": 360,
         "render_timeout_fallback": 180,
+    },
+    "shorts": {
+        # Optional notes on how the owner talks and explains; read by the
+        # shorts planner so scripts sound like them. Relative to config.yaml.
+        "voice_profile": "voice_profile.md",
     },
     "tts": {
         "engine": "edge-tts",
@@ -186,6 +211,7 @@ def _validate(path: Path, raw: dict) -> dict:
         llm[key] = str(llm[key])
     llm["ollama_base_url"] = str(llm["ollama_base_url"]).rstrip("/")
     llm["models"] = _parse_role_models(llm["models"])
+    llm["efforts"] = _parse_role_models(llm["efforts"])
 
     out = cfg["output"]
     for key, value in list(out.items()):
@@ -196,11 +222,28 @@ def _validate(path: Path, raw: dict) -> dict:
         # An absolute value wins; a relative one is anchored at config.yaml.
         out[key] = str(root / value)
 
+    shorts = cfg["shorts"]
+    profile = shorts.get("voice_profile") or "voice_profile.md"
+    shorts["voice_profile"] = str(root / str(profile))
+
     rend = cfg["rendering"]
-    for key in ("fps", "max_retries"):
+    for key in ("fps", "max_retries", "parallel_sections"):
         rend[key] = _as(path, f"rendering.{key}", rend[key], int, "an integer")
+    if rend["parallel_sections"] < 1:
+        raise ConfigError(
+            f"{path}: rendering.parallel_sections must be 1 or more, "
+            f"got {rend['parallel_sections']!r}."
+        )
     for key in ("render_timeout_2d", "render_timeout_3d", "render_timeout_fallback"):
         rend[key] = _as(path, f"rendering.{key}", rend[key], float, "a number")
+
+    quality = str(rend.get("quality", "")).strip().lower()
+    if quality not in RENDER_QUALITY_FLAGS:
+        raise ConfigError(
+            f"{path}: rendering.quality {rend.get('quality')!r} is not valid; "
+            f"use one of {sorted(RENDER_QUALITY_FLAGS)} "
+            "(l = 480p, m = 720p, hd = 1080p, uhd = 4K)."
+        )
 
     if not isinstance(cfg["tts"]["enabled"], bool):
         raise ConfigError(

@@ -59,6 +59,25 @@ def _check_plan_shape(plan: dict) -> None:
             raise ValueError(f"plan 'sections' entry {i} has no narration")
 
 
+def ensure_titles(plan: dict, default_title: str = "Untitled lesson") -> dict:
+    """Give the plan and every section a non-empty string ``title``.
+
+    The LLM (or a critic rewrite) can omit a title. The pipeline reads titles
+    for logs, the fallback card and the output file name, so a missing one is
+    filled in here instead of surfacing later as a KeyError.
+    """
+    title = plan.get("title")
+    if not isinstance(title, str) or not title.strip():
+        plan["title"] = default_title
+    for idx, section in enumerate(plan.get("sections") or [], start=1):
+        if not isinstance(section, dict):
+            continue
+        sec_title = section.get("title")
+        if not isinstance(sec_title, str) or not sec_title.strip():
+            section["title"] = str(section.get("id") or f"Section {idx}")
+    return plan
+
+
 def _technique_names(section: dict) -> set[str]:
     names = set()
     for cue in section.get("cues") or []:
@@ -107,7 +126,21 @@ def _critic_rejection(original: dict, candidate: dict) -> str | None:
     return None
 
 
+# Fast mode (cli --fast): skip the two optional LLM passes around the planner,
+# the research brief before it and the critic rewrite after it. On the default
+# claude_cli provider those two calls took about half of the planning time.
+_fast = False
+
+
+def set_fast(enabled: bool) -> None:
+    global _fast
+    _fast = bool(enabled)
+
+
 def _self_correct(plan: dict, limit: int = _SELF_CORRECT_LIMIT) -> dict:
+    if _fast:
+        logger.info("[planner] Fast mode: skipping the storyboard critic pass")
+        return plan
     critic_system = _load_critic_system_prompt()
     for _ in range(limit):
         raw = chat(
@@ -225,8 +258,14 @@ def _sanitize_section_ids(plan: dict) -> dict:
         raw = section.get("id")
         safe = sanitize_section_id(raw, idx)
         if safe in seen:
-            suffix = hashlib.sha256(str(raw).encode()).hexdigest()[:6]
-            safe = f"{safe[: 64 - 7]}_{suffix}"
+            # idx is part of the hash so a third section with the same raw id
+            # does not get the same suffix as the second.
+            base = safe
+            attempt = 0
+            while safe in seen:
+                digest = hashlib.sha256(f"{raw}|{idx}|{attempt}".encode())
+                safe = f"{base[: 64 - 7]}_{digest.hexdigest()[:6]}"
+                attempt += 1
         seen.add(safe)
         if safe != raw:
             logger.warning(
@@ -249,6 +288,7 @@ def _extract_cues(plan: dict) -> dict:
     # Security: sanitize untrusted LLM-controlled ids BEFORE they reach any
     # filesystem sink (path traversal → arbitrary .py write + manimgl exec).
     plan = _sanitize_section_ids(plan)
+    ensure_titles(plan)
     for section in plan.get("sections", []):
         raw = section.get("narration", "")
         clean, indices = parse_cues(raw)
@@ -258,7 +298,14 @@ def _extract_cues(plan: dict) -> dict:
         # Ensure section["cues"] exists and is indexed correctly.
         # cues[] must have len(indices) entries — one per segment (including the
         # opening segment at index 0, before the first [CUE]).
-        existing_cues = section.get("cues", [])
+        # JSON null or a list of non-objects must not crash the plan: keep only
+        # well-formed cue objects and let the count check below repair the rest.
+        raw_cues = section.get("cues")
+        existing_cues = [
+            c
+            for c in (raw_cues if isinstance(raw_cues, list) else [])
+            if isinstance(c, dict)
+        ]
         n_segments = len(indices)
         if len(existing_cues) != n_segments:
             logger.warning(
@@ -278,7 +325,7 @@ def _extract_cues(plan: dict) -> dict:
                 section.get("title", ""), clean, indices, existing_cues
             )
             if refilled is not None:
-                existing_cues = refilled
+                existing_cues = [c if isinstance(c, dict) else {} for c in refilled]
 
         title = section.get("title", "")
         # The per-segment narration is the PRIMARY, always-answerable input for
@@ -645,6 +692,9 @@ def research_topic(topic: str) -> dict:
     Returns a dict with keys: topic, prerequisites, core_concepts, key_formulas,
     worked_example, failure_modes, real_world_connections, section_suggestions.
     """
+    if _fast:
+        logger.info("[planner] Fast mode: skipping the research brief")
+        return {}
     system = _load_researcher_system_prompt()
     raw = chat(
         system=system,
@@ -754,7 +804,17 @@ def _format_research_brief(brief: dict) -> str:
 def plan_lesson(topic: str) -> dict:
     logger.info("[planner] Researching topic: %s", topic)
     brief = research_topic(topic)
-    research_material = _format_research_brief(brief)
+    try:
+        research_material = _format_research_brief(brief)
+    except (TypeError, AttributeError, KeyError, ValueError) as e:
+        # Research is optional: a brief that drifts from the schema must not
+        # cost the whole plan.
+        logger.warning(
+            "[planner] Research brief is off-schema (%s: %s), continuing without it",
+            type(e).__name__,
+            e,
+        )
+        research_material = ""
 
     system = _load_system_prompt()
     if research_material:
@@ -770,7 +830,96 @@ def plan_lesson(topic: str) -> dict:
     # which can re-inflate section count past the cap. Re-assert the
     # invariant so "≤ _MAX_SECTIONS_TOPIC sections" holds unconditionally.
     plan = _cap_sections(plan, _MAX_SECTIONS_TOPIC)
+    ensure_titles(plan, default_title=topic)
     return _extract_cues(plan)
+
+
+SHORT_ARCHETYPES = ("puzzle", "misconception", "proof", "worked")
+# A short is one idea in 30 to 60 seconds of narration.
+_SHORT_MAX_WORDS = 170
+
+
+def _load_short_system_prompt() -> str:
+    here = os.path.dirname(__file__)
+    with open(
+        os.path.join(here, "prompts", "planner_short_system.md"), encoding="utf-8"
+    ) as f:
+        text = f.read()
+    menu = sorted(_technique_menu() - techniques.THREE_D_TECHNIQUES - {"split_screen"})
+    return text.replace("{{TECHNIQUES}}", ", ".join(f"`{t}`" for t in menu))
+
+
+def _short_user_message(
+    topic: str,
+    archetype: str,
+    confusion: str,
+    insight: str,
+    voice_profile: str,
+    research_material: str,
+) -> str:
+    parts = [f"Plan one vertical short about: {topic}", f"FORMAT: {archetype}"]
+    if confusion.strip():
+        parts.append(f"What confused me: {confusion.strip()}")
+    if insight.strip():
+        parts.append(f"What made it click: {insight.strip()}")
+    if voice_profile.strip():
+        parts.append("VOICE PROFILE (how I talk; match it):\n" + voice_profile.strip())
+    if research_material:
+        parts.append(
+            "Background for accuracy only. Do NOT try to cover it; use the one "
+            "fact the short needs:\n" + research_material
+        )
+    return "\n\n".join(parts)
+
+
+def plan_short(
+    topic: str,
+    archetype: str = "puzzle",
+    confusion: str = "",
+    insight: str = "",
+    voice_profile: str = "",
+) -> dict:
+    """Plan a single-idea vertical short.
+
+    ``confusion`` and ``insight`` are the owner's own angle (what tripped them
+    up, what made it click); the script is built around them. ``voice_profile``
+    is free text describing how they talk. The plan has exactly one section.
+    """
+    if archetype not in SHORT_ARCHETYPES:
+        raise ValueError(
+            f"unknown short format {archetype!r}; use one of {SHORT_ARCHETYPES}"
+        )
+    logger.info("[planner] Researching topic for a short: %s", topic)
+    brief = research_topic(topic)
+    try:
+        research_material = _format_research_brief(brief)
+    except (TypeError, AttributeError, KeyError, ValueError) as e:
+        logger.warning(
+            "[planner] Research brief is off-schema (%s: %s), continuing without it",
+            type(e).__name__,
+            e,
+        )
+        research_material = ""
+
+    user = _short_user_message(
+        topic, archetype, confusion, insight, voice_profile, research_material
+    )
+    plan = _cap_sections(
+        _chat_plan(_load_short_system_prompt(), user, role="planner"), 1
+    )
+    ensure_titles(plan, default_title=topic)
+    plan = _extract_cues(plan)
+    plan["_format"] = "short"
+    plan["_archetype"] = archetype
+    words = len(plan["sections"][0].get("narration", "").split())
+    if words > _SHORT_MAX_WORDS:
+        logger.warning(
+            "[planner] Short narration is %d words (limit %d): it will run "
+            "over a minute. Tighten the script before posting.",
+            words,
+            _SHORT_MAX_WORDS,
+        )
+    return plan
 
 
 def plan_lesson_from_pdf(pdf_path: str) -> dict:

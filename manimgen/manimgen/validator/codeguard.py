@@ -35,7 +35,7 @@ def _fix_font_size_to_scale(code: str) -> tuple[str, list[str]]:
         applied.append(f"font_size={value} -> {snapped}")
         return f"font_size={snapped}"
 
-    new = re.sub(r"\bfont_size\s*=\s*(\d+)", _replace, code)
+    new = re.sub(r"\bfont_size\s*=\s*(\d+)(?![\d.])", _replace, code)
     return new, applied
 
 
@@ -498,6 +498,115 @@ def _fix_arrange_in_grid_kwargs(code: str) -> tuple[str, str | None]:
     return code, None
 
 
+def _sub_outside_strings(pattern: str, repl: str, code: str) -> tuple[str, int]:
+    """Replace ``pattern`` with the literal ``repl`` in code only.
+
+    Matches are found in a view with string literals and comments blanked, so
+    on-screen text such as ``Text('Create (or reuse) a node')`` is never
+    rewritten.
+    """
+    view = _blank_spans(code, strings=True)
+    if len(view) != len(code):
+        return code, 0
+    spans = [m.span() for m in re.finditer(pattern, view)]
+    for start, end in reversed(spans):
+        code = code[:start] + repl + code[end:]
+    return code, len(spans)
+
+
+def _rewrite_calls(
+    code: str,
+    rewrite: Callable[[ast.Call, ast.AST | None, Callable[[ast.AST], str]], str | None],
+) -> tuple[str, int]:
+    """Replace whole call expressions chosen by ``rewrite``.
+
+    ``rewrite(call, parent, src)`` returns the replacement text or None;
+    ``src(node)`` is a node's exact source. Edits are applied by source span, so
+    nested parentheses, strings and multi-line calls are handled correctly. A
+    call nested inside an already-rewritten call is left for the next pass.
+    Returns the code unchanged when it does not parse.
+    """
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return code, 0
+    lines = _split_source_lines(code)
+
+    def span(node: ast.AST) -> tuple[int, int]:
+        return (
+            _line_col_to_offset(lines, node.lineno, node.col_offset),
+            _line_col_to_offset(lines, node.end_lineno, node.end_col_offset),
+        )
+
+    def src(node: ast.AST) -> str:
+        a, b = span(node)
+        return code[a:b]
+
+    parents: dict[int, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[id(child)] = node
+
+    edits: list[tuple[int, int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        new = rewrite(node, parents.get(id(node)), src)
+        if new is not None:
+            edits.append((*span(node), new))
+
+    edits.sort()
+    kept: list[tuple[int, int, str]] = []
+    for edit in edits:
+        if kept and edit[0] < kept[-1][1]:
+            continue  # nested inside the previous edit
+        kept.append(edit)
+    for start, end, new in reversed(kept):
+        code = code[:start] + new + code[end:]
+    return code, len(kept)
+
+
+def _plain_callee(call: ast.Call) -> str | None:
+    """Name of a call made through a bare name (``Foo(...)``), else None."""
+    return call.func.id if isinstance(call.func, ast.Name) else None
+
+
+def _is_positional_arg_of_call(node: ast.AST, parent: ast.AST | None) -> bool:
+    """True when ``node`` is a plain positional argument of another call, the
+    only place where one animation can be replaced by two."""
+    return isinstance(parent, ast.Call) and any(arg is node for arg in parent.args)
+
+
+# Second positional argument of FadeIn/FadeOut is ``shift``; these names mean
+# the author wrote the valid FadeIn(mob, UP) form, not two mobjects.
+_DIRECTION_NAMES = frozenset(
+    {"UP", "DOWN", "LEFT", "RIGHT", "ORIGIN", "IN", "OUT", "UL", "UR", "DL", "DR"}
+)
+
+
+def _split_multi_mobject_fades(code: str, name: str) -> tuple[str, int]:
+    """``self.play(FadeOut(a, b))`` → ``self.play(FadeOut(a), FadeOut(b))``.
+
+    Models emit FadeOut(a, b) meaning two animations. Left alone: the valid
+    ``FadeIn(mob, UP)`` shift form, calls with keywords, and a fade that is not
+    an argument of another call (``x = FadeOut(a, b)`` cannot become a tuple).
+    """
+
+    def rewrite(call, parent, src):
+        if _plain_callee(call) != name or call.keywords or len(call.args) != 2:
+            return None
+        if not _is_positional_arg_of_call(call, parent):
+            return None
+        first, second = call.args
+        if not all(isinstance(a, (ast.Name, ast.Attribute)) for a in call.args):
+            return None
+        if isinstance(second, ast.Name) and second.id in _DIRECTION_NAMES:
+            return None
+        return f"{name}({src(first)}), {name}({src(second)})"
+
+    return _rewrite_calls(code, rewrite)
+
+
 def apply_known_fixes(code: str) -> tuple[str, list[str]]:
     fixed = code
     applied: list[str] = []
@@ -560,7 +669,8 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
         applied.append(f"{old} -> {new} (ManimGL NumberLine) ({count})")
 
     for pattern, repl, label in replacements:
-        new_fixed, count = re.subn(pattern, repl, fixed)
+        # Code only: these names can legitimately appear in on-screen text.
+        new_fixed, count = _sub_outside_strings(pattern, repl, fixed)
         if count:
             applied.append(f"{label} ({count})")
             fixed = new_fixed
@@ -578,7 +688,8 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
         (r'"#4A4A4A"', "GREY_D", "SUBTLE hex -> GREY_D"),
         (r'"#3A6F8A"', "GREY_B", "STRUCT hex -> GREY_B"),
         (r'"#58C4DD"', "TEAL_B", "legacy TEAL hex -> TEAL_B"),
-        (r'"#1C1C1C"', "GREY_E", "dark bg hex -> GREY_E"),
+        # "#1C1C1C" is the scene background and is NOT mapped: GREY_E is
+        # #222222, so a background-coloured mask would become a visible box.
     ]
     for hex_pat, const, label in _HEX_TO_CONSTANT:
         new_fixed, count = re.subn(hex_pat, const, fixed)
@@ -588,23 +699,11 @@ def apply_known_fixes(code: str) -> tuple[str, list[str]]:
 
     # ManimGL FadeIn/FadeOut take one mobject (+ optional kwargs). Models often
     # emit FadeOut(a, b) intending two animations. Rewrite to separate anims.
-    new_fixed, count = re.subn(
-        r"FadeOut\(\s*([\w\.]+)\s*,\s*([\w\.]+)\s*\)",
-        r"FadeOut(\1), FadeOut(\2)",
-        fixed,
-    )
-    if count:
-        applied.append(f"split multi-arg FadeOut ({count})")
-        fixed = new_fixed
-
-    new_fixed, count = re.subn(
-        r"FadeIn\(\s*([\w\.]+)\s*,\s*([\w\.]+)\s*\)",
-        r"FadeIn(\1), FadeIn(\2)",
-        fixed,
-    )
-    if count:
-        applied.append(f"split multi-arg FadeIn ({count})")
-        fixed = new_fixed
+    for fade in ("FadeOut", "FadeIn"):
+        new_fixed, count = _split_multi_mobject_fades(fixed, fade)
+        if count:
+            applied.append(f"split multi-arg {fade} ({count})")
+            fixed = new_fixed
 
     # Replace unsupported curve.get_points_closer_to(target)[0][0] idiom with
     # a stable, deterministic approximation using sampled curve points.
@@ -729,17 +828,20 @@ def _fix_color_gradient_int_cast(code: str) -> tuple[str, str | None]:
     The first argument can be a list literal like [RED, BLUE], so we match
     either a bracketed expression or a plain identifier/literal as the colors arg.
     """
-    # Match: color_gradient( <colors_arg> , <length_arg> )
-    # colors_arg: either [...] or a plain non-paren token
-    pattern = r"color_gradient\((\[[^\]]*\]|[^,)]+),\s*([^)]+)\)"
 
-    def _replacer(m: re.Match) -> str:
-        colors, length = m.group(1), m.group(2).strip()
-        if length.startswith("int("):
-            return m.group(0)  # already wrapped
-        return f"color_gradient({colors}, int({length}))"
+    def rewrite(call, parent, src):
+        if _plain_callee(call) != "color_gradient" or len(call.args) != 2:
+            return None
+        length = call.args[1]
+        if isinstance(length, ast.Constant) and isinstance(length.value, int):
+            return None  # already an int literal
+        if isinstance(length, ast.Call) and _plain_callee(length) == "int":
+            return None  # already wrapped
+        if isinstance(length, ast.Starred):
+            return None
+        return f"color_gradient({src(call.args[0])}, int({src(length)}))"
 
-    new, count = re.subn(pattern, _replacer, code)
+    new, count = _rewrite_calls(code, rewrite)
     if count:
         return new, f"color_gradient int cast ({count})"
     return code, None
@@ -747,7 +849,7 @@ def _fix_color_gradient_int_cast(code: str) -> tuple[str, str | None]:
 
 def _remove_font_kwarg_from_tex(code: str) -> tuple[str, str | None]:
     """font= is only valid on Text(), never on Tex() or TexText()."""
-    pattern = r"((?:Tex|TexText)\([^)]*?),?\s*font\s*=\s*[\"'][^\"']*[\"']([^)]*\))"
+    pattern = r"((?:Tex|TexText)\([^)]*?),?\s*\bfont\s*=\s*[\"'][^\"']*[\"']([^)]*\))"
     new, count = re.subn(pattern, r"\1\2", code)
     if count:
         return new, f"removed font= from Tex ({count})"
@@ -1324,11 +1426,20 @@ def apply_error_aware_fixes(code: str, stderr: str) -> tuple[str, list[str]]:
     if "could not broadcast input array" in stderr:
         # Transform between mobjects with different point counts (e.g. Text("5") vs Text("11")).
         # Replace Transform(a, b) with FadeOut(a)/FadeIn(b) which doesn't require matching geometry.
-        new_fixed, count = re.subn(
-            r"\bTransform\(([^,]+),\s*([^)]+)\)",
-            r"FadeOut(\1), FadeIn(\2)",
-            fixed,
-        )
+        def _transform_to_fades(call, parent, src):
+            if _plain_callee(call) != "Transform" or len(call.args) != 2:
+                return None
+            if not _is_positional_arg_of_call(call, parent):
+                return None
+            if any(kw.arg is None for kw in call.keywords):
+                return None
+            extra = "".join(", " + src(kw) for kw in call.keywords)
+            return (
+                f"FadeOut({src(call.args[0])}{extra}), "
+                f"FadeIn({src(call.args[1])}{extra})"
+            )
+
+        new_fixed, count = _rewrite_calls(fixed, _transform_to_fades)
         if count:
             applied.append(
                 f"Transform -> FadeOut/FadeIn (point count mismatch) ({count})"

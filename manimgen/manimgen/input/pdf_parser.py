@@ -108,6 +108,10 @@ def _render_page_to_b64(doc, page_index: int, dpi: int = 150) -> str:
     return base64.b64encode(mat.tobytes("png")).decode("utf-8")
 
 
+class PdfInputError(ValueError):
+    """The PDF cannot be used: encrypted, empty, damaged or not a PDF."""
+
+
 def parse_pdf(pdf_path: str) -> dict:
     """
     Extract and structure text and page renders from a PDF file.
@@ -135,7 +139,8 @@ def parse_pdf(pdf_path: str) -> dict:
         raise ValueError(f"Expected a .pdf file, got: {pdf_path!r}")
 
     try:
-        import fitz  # PyMuPDF
+        # "fitz" is PyMuPDF's deprecated import name; "pymupdf" is current.
+        import pymupdf
     except ImportError:
         raise ImportError(
             "PyMuPDF is required for PDF rendering. Install it with: pip install pymupdf"
@@ -148,9 +153,27 @@ def parse_pdf(pdf_path: str) -> dict:
             "pypdf is required for PDF parsing. Install it with: pip install pypdf"
         )
 
-    doc = fitz.open(pdf_path)
-    reader = PdfReader(pdf_path)
-    total_pages = len(reader.pages)
+    try:
+        doc = pymupdf.open(pdf_path)
+    except Exception as exc:
+        raise PdfInputError(f"cannot open PDF {pdf_path!r}: {exc}") from exc
+    try:
+        return _parse_open_pdf(pdf_path, doc, PdfReader)
+    finally:
+        doc.close()
+
+
+def _parse_open_pdf(pdf_path: str, doc, PdfReader) -> dict:
+    """Body of parse_pdf; the caller owns and closes ``doc``."""
+    try:
+        reader = PdfReader(pdf_path)
+        # The two libraries can disagree on a damaged file; never index the
+        # PyMuPDF document past its own page count.
+        total_pages = min(len(reader.pages), doc.page_count)
+    except Exception as exc:
+        raise PdfInputError(
+            f"cannot read PDF {pdf_path!r} (encrypted or damaged?): {exc}"
+        ) from exc
 
     pages_to_process = min(total_pages, _MAX_PDF_PAGES)
     if total_pages > _MAX_PDF_PAGES:
@@ -186,7 +209,6 @@ def parse_pdf(pdf_path: str) -> dict:
 
         page_texts.append(text)
 
-    doc.close()
     extracted_pages = pages_to_process - skipped
 
     if not page_texts and not all_images:

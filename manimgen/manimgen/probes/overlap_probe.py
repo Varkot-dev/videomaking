@@ -55,6 +55,21 @@ MIN_OPACITY = 0.05
 # morphs; see tests/fixtures/overlap/CALIBRATION.md.
 MORPH_THRESHOLD: float | None = None
 MAX_FINDINGS = 10
+# Share of a text's box that must be outside the frame, or outside the safe
+# area of a vertical short, before it is reported. Small overshoots (a
+# descender, a stroke) are ignored.
+OFFSCREEN_THRESHOLD = 0.05
+UNSAFE_THRESHOLD = 0.15
+# "left,bottom,right,top" as fractions of the frame: the strips the Shorts app
+# covers. Set by the host only when rendering a vertical short.
+SAFE_MARGINS_ENV = "MANIMGEN_SAFE_MARGINS"
+# Safe-area nudge (vertical shorts only, i.e. when safe margins are set): text
+# that is about to appear slightly outside the safe area is moved inside before
+# its first frame. Only a text-only mobject that is new to the scene and fits
+# the safe area is moved, and only by up to NUDGE_LIMIT units; anything further
+# out is a layout mistake the probe reports for a real fix.
+NUDGE_ENV = "MANIMGEN_SAFE_NUDGE"
+NUDGE_LIMIT = 0.5
 MAX_PER_TEXT = 3  # findings that may name the same string
 TEXT_CHARS = 40
 
@@ -77,6 +92,9 @@ class TextItem:
     # exclusion; ancestors[0] is the top-level scene mobject.
     ancestors: tuple[int, ...] = ()
     ident: int = 0
+    # The visible rectangle this text is measured against (the camera frame for
+    # world-space text, the default frame for fixed-in-frame text).
+    rect: tuple[float, float, float, float] | None = None
 
 
 @dataclass
@@ -87,6 +105,9 @@ class Finding:
     fraction: float
     a_kind: str = "Text"
     b_kind: str = "Text"
+    # "overlap": a drawn over b. "offscreen": a is cut off by the frame edge.
+    # "unsafe": a sits under the app's buttons or caption (vertical shorts).
+    kind: str = "overlap"
 
     def as_dict(self) -> dict:
         return {
@@ -96,6 +117,7 @@ class Finding:
             "fraction": round(self.fraction, 2),
             "a_kind": self.a_kind,
             "b_kind": self.b_kind,
+            "kind": self.kind,
         }
 
 
@@ -126,6 +148,45 @@ def overlap_fraction(
     if smaller <= 0:
         return 0.0
     return intersection_area(a, b) / smaller
+
+
+def outside_fraction(
+    box: tuple[float, float, float, float], rect: tuple[float, float, float, float]
+) -> float:
+    """Share of ``box`` that lies outside ``rect`` (0.0 inside, 1.0 fully out)."""
+    area = _area(box)
+    if area <= 0:
+        return 0.0
+    return max(0.0, 1.0 - intersection_area(box, rect) / area)
+
+
+def inset_rect(
+    rect: tuple[float, float, float, float],
+    margins: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
+    """``rect`` shrunk by ``margins`` = (left, bottom, right, top), each a
+    fraction of the rect's width or height. Scales with the camera frame."""
+    w, h = rect[2] - rect[0], rect[3] - rect[1]
+    left, bottom, right, top = margins
+    return (
+        rect[0] + left * w,
+        rect[1] + bottom * h,
+        rect[2] - right * w,
+        rect[3] - top * h,
+    )
+
+
+def parse_margins(raw: str | None) -> tuple[float, float, float, float] | None:
+    """Parse "left,bottom,right,top" fractions; None when absent or invalid."""
+    if not raw:
+        return None
+    try:
+        values = tuple(float(v) for v in raw.split(","))
+    except ValueError:
+        return None
+    if len(values) != 4 or any(v < 0 or v >= 0.5 for v in values):
+        return None
+    return values
 
 
 def _normalize(text: str) -> str:
@@ -216,6 +277,34 @@ class OverlapRecorder:
                 Finding(time, shorten(a.text), shorten(b.text), frac, a.kind, b.kind)
             )
 
+    def observe_bounds(
+        self,
+        time: float,
+        items: list[TextItem],
+        safe_margins: tuple[float, float, float, float] | None = None,
+    ) -> None:
+        """Report text cut off by the frame edge, and (when ``safe_margins`` is
+        given, i.e. a vertical short) text under the app's buttons or caption.
+        """
+        for item in items:
+            if item.rect is None:
+                continue
+            out = outside_fraction(item.box, item.rect)
+            if out >= OFFSCREEN_THRESHOLD:
+                self._add(
+                    Finding(
+                        time, shorten(item.text), "", out, item.kind, "", "offscreen"
+                    )
+                )
+                continue
+            if safe_margins is None:
+                continue
+            out = outside_fraction(item.box, inset_rect(item.rect, safe_margins))
+            if out >= UNSAFE_THRESHOLD:
+                self._add(
+                    Finding(time, shorten(item.text), "", out, item.kind, "", "unsafe")
+                )
+
     def observe_morph(self, time: float, source: str, target: str, glyphs) -> None:
         score = morph_collision(glyphs)
         self.morphs.append(
@@ -233,7 +322,7 @@ class OverlapRecorder:
         )
 
     def _add(self, finding: Finding) -> None:
-        key = tuple(sorted((finding.a, finding.b)))
+        key = (finding.kind, *sorted((finding.a, finding.b)))
         if key in self.seen:
             return
         self.seen.add(key)
@@ -366,6 +455,7 @@ def collect_text_items(scene, min_opacity: float = MIN_OPACITY) -> list[TextItem
                     kind=type(mob).__name__,
                     ancestors=ancestors,
                     ident=id(mob),
+                    rect=rect,
                 )
             )
             return
@@ -381,7 +471,14 @@ def collect_text_items(scene, min_opacity: float = MIN_OPACITY) -> list[TextItem
 # Installation in the render child
 # ---------------------------------------------------------------------------
 
-_state: dict = {"recorder": None, "scene": "", "error": None, "path": None}
+_state: dict = {
+    "recorder": None,
+    "scene": "",
+    "error": None,
+    "path": None,
+    "pid": None,  # the process that installed the probe; only it writes
+    "nudges": 0,  # text moved inside the safe area (see NUDGE_ENV)
+}
 
 
 def _record_error(where: str, exc: BaseException) -> None:
@@ -393,9 +490,13 @@ def write_report() -> None:
     path = _state["path"]
     if not path:
         return
+    owner = _state.get("pid")
+    if owner is not None and owner != os.getpid():
+        return  # a forked copy of the state must not clobber the owner's report
     try:
         recorder = _state["recorder"] or OverlapRecorder()
         data = recorder.report(_state["scene"], _state["error"])
+        data["nudges"] = _state.get("nudges", 0)
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)
@@ -410,9 +511,72 @@ def _observe(scene) -> None:
             _state["recorder"] = OverlapRecorder()
         _state["scene"] = type(scene).__name__
         items = collect_text_items(scene)
-        _state["recorder"].observe(float(getattr(scene, "time", 0.0)), items)
+        now = float(getattr(scene, "time", 0.0))
+        _state["recorder"].observe(now, items)
+        _state["recorder"].observe_bounds(
+            now, items, parse_margins(os.environ.get(SAFE_MARGINS_ENV))
+        )
     except Exception as exc:  # a probe bug must never break a render
         _record_error("observe", exc)
+
+
+def nudge_offset(
+    box: tuple[float, float, float, float],
+    rect: tuple[float, float, float, float],
+    limit: float = NUDGE_LIMIT,
+) -> tuple[float, float] | None:
+    """(dx, dy) that moves ``box`` inside ``rect``.
+
+    None when no move is needed, the box does not fit, or the move on either
+    axis exceeds ``limit``.
+    """
+    if box[2] - box[0] > rect[2] - rect[0] or box[3] - box[1] > rect[3] - rect[1]:
+        return None
+    dx = max(0.0, rect[0] - box[0]) - max(0.0, box[2] - rect[2])
+    dy = max(0.0, rect[1] - box[1]) - max(0.0, box[3] - rect[3])
+    if dx == 0.0 and dy == 0.0:
+        return None
+    if abs(dx) > limit or abs(dy) > limit:
+        return None
+    return dx, dy
+
+
+def _text_only(mob) -> bool:
+    """True when every drawn part of ``mob`` belongs to a text-like mobject."""
+    covered: set[int] = set()
+    for m in mob.get_family():
+        if is_text_like(m):
+            covered.update(id(f) for f in m.get_family())
+    if not covered:
+        return False
+    return all(id(m) in covered for m in mob.get_family() if m.has_points())
+
+
+def _nudge_new_text(scene, mobjects) -> None:
+    """Move new, slightly-out text inside the shorts safe area (see NUDGE_ENV)."""
+    if os.environ.get(NUDGE_ENV, "1") == "0":
+        return
+    margins = parse_margins(os.environ.get(SAFE_MARGINS_ENV))
+    if margins is None:
+        return
+    try:
+        fixed, world = _frame_rects(scene)
+        present = {id(m) for top in scene.mobjects for m in top.get_family()}
+        for mob in mobjects:
+            if mob is None or id(mob) in present or not _text_only(mob):
+                continue
+            rect = (
+                fixed if getattr(mob, "is_fixed_in_frame", lambda: False)() else world
+            )
+            box = _box(mob)
+            if rect is None or box is None:
+                continue
+            move = nudge_offset(box, inset_rect(rect, margins))
+            if move is not None:
+                mob.shift([move[0], move[1], 0.0])
+                _state["nudges"] = _state.get("nudges", 0) + 1
+    except Exception as exc:  # a probe bug must never break a render
+        _record_error("nudge", exc)
 
 
 def _glyph_items(anim) -> list[tuple[int, tuple, float]]:
@@ -456,6 +620,11 @@ def patch_scene_module(module) -> None:
     original_post_play = scene_cls.post_play
     original_tear_down = scene_cls.tear_down
     original_begin = scene_cls.begin_animations
+    original_add = getattr(scene_cls, "add", None)
+
+    def add(self, *mobjects, **kwargs):
+        _nudge_new_text(self, mobjects)
+        return original_add(self, *mobjects, **kwargs)
 
     def post_play(self, *args, **kwargs):
         result = original_post_play(self, *args, **kwargs)
@@ -463,6 +632,7 @@ def patch_scene_module(module) -> None:
         return result
 
     def begin_animations(self, animations, *args, **kwargs):
+        _nudge_new_text(self, [getattr(a, "mobject", None) for a in animations])
         result = original_begin(self, animations, *args, **kwargs)
         _observe_morphs(self, animations)
         return result
@@ -476,6 +646,8 @@ def patch_scene_module(module) -> None:
     scene_cls.post_play = post_play
     scene_cls.tear_down = tear_down
     scene_cls.begin_animations = begin_animations
+    if original_add is not None:
+        scene_cls.add = add
     scene_cls._manimgen_overlap_probe = True
 
 
@@ -527,6 +699,11 @@ def install() -> None:
     if not path:
         return
     _state["path"] = path
+    _state["pid"] = os.getpid()
+    # Helper processes (multiprocessing's resource tracker, which spawn-based
+    # platforms start) inherit the environment and would load this probe too;
+    # they must not own or overwrite the report.
+    os.environ.pop(REPORT_ENV, None)
     try:
         module = sys.modules.get(_TARGET)
         if module is not None:

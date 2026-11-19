@@ -10,12 +10,12 @@ set -euo pipefail
 #   bash audit_gate.sh --video /path/to/final.mp4 [--out /tmp/manimgen_review] [--prior /tmp/manimgen_review/audit_prior.json]
 #
 # Environment:
-#   Expects manimgen package root at: /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen
+#   The manimgen package root is derived from this script's location.
 #   Output directory defaults to: /tmp/manimgen_review
 #
 
-MANIMGEN_ROOT="/Users/varshithkotagiri/Projects/3Blue1Brown/manimgen"
-SKILL_TOOLS="$MANIMGEN_ROOT/../.claude/skills/manimgen-video-review/tools"
+SKILL_TOOLS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MANIMGEN_ROOT="$(cd "$SKILL_TOOLS/../../../../manimgen" && pwd)"
 
 VIDEO=""
 OUT_DIR="/tmp/manimgen_review"

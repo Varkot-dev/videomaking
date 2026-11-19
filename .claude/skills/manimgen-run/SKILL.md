@@ -5,80 +5,71 @@ description: Use this skill whenever the user wants to run the manimgen pipeline
 
 # ManimGen Pipeline Runner
 
-This skill handles the full ritual of running the manimgen pipeline reliably: verifying the install, fixing it if broken, loading the API key, and launching the run.
+This skill handles running the manimgen pipeline reliably: verifying the environment, fixing the install if it is broken, and launching the run.
 
-## Paths (never guess these)
+`manimgen/CLAUDE.md` and the root `README.md` are the sources of truth. If anything here disagrees with them, they win and this file should be corrected.
 
-- **Project root (setup.py lives here):** `/Users/varshithkotagiri/Projects/3Blue1Brown/manimgen`
-- **Source package:** `/Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/manimgen/`
-- **Env file (API keys):** `/Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/.env`
-- **Config:** `/Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/config.yaml`
+## Paths (all relative to the repository root)
 
-## Step 1 — Verify the install
+- **Project root (setup.py and config.yaml live here):** `manimgen/`
+- **Source package:** `manimgen/manimgen/`
+- **Optional API keys (only for the `anthropic` / `gemini` providers):** `manimgen/.env`
 
-```bash
-manimgen --help 2>&1 | head -3
-```
+Never hardcode an absolute path: the repository lives in different places on macOS, Linux and the Windows PC.
 
-If this prints the usage line, skip to Step 3.
+## Step 1 — Run the env doctor
 
-If it fails with `ModuleNotFoundError: No module named 'manimgen'`, go to Step 2.
-
-## Step 2 — Fix the editable install
-
-The editable install breaks when the package mapping is stale. Fix it with a clean reinstall:
+From `manimgen/`:
 
 ```bash
-pip uninstall manimgen -y -q
-pip install -e /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen -q
-manimgen --help 2>&1 | head -3
+python3 scripts/env_doctor.py
 ```
 
-**Why this happens:** `setup.py` uses `package_dir={"": "manimgen"}` so `find_packages` roots at `manimgen/manimgen/`. If pip's editable finder cache is stale, the mapping breaks. A clean reinstall regenerates it.
+Exit code 0 means the environment can render. Exit code 1 prints each blocking issue with its exact fix; apply the fix and re-run. On headless Linux, prefix commands with `xvfb-run -a`.
 
-If it still fails after reinstall, check `setup.py` hasn't regressed:
-```bash
-grep -n "package_dir\|find_packages" /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/setup.py
-```
-It must contain both `package_dir={"": "manimgen"}` and `find_packages("manimgen", ...)`.
+## Step 2 — Fix the editable install (only if the doctor reports the entrypoint)
 
-## Step 3 — Load API key
-
-Read the key from `.env` — do not ask the user for it:
+From `manimgen/`:
 
 ```bash
-grep GEMINI_API_KEY /Users/varshithkotagiri/Projects/3Blue1Brown/manimgen/.env | cut -d= -f2
+pip install -e .
 ```
 
-## Step 4 — Run the pipeline
+`setup.py` must use `find_packages(include=["manimgen", "manimgen.*"])` and must NOT set `package_dir`. A `package_dir={"": "manimgen"}` line is the old bug (KNOWN_ISSUES #3), not the fix.
 
-For a topic string:
+## Step 3 — Run the pipeline
+
+The default provider is `claude_cli` (Claude Code headless, `claude -p`). It needs no API key, only Claude Code installed and logged in.
+
+From `manimgen/`:
+
 ```bash
-GEMINI_API_KEY=<key> manimgen "<topic>"
+MANIMGEN_MAX_RETRY_LLM_CALLS=2 manimgen "<topic>"
 ```
 
-For a PDF:
 ```bash
-GEMINI_API_KEY=<key> manimgen --pdf <path-to-pdf>
+manimgen --pdf <path-to-pdf>
 ```
 
-To resume from a cached plan:
 ```bash
-GEMINI_API_KEY=<key> manimgen --resume
+manimgen --resume
 ```
 
-Tell the user to paste this command into their terminal with `! ` prefix so output streams live into the conversation.
+On Windows PowerShell set the variable first: `$env:MANIMGEN_MAX_RETRY_LLM_CALLS=2; manimgen "<topic>"`.
 
-## Step 5 — After the run
+The `gemini` and `anthropic` providers bill per token and are blocked unless `MANIMGEN_ALLOW_PAID_API=1` is set. Do not switch providers unless the user asks.
 
-Once the run completes (or if the user pastes output showing it's done), invoke the `manimgen-video-review` skill to review the rendered video.
+## Step 4 — After the run
+
+Once the run completes, invoke the `manimgen-video-review` skill. Never report a run as good from its exit code alone.
 
 ## Common failures and fixes
 
 | Error | Fix |
 |---|---|
-| `ModuleNotFoundError: No module named 'manimgen'` | Step 2 — clean reinstall |
-| `zsh: parse error near '&&'` | User pasted a multiline command — give it as a single line |
-| `GEMINI_API_KEY not set` | Re-read from `.env`, export explicitly |
-| Pipeline hangs silently | PR #13 (timeout+retry) must be on main — check `git log --oneline -3` |
-| `manimgl` render fails | Check `manimgen/output/logs/` for the error, then invoke `manimgen-test-fix` |
+| `No module named 'manimgen.cli'` | Step 2 |
+| `No module named 'pkg_resources'` | `pip install "setuptools<81"` |
+| `'claude' was not found on PATH` / not logged in | Install Claude Code, open a new terminal, run `claude` once (KNOWN_ISSUES #6) |
+| Run stops after planning with a TTS error | edge-tts could not reach the speech service; see "Narration" in `manimgen/docs/KNOWN_ISSUES.md` (`--allow-silent` renders without audio) |
+| `NoSuchDisplayException` on Linux | Run under `xvfb-run -a` |
+| `manimgl` render fails | Read `manimgen/manimgen/output/logs/`, then invoke `manimgen-test-fix` if it is a code bug |
