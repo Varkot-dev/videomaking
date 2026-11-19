@@ -1,0 +1,45 @@
+# Fixed benchmark set of YouTube Short topics. Every pipeline change is judged on
+# these same inputs. `format` is one of SHORT_ARCHETYPES in
+# manimgen/planner/lesson_planner.py: puzzle, misconception, proof, worked.
+# `kind` is only a label for slicing results: diagram, equation or graph.
+topics:
+  - slug: pythag
+    topic: why a 3-4-5 triangle has a right angle
+    format: puzzle
+    kind: diagram
+  - slug: odds
+    topic: why the first n odd numbers add up to n squared
+    format: proof
+    kind: diagram
+  - slug: point9
+    topic: why 0.999 repeating equals exactly 1
+    format: misconception
+    kind: equation
+  - slug: handshake
+    topic: how many handshakes happen when 10 people all shake hands once
+    format: puzzle
+    kind: diagram
+  - slug: tri-angles
+    topic: why the angles of any triangle add up to 180 degrees
+    format: proof
+    kind: diagram
+  - slug: neg-neg
+    topic: why a negative times a negative is positive
+    format: misconception
+    kind: graph
+  - slug: slope
+    topic: what the slope of a line really measures
+    format: worked
+    kind: graph
+  - slug: geometric
+    topic: why 1/2 + 1/4 + 1/8 and so on adds up to exactly 1
+    format: proof
+    kind: graph
+  - slug: percent
+    topic: why a 50 percent raise after a 50 percent cut does not get you back
+    format: misconception
+    kind: equation
+  - slug: quadratic
+    topic: solving x squared minus 5x plus 6 equals 0 by factoring
+    format: worked
+    kind: equation

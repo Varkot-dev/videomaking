@@ -576,6 +576,19 @@ The suite covers:
 
 ---
 
+## Benchmark (`manimgen/bench/`)
+
+A fixed set of 10 YouTube Short topics (`manimgen/bench/topics.yaml`) and a scorecard, so a pipeline change is judged on the same inputs with numbers. Run from `manimgen/`:
+
+```bash
+python -m manimgen.bench run --variant baseline                  # plan once per topic (cached), render, score
+python -m manimgen.bench run --only pythag,odds --variant low --env MANIMGEN_MAX_PLACEMENT_FIXES=0
+python -m manimgen.bench score baseline low                      # per-topic table, totals, side-by-side comparison
+python -m manimgen.bench sheet baseline                          # frames.png: 4 frames per video, one row per topic
+```
+
+`run` plans each topic once in fast mode and reuses that plan for every variant, with TTS off. Results go to `manimgen/bench/runs/<variant>/<slug>/` (git-ignored), with a markdown and a JSON scorecard per variant. The scorer reports wall time, director seconds and output tokens, other LLM seconds, outcome (`ok`, `accepted_with_defects`, `fallback`), first-try pass, number of renders, and probe findings by kind. `--dir <exp>` reads an older `<exp>/<slug>/<variant>/` tree. A run spends Claude plan usage, so launch it on purpose.
+
 ## Text overlap detection
 
 Every render carries a small probe (`manimgen/probes/overlap_probe.py`) that
