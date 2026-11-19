@@ -816,10 +816,15 @@ def _observe(scene) -> None:
         _state["recorder"].observe(now, items)
         margins = parse_margins(os.environ.get(SAFE_MARGINS_ENV))
         _state["recorder"].observe_bounds(now, items, margins)
-        if margins is not None:  # vertical short: font_size 22 is the phone floor
+        # Shorts only (safe margins set): font_size 22 is the phone floor, and
+        # text-on-shape is calibrated on the layout kit. In landscape it was
+        # never measured as a retry trigger, so it stays off there for now.
+        if margins is not None:
             _state["recorder"].observe_small(now, items, reference_height)
-        if items:
-            _state["recorder"].observe_shapes(now, items, collect_shape_items(scene))
+            if items:
+                _state["recorder"].observe_shapes(
+                    now, items, collect_shape_items(scene)
+                )
     except Exception as exc:  # a probe bug must never break a render
         _record_error("observe", exc)
 

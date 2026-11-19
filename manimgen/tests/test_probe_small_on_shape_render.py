@@ -158,3 +158,14 @@ def test_text_below_font_size_22_is_reported(tmp_path, monkeypatch):
     found = {o.a for o in res.overlaps if o.kind == "small"}
     assert found == {"tiny scaled", "font 14", "a^2+b^2", "in group"}
     assert "fine 22" not in {o.a for o in res.overlaps}
+
+
+@pytest.mark.timeout(600)
+def test_on_shape_and_small_stay_off_in_landscape(tmp_path, monkeypatch):
+    """Not yet measured as a retry trigger for landscape videos."""
+    monkeypatch.chdir(tmp_path)
+    scene = tmp_path / "Bad1.py"
+    scene.write_text(BAD_ON_SHAPE, encoding="utf-8")
+    res = render_command.run_manimgl(str(scene), "Bad1", timeout=600)
+    assert res.ok, res.stderr
+    assert not {o.kind for o in res.overlaps} & {"on_shape", "small"}
