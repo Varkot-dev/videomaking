@@ -110,8 +110,11 @@ def check_manimlib_imports() -> None:
                     "sudo apt-get install xvfb, then run the command under: xvfb-run -a <command>",
                 )
         else:
-            _fail("manimlib import", stderr.strip().splitlines()[-1:][0] if stderr else "unknown",
-                  "investigate the traceback above")
+            _fail(
+                "manimlib import",
+                stderr.strip().splitlines()[-1:][0] if stderr else "unknown",
+                "investigate the traceback above",
+            )
 
 
 def check_setuptools_has_pkg_resources() -> None:
@@ -255,8 +258,43 @@ def check_claude_cli() -> None:
         _ok(f"{cli_path} (Claude Code CLI) on PATH")
 
 
+def check_offline_voice() -> None:
+    """Optional offline narration voice (Kokoro). Never blocking."""
+    fix = "pip install -r requirements-voice.txt"
+    if importlib.util.find_spec("kokoro_onnx") is None:
+        _warn(
+            "offline voice",
+            "kokoro-onnx is not installed; narration needs the network "
+            "(edge-tts) and has no fallback when it is blocked",
+            fix,
+        )
+        return
+    try:
+        sys.path.insert(0, PROJECT_ROOT)
+        from manimgen.renderer import tts_kokoro
+
+        directory = tts_kokoro.model_dir()
+        cached = tts_kokoro.models_cached(directory)
+    except Exception as e:  # config problems are reported by other checks
+        _warn("offline voice", f"could not check the model files: {e}", fix)
+        return
+    if cached:
+        _ok(f"offline voice installed, model files cached in {directory}")
+    else:
+        _warn(
+            "offline voice",
+            f"kokoro-onnx is installed but the model files (about 120 MB) are "
+            f"not in {directory}; they download on first use and need the "
+            f"network once",
+            "run a narration once with network access, or set "
+            "MANIMGEN_KOKORO_DIR to a folder that already has them",
+        )
+
+
 def main() -> int:
-    print(f"{GRN}[env-doctor]{RST} verifying manimgen setup landmines…", file=sys.stderr)
+    print(
+        f"{GRN}[env-doctor]{RST} verifying manimgen setup landmines…", file=sys.stderr
+    )
     check_manimlib_imports()
     check_setuptools_has_pkg_resources()
     check_manimgen_entrypoint()
@@ -264,6 +302,7 @@ def main() -> int:
     check_planner_uses_json_mode()
     check_render_toolchain()
     check_claude_cli()
+    check_offline_voice()
 
     if _blocking_failures:
         print(
@@ -273,7 +312,10 @@ def main() -> int:
         )
         return 1
     if _warnings:
-        print(f"{YEL}[env-doctor] {len(_warnings)} warning(s) — non-blocking.{RST}", file=sys.stderr)
+        print(
+            f"{YEL}[env-doctor] {len(_warnings)} warning(s) — non-blocking.{RST}",
+            file=sys.stderr,
+        )
     else:
         print(f"{GRN}[env-doctor] all checks passed.{RST}", file=sys.stderr)
     return 0

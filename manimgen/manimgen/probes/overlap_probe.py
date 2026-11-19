@@ -71,6 +71,21 @@ SAFE_MARGINS_ENV = "MANIMGEN_SAFE_MARGINS"
 NUDGE_ENV = "MANIMGEN_SAFE_NUDGE"
 NUDGE_LIMIT = 0.5
 MAX_PER_TEXT = 3  # findings that may name the same string
+# "small": rendered text height as a share of what the same text gives at
+# font_size 22 (the smallest size that reads on a phone). Below this is small.
+# 22 renders at exactly 1.0; 0.9 leaves room for rounding and for a kit width
+# guard that shrinks a 28 a little.
+SMALL_RATIO = 0.9
+MIN_READABLE_FONT = 22
+MAX_REFERENCES = 40  # distinct texts a reference size is measured for
+# "on_shape": a text sitting on a drawn outline or solid fill. Share of the
+# text's longest side that an outline runs through (a line through the middle
+# of a label), and share of the text covered by a mostly opaque light fill.
+ON_SHAPE_CROSS = 0.25
+ON_SHAPE_FILL_OPACITY = 0.5
+ON_SHAPE_FILL_SHARE = 0.5
+DARK_FILL = 0.15  # fills darker than this (relative luminance) are backing plates
+MAX_SHAPES = 400
 TEXT_CHARS = 40
 
 # Class names (anywhere in the MRO) that make a mobject text-like in manimgl
@@ -95,6 +110,18 @@ class TextItem:
     # The visible rectangle this text is measured against (the camera frame for
     # world-space text, the default frame for fixed-in-frame text).
     rect: tuple[float, float, float, float] | None = None
+    obj: object = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ShapeItem:
+    """One visible non-text drawn part (a stroke or a fill) at one moment."""
+
+    name: str
+    box: tuple[float, float, float, float]
+    polys: list  # outline polylines: lists of (x, y)
+    fill: float  # fill opacity
+    dark: bool  # fill colour is close to the background
 
 
 @dataclass
@@ -107,6 +134,8 @@ class Finding:
     b_kind: str = "Text"
     # "overlap": a drawn over b. "offscreen": a is cut off by the frame edge.
     # "unsafe": a sits under the app's buttons or caption (vertical shorts).
+    # "small": a is rendered below font_size 22 (fraction is its size relative
+    # to 22). "on_shape": a sits on the outline or fill of shape b.
     kind: str = "overlap"
 
     def as_dict(self) -> dict:
@@ -174,6 +203,113 @@ def inset_rect(
         rect[2] - right * w,
         rect[3] - top * h,
     )
+
+
+def segment_length_in_box(p, q, box) -> float:
+    """Length of segment p-q inside ``box`` (Liang-Barsky)."""
+    x0, y0 = p
+    dx, dy = q[0] - x0, q[1] - y0
+    t0, t1 = 0.0, 1.0
+    for num, den in (
+        (-dx, x0 - box[0]),
+        (dx, box[2] - x0),
+        (-dy, y0 - box[1]),
+        (dy, box[3] - y0),
+    ):
+        if num == 0:
+            if den < 0:
+                return 0.0
+            continue
+        r = den / num
+        if num < 0:
+            if r > t1:
+                return 0.0
+            t0 = max(t0, r)
+        else:
+            if r < t0:
+                return 0.0
+            t1 = min(t1, r)
+    if t1 <= t0:
+        return 0.0
+    return (t1 - t0) * ((dx * dx + dy * dy) ** 0.5)
+
+
+def outline_share(box, polys) -> float:
+    """Outline length inside ``box`` relative to the box's SHORTEST side.
+
+    A line that crosses a text scores about 1.0 however long the text is; a
+    corner that only grazes it scores near 0.
+    """
+    inside = 0.0
+    for poly in polys:
+        for a, b in zip(poly, poly[1:]):
+            inside += segment_length_in_box(a, b, box)
+    shortest = min(box[2] - box[0], box[3] - box[1])
+    return inside / shortest if shortest > 0 else 0.0
+
+
+def point_in_polys(x, y, polys) -> bool:
+    inside = False
+    for poly in polys:
+        j = len(poly) - 1
+        for i in range(len(poly)):
+            xi, yi = poly[i]
+            xj, yj = poly[j]
+            if (yi > y) != (yj > y) and x < (xj - xi) * (y - yi) / (yj - yi) + xi:
+                inside = not inside
+            j = i
+    return inside
+
+
+def fill_cover(box, polys, n: int = 6) -> float:
+    """Share of ``box`` lying inside the filled polygons (n x n samples)."""
+    hits = 0
+    for i in range(n):
+        for j in range(n):
+            x = box[0] + (i + 0.5) / n * (box[2] - box[0])
+            y = box[1] + (j + 0.5) / n * (box[3] - box[1])
+            if point_in_polys(x, y, polys):
+                hits += 1
+    return hits / (n * n)
+
+
+def on_shape_raw(box, shape: "ShapeItem") -> tuple[float, float]:
+    """(outline share, fill cover) of text ``box`` on ``shape``, before thresholds.
+
+    The box is shrunk by 0.01 so a text that merely touches an outline is not
+    counted. Cover is 0.0 unless the fill is mostly opaque and not a dark
+    backing plate.
+    """
+    probe_box = (box[0] + 0.01, box[1] + 0.01, box[2] - 0.01, box[3] - 0.01)
+    if intersection_area(probe_box, shape.box) <= 0:
+        return 0.0, 0.0
+    cross = outline_share(probe_box, shape.polys)
+    cover = 0.0
+    if shape.fill >= ON_SHAPE_FILL_OPACITY and not shape.dark:
+        cover = fill_cover(probe_box, shape.polys)
+    return cross, cover
+
+
+def on_shape_score(box, shape: "ShapeItem") -> float:
+    """How much text ``box`` sits on ``shape``: 0.0 when it does not.
+
+    Two ways to be "on" a shape: an outline runs through the text (share of
+    the text's longest side), or the text lies on a mostly opaque, light fill.
+    Text inside a faint fill (a label centred in a 0.25-opacity square) or on a
+    dark backing plate scores 0.
+    """
+    cross, cover = on_shape_raw(box, shape)
+    score = cross if cross >= ON_SHAPE_CROSS else 0.0
+    if cover >= ON_SHAPE_FILL_SHARE:
+        score = max(score, cover)
+    return min(score, 1.0)
+
+
+def small_ratio(height: float, reference_height: float) -> float | None:
+    """Rendered height as a share of the font_size-22 height; None if unknown."""
+    if reference_height <= 0 or height <= 0:
+        return None
+    return height / reference_height
 
 
 def parse_margins(raw: str | None) -> tuple[float, float, float, float] | None:
@@ -262,6 +398,8 @@ class OverlapRecorder:
     checks: int = 0
     max_fraction_below: float = 0.0  # largest fraction NOT reported (calibration)
     max_below_pair: tuple = ()
+    max_cross_seen: float = 0.0  # largest outline share NOT reported (calibration)
+    min_ratio_seen: float = 9.9  # smallest text size ratio vs 22 (calibration)
     morph_threshold: float | None = MORPH_THRESHOLD
     morphs: list = field(default_factory=list)  # every morph score (calibration)
 
@@ -305,6 +443,50 @@ class OverlapRecorder:
                     Finding(time, shorten(item.text), "", out, item.kind, "", "unsafe")
                 )
 
+    def observe_small(self, time: float, items: list[TextItem], reference) -> None:
+        """Report visible text rendered below font_size 22.
+
+        ``reference(item)`` returns the height the same text has at font_size
+        22, or None when it cannot be measured.
+        """
+        for item in items:
+            ref = reference(item)
+            ratio = small_ratio(item.box[3] - item.box[1], ref or 0.0)
+            if ratio is not None:
+                self.min_ratio_seen = min(self.min_ratio_seen, ratio)
+            if ratio is None or ratio >= SMALL_RATIO:
+                continue
+            self._add(
+                Finding(time, shorten(item.text), "", ratio, item.kind, "", "small")
+            )
+
+    def observe_shapes(
+        self, time: float, items: list[TextItem], shapes: list["ShapeItem"]
+    ) -> None:
+        """Report text sitting on the outline or solid fill of a drawn shape."""
+        for item in items:
+            best = None
+            for shape in shapes:
+                score = on_shape_score(item.box, shape)
+                if score == 0:
+                    self.max_cross_seen = max(
+                        self.max_cross_seen, on_shape_raw(item.box, shape)[0]
+                    )
+                if score > 0 and (best is None or score > best[0]):
+                    best = (score, shape)
+            if best is not None:
+                self._add(
+                    Finding(
+                        time,
+                        shorten(item.text),
+                        best[1].name,
+                        best[0],
+                        item.kind,
+                        best[1].name,
+                        "on_shape",
+                    )
+                )
+
     def observe_morph(self, time: float, source: str, target: str, glyphs) -> None:
         score = morph_collision(glyphs)
         self.morphs.append(
@@ -328,7 +510,8 @@ class OverlapRecorder:
         self.seen.add(key)
         # One caption laid over a whole row of labels would otherwise fill the
         # list with the same defect and hide later ones.
-        per_text = sum(1 for f in self.findings if {f.a, f.b} & {finding.a, finding.b})
+        names = {finding.a, finding.b} - {""}
+        per_text = sum(1 for f in self.findings if {f.a, f.b} & names)
         if len(self.findings) >= self.max_findings or per_text >= MAX_PER_TEXT:
             self.dropped += 1
             return
@@ -344,6 +527,8 @@ class OverlapRecorder:
             "dropped": self.dropped,
             "max_fraction_below_threshold": round(self.max_fraction_below, 3),
             "max_below_pair": list(self.max_below_pair),
+            "max_outline_share_below_threshold": round(self.max_cross_seen, 3),
+            "min_size_ratio": round(self.min_ratio_seen, 3),
             "morphs": self.morphs[:50],
             "probe_error": probe_error,
         }
@@ -423,6 +608,121 @@ def _frame_rects(scene) -> tuple[tuple | None, tuple | None]:
     return fixed, world
 
 
+def _polylines(mob) -> list:
+    """Outline of one VMobject as polylines of (x, y), curves sampled."""
+    polys = []
+    for sub in mob.get_subpaths():
+        poly = []
+        for i in range(0, len(sub) - 2, 2):
+            p0, p1, p2 = sub[i], sub[i + 1], sub[i + 2]
+            for t in (0.0, 0.25, 0.5, 0.75):
+                a, b, c = (1 - t) ** 2, 2 * (1 - t) * t, t * t
+                poly.append(
+                    (
+                        float(a * p0[0] + b * p1[0] + c * p2[0]),
+                        float(a * p0[1] + b * p1[1] + c * p2[1]),
+                    )
+                )
+        if len(sub):
+            poly.append((float(sub[-1][0]), float(sub[-1][1])))
+        if len(poly) >= 2:
+            polys.append(poly)
+    return polys
+
+
+def _fill_is_dark(mob) -> bool:
+    try:
+        colors = mob.get_fill_colors()
+        if not colors:
+            return False
+        h = str(colors[0]).lstrip("#")
+        r, g, b = (int(h[i : i + 2], 16) / 255 for i in (0, 2, 4))
+    except Exception:
+        return False
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b < DARK_FILL
+
+
+def collect_shape_items(scene) -> list[ShapeItem]:
+    """Visible non-text drawn parts of the scene (strokes and fills)."""
+    shapes: list[ShapeItem] = []
+    seen: set[int] = set()
+
+    def visit(mob) -> None:
+        if id(mob) in seen or len(shapes) >= MAX_SHAPES:
+            return
+        seen.add(id(mob))
+        if is_text_like(mob):
+            return
+        for sub in getattr(mob, "submobjects", []):
+            visit(sub)
+        if not mob.has_points():
+            return
+        try:
+            fills = mob.get_fill_opacities()
+            fill = float(max(fills)) if len(fills) else 0.0
+            widths = mob.get_stroke_widths()
+            stroke = (
+                float(max(mob.get_stroke_opacities()))
+                if len(widths) and float(max(widths)) > 0
+                else 0.0
+            )
+        except Exception:
+            return
+        if fill <= MIN_OPACITY and stroke <= MIN_OPACITY:
+            return
+        polys = _polylines(mob)
+        if not polys:
+            return
+        # A straight horizontal or vertical line has no area, so the box is
+        # taken from the outline and padded a little.
+        xs = [x for poly in polys for x, _ in poly]
+        ys = [y for poly in polys for _, y in poly]
+        box = (min(xs) - 0.02, min(ys) - 0.02, max(xs) + 0.02, max(ys) + 0.02)
+        shapes.append(
+            ShapeItem(type(mob).__name__, box, polys, fill, _fill_is_dark(mob))
+        )
+
+    for mob in list(getattr(scene, "mobjects", [])):
+        visit(mob)
+    return shapes
+
+
+_references: dict = {}
+
+
+def reference_height(item: TextItem) -> float | None:
+    """Height the same text would have at font_size 22 (cached), or None."""
+    mob = item.obj
+    if mob is None:
+        return None
+    manimlib = sys.modules.get("manimlib")
+    if manimlib is None:
+        return None
+    try:
+        names = _class_names(mob)
+        if "Tex" in names and hasattr(mob, "tex_string"):
+            key = ("Tex", mob.tex_string)
+            maker = lambda: manimlib.Tex(mob.tex_string, font_size=MIN_READABLE_FONT)  # noqa: E731
+        elif "Text" in names and isinstance(getattr(mob, "text", None), str):
+            font = getattr(mob, "font", None)
+            key = ("Text", mob.text, font)
+            maker = lambda: manimlib.Text(  # noqa: E731
+                mob.text, font_size=MIN_READABLE_FONT, font=font
+            )
+        else:
+            return None
+        if key in _references:
+            return _references[key]
+        if len(_references) >= MAX_REFERENCES:
+            return None
+        ref = maker()
+        box = _box(ref)
+        _references[key] = (box[3] - box[1]) if box else None
+        return _references[key]
+    except Exception:
+        return None
+
+
 def collect_text_items(scene, min_opacity: float = MIN_OPACITY) -> list[TextItem]:
     """Visible text-like mobjects on screen, with their ancestry."""
     fixed_rect, world_rect = _frame_rects(scene)
@@ -456,6 +756,7 @@ def collect_text_items(scene, min_opacity: float = MIN_OPACITY) -> list[TextItem
                     ancestors=ancestors,
                     ident=id(mob),
                     rect=rect,
+                    obj=mob,
                 )
             )
             return
@@ -513,9 +814,17 @@ def _observe(scene) -> None:
         items = collect_text_items(scene)
         now = float(getattr(scene, "time", 0.0))
         _state["recorder"].observe(now, items)
-        _state["recorder"].observe_bounds(
-            now, items, parse_margins(os.environ.get(SAFE_MARGINS_ENV))
-        )
+        margins = parse_margins(os.environ.get(SAFE_MARGINS_ENV))
+        _state["recorder"].observe_bounds(now, items, margins)
+        # Shorts only (safe margins set): font_size 22 is the phone floor, and
+        # text-on-shape is calibrated on the layout kit. In landscape it was
+        # never measured as a retry trigger, so it stays off there for now.
+        if margins is not None:
+            _state["recorder"].observe_small(now, items, reference_height)
+            if items:
+                _state["recorder"].observe_shapes(
+                    now, items, collect_shape_items(scene)
+                )
     except Exception as exc:  # a probe bug must never break a render
         _record_error("observe", exc)
 

@@ -107,6 +107,14 @@ _ALLOWED_IMPORT_MODULES = frozenset(
     }
 )
 
+# The one project module a scene may import: the Shorts layout kit. Only the
+# `from ... import ...` form is accepted, and only `*` (the package defines
+# `__all__ = ["ShortScene"]`) or the single name `ShortScene`, so a scene
+# cannot reach `manimgen` internals through it. `manimgen` itself, every other
+# submodule and `import manimgen.scenekit` stay rejected.
+_KIT_MODULES = frozenset({"manimgen.scenekit", "manimgen.scenekit.shorts"})
+_KIT_NAMES = frozenset({"*", "ShortScene"})
+
 # Submodules of an allowed root that are NOT allowed (file, pickle, ctypes and
 # compiler access inside numpy; manimlib internals that write files, run LaTeX
 # or open windows are reached through denied names, see below).
@@ -511,10 +519,19 @@ def _check_import(node: ast.Import | ast.ImportFrom, findings: list[str]) -> Non
             findings.append(f"{_line(node)}: relative import is not allowed")
             return
         module = node.module or ""
+        if module in _KIT_MODULES:
+            for alias in node.names:
+                if alias.name not in _KIT_NAMES or alias.asname:
+                    findings.append(
+                        f"{_line(node)}: from {module!r} only `import *` or "
+                        "`import ShortScene` (no alias) is allowed"
+                    )
+            return
         if not _module_allowed(module):
             findings.append(
                 f"{_line(node)}: import from {module!r} is not allowed "
-                f"(allowed modules: {', '.join(allowed)})"
+                f"(allowed modules: {', '.join(allowed)}; and "
+                "`from manimgen.scenekit import *` in a vertical short)"
             )
             return
         for alias in node.names:

@@ -122,11 +122,18 @@ of each is what was measured, not what is hoped.
 vertical Short run on the maintainer's Mac on 2026-11-16 produced 27.6 s of
 edge-tts narration. Microsoft's speech service still answers HTTP 403 to edge-tts
 from GitHub's Linux and Windows runners (issue #109, measured on 2026-10-12 with
-`scripts/tts_smoke.py`) and from the cloud container used for agent sessions, so
-CI and cloud runs cannot narrate. Whether it works from the library PC's network
-has never been tried: run `python scripts\tts_smoke.py` there. If it fails, the
+`scripts/tts_smoke.py`) and cannot be reached from the cloud container used for
+agent sessions. Whether it works from the library PC's network has never been
+tried: run `python scripts	ts_smoke.py` there. An offline fallback now exists:
+with `pip install -r requirements-voice.txt` (Kokoro), a failed edge-tts call
+switches that run to a local voice and the video gets narration. Without it, the
 run stops after planning (exit code 1) unless you use `--allow-silent` or
-`tts.enabled: false`. There is no offline narration fallback.
+`tts.enabled: false`. What is not known: how Kokoro's voice quality compares with
+edge-tts, and how close its word times are on real speech (cue onsets are exact
+by construction, word times inside a cue are estimated from phoneme counts; one
+proxy check against the audio's energy dips gave a median miss of about 50 ms on
+one 2-cue sample). The model download from GitHub releases has only been run
+from a Linux cloud machine, never on Windows or macOS.
 
 **Graphics on the library PC.** Rendering on its Intel UHD 770 is unverified.
 Software OpenGL (Mesa llvmpipe) is verified only on GitHub's runners, using one
