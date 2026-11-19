@@ -132,6 +132,30 @@ def render_timeout(kind: str) -> float:
     return value if value > 0 else float(_RENDER_DEFAULTS[key])
 
 
+def preflight_enabled() -> bool:
+    """Whether a scene is dry-run for layout problems before its real render.
+
+    ``rendering.preflight`` in config.yaml (default on); ``MANIMGEN_PREFLIGHT=0``
+    (or ``false``/``off``) turns it off for one run, any other non-empty value
+    turns it on. With it off the pipeline behaves as it did without preflight.
+    """
+    raw = os.environ.get("MANIMGEN_PREFLIGHT", "").strip().lower()
+    if raw:
+        return raw not in ("0", "false", "off", "no")
+    value = _RENDERING.get("preflight", _RENDER_DEFAULTS["preflight"])
+    if isinstance(value, str):
+        return value.strip().lower() not in ("0", "false", "off", "no", "")
+    return bool(value)
+
+
+def preflight_timeout() -> float:
+    """Seconds a preflight dry run may take before its process tree is killed."""
+    value = float(
+        _RENDERING.get("preflight_timeout") or _RENDER_DEFAULTS["preflight_timeout"]
+    )
+    return value if value > 0 else float(_RENDER_DEFAULTS["preflight_timeout"])
+
+
 # Output formats. "landscape" is the configured long-form video; "short" is a
 # vertical 9:16 video for YouTube Shorts. The format is chosen once per run
 # (cli --short, or the plan being resumed) before anything renders.

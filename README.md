@@ -479,7 +479,7 @@ manimgen "limits" --short --format misconception \
 - Copy `manimgen/voice_profile.example.md`, drop `.example` from the copy's name, and describe how you talk; the planner reads it so the script sounds like you. Your copy is git-ignored.
 - The frame is 4.5 units wide and 8 tall. Readable content stays inside x -2.0 to 1.4 and y -2.0 to 2.8, the area the Shorts buttons and caption leave clear (third-party measurements; upload an unlisted test to confirm on your phone).
 - `manimgen --resume` keeps the short format of the cached plan.
-- Two drafts: the scene-writing model is asked for two independent scenes at once. Each is rendered small (540x960 at 30 fps), scored with the free checks (text overlaps and safe-area findings, freeze-frame tails, black or frozen frames, then timing warnings, then shorter code), and the better one continues through the normal pipeline and is rendered at full size. This uses about twice the plan allowance for scene writing and adds a short draft render. Set `shorts.drafts` in `manimgen/config.yaml` (default `2`, `1` turns it off, at most `3`) or `MANIMGEN_SHORT_DRAFTS` for one run. The scores are in the run log as `[drafts]` lines and in `output/logs/drafts.jsonl`. Landscape videos are not affected.
+- Two drafts: the scene-writing model is asked for two independent scenes at once. Each is run without drawing frames (a few seconds; see Preflight below, and with preflight off each is rendered small at 540x960 and 30 fps instead) and scored with the free checks (text overlaps, safe-area and layout kit findings, freeze-frame tails, then timing warnings, then shorter code), and the better one continues through the normal pipeline and is rendered at full size. This uses about twice the plan allowance for scene writing and adds a short draft render. Set `shorts.drafts` in `manimgen/config.yaml` (default `2`, `1` turns it off, at most `3`) or `MANIMGEN_SHORT_DRAFTS` for one run. The scores are in the run log as `[drafts]` lines and in `output/logs/drafts.jsonl`. Landscape videos are not affected.
 - Before posting, use the `manimgen-shorts-publish` skill: it runs the review checklist, checks the upload is not a near-copy of recent ones, and writes the title and description.
 
 What is not built yet: recording your own narration (the voice is still the configured TTS voice), an automatic safe-zone check on rendered frames, and music.
@@ -508,6 +508,7 @@ shell, or in a git-ignored `.env` file in `manimgen/`):
 | `MANIMGEN_KWARG_ENFORCE` | `1` strips constructor keyword arguments proven invalid | off (log only) |
 | `MANIMGEN_UNKNOWN_SYMBOLS` | `report` logs unknown ManimGL names instead of blocking the render | blocking |
 | `MANIMGEN_OVERLAP_PROBE` | `0` turns off the text overlap probe | on |
+| `MANIMGEN_PREFLIGHT` | `0` turns off preflight, the dry run (no frames) that finds crashes and text placement problems before the real render; overrides `rendering.preflight` | on |
 | `MANIMGEN_SHORT_DRAFTS` | How many scenes the model writes for a short before the best is kept (`1` turns it off); overrides `shorts.drafts` | `2` |
 | `MANIMGEN_SAFE_NUDGE` | `0` stops a short's render from moving new text that sits up to 0.5 units outside the safe area back inside before it is drawn | on |
 | `MANIMGEN_FIRST_PASS_LAYOUT` | `1` runs the LLM vision layout check on the first render too | off |
@@ -654,6 +655,8 @@ the overlap survives the retries the section ships as
 
 **See the report:** `<video>.overlaps.json` next to each rendered video.
 **Switch it off:** `MANIMGEN_OVERLAP_PROBE=0`.
+
+**Preflight.** Before a scene's real render, manimgen runs it once without drawing frames (ManimGL's skip-animations mode: every animation jumps to its end state). That takes a few seconds, where a real render of a 43 second Short takes minutes on a machine without a GPU. The same overlap probe and, for Shorts, the layout kit's own findings run during it, so a crash, text over text, text off screen or under the Shorts buttons, small text and text on a shape are found, and fixed by the model, before the one real render; each fix is checked by another dry run instead of a render. The real render still runs the frame, timing and vision checks, which need real frames. Set `rendering.preflight: false` in `manimgen/config.yaml`, or `MANIMGEN_PREFLIGHT=0` for one run, to go back to rendering first; `rendering.preflight_timeout` (default 120 seconds) is the dry run's own time limit. A scene whose layout depends on many small per-frame updater steps can end in a slightly different state in a dry run than in a render.
 
 **Limits.** Text against text only: text over a shape, or shapes over each
 other, is not checked. It looks at settled states, not mid-animation frames,

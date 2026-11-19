@@ -210,6 +210,8 @@ _OLD_RENDERING = {
     "render_timeout_2d": 240.0,
     "render_timeout_3d": 360.0,
     "render_timeout_fallback": 180.0,
+    "preflight": True,
+    "preflight_timeout": 120.0,
 }
 _OLD_LLM = {
     "llm_provider": "claude_cli",

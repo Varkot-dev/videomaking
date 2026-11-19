@@ -90,6 +90,10 @@ DEFAULTS: dict = {
         "render_timeout_2d": 240,
         "render_timeout_3d": 360,
         "render_timeout_fallback": 180,
+        # Layout check that runs the scene without drawing frames, before the
+        # real render (seconds allowed). See validator/preflight.py.
+        "preflight": True,
+        "preflight_timeout": 120,
     },
     "shorts": {
         # Optional notes on how the owner talks and explains; read by the
@@ -291,7 +295,12 @@ def _validate(path: Path, raw: dict) -> dict:
             raise ConfigError(
                 f"{path}: rendering.{key} must be 1 or more, got {rend[key]!r}."
             )
-    for key in ("render_timeout_2d", "render_timeout_3d", "render_timeout_fallback"):
+    for key in (
+        "render_timeout_2d",
+        "render_timeout_3d",
+        "render_timeout_fallback",
+        "preflight_timeout",
+    ):
         rend[key] = _as(path, f"rendering.{key}", rend[key], float, "a number")
 
     quality = str(rend.get("quality", "")).strip().lower()

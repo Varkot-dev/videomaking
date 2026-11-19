@@ -69,6 +69,9 @@ SAFE_MARGINS_ENV = "MANIMGEN_SAFE_MARGINS"
 # the safe area is moved, and only by up to NUDGE_LIMIT units; anything further
 # out is a layout mistake the probe reports for a real fix.
 NUDGE_ENV = "MANIMGEN_SAFE_NUDGE"
+# Set to "1" by render_command for a dry run (manimgl -s). Must match
+# render_command.DRY_RUN_ENV.
+DRY_RUN_ENV = "MANIMGEN_DRY_RUN"
 NUDGE_LIMIT = 0.5
 MAX_PER_TEXT = 3  # findings that may name the same string
 # "small": rendered text height as a share of what the same text gives at
@@ -930,6 +933,19 @@ def patch_scene_module(module) -> None:
     original_tear_down = scene_cls.tear_down
     original_begin = scene_cls.begin_animations
     original_add = getattr(scene_cls, "add", None)
+    original_finish = getattr(scene_cls, "finish_animations", None)
+
+    def finish_animations(self, animations):
+        # In skip mode manimgl calls update_mobjects(run_time) here on top of
+        # the one update_frame(run_time) already did, so every updater runs
+        # twice per play() and a dry run ends in a different state than a real
+        # render. A real render calls update_mobjects(0): do the same.
+        saved = self.skip_animations
+        self.skip_animations = False
+        try:
+            return original_finish(self, animations)
+        finally:
+            self.skip_animations = saved
 
     def add(self, *mobjects, **kwargs):
         _nudge_new_text(self, mobjects)
@@ -954,6 +970,8 @@ def patch_scene_module(module) -> None:
 
     scene_cls.post_play = post_play
     scene_cls.tear_down = tear_down
+    if os.environ.get(DRY_RUN_ENV) == "1" and original_finish is not None:
+        scene_cls.finish_animations = finish_animations
     scene_cls.begin_animations = begin_animations
     if original_add is not None:
         scene_cls.add = add
