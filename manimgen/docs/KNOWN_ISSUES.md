@@ -123,8 +123,15 @@ GitHub's Linux and Windows machines (issue #109, measured on 2026-10-12 with
 `scripts/tts_smoke.py`). Real narration is therefore not shown to work anywhere.
 Whether it works from the library PC's network has never been tried: run
 `python scripts\tts_smoke.py` there. If it fails, the run stops after planning
-(exit code 1) unless you use `--allow-silent` or `tts.enabled: false`. There is
-no offline narration fallback.
+(exit code 1) unless you use `--allow-silent` or `tts.enabled: false`. An offline fallback now
+exists: with `pip install -r requirements-voice.txt` (Kokoro), a failed edge-tts
+call switches that run to a local voice and the video gets narration. What is
+not known: how its voice quality compares with edge-tts, and how close its word
+times are on real speech (cue onsets are exact by construction, word times
+inside a cue are estimated from phoneme counts; one proxy check against the
+audio's energy dips gave a median miss of about 50 ms on one 2-cue sample).
+The model download from GitHub releases has only been run from a Linux cloud
+machine, never on Windows or macOS.
 
 **Graphics on the library PC.** Rendering on its Intel UHD 770 is unverified.
 Software OpenGL (Mesa llvmpipe) is verified only on GitHub's runners, using one

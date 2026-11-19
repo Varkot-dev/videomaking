@@ -276,6 +276,25 @@ pip install -e .                      # installs the manimgen and manimgen-edit 
 
 `requirements.txt` already pins `manimgl==1.7.2` and `setuptools<81` (manimgl 1.7.2 imports `pkg_resources`, which setuptools 81 removed). Use `pip install -r requirements.txt` instead of the dev file if you only want to run the pipeline.
 
+**Offline narration voice (optional).** edge-tts needs Microsoft's online service, which is blocked on some networks and on cloud machines. Kokoro is an open voice model (Apache-2.0) that runs on the CPU, so a complete video can be made with no speech service:
+
+```bash
+pip install -r requirements-voice.txt   # kokoro-onnx; wheels for Windows, macOS, Linux, Python 3.11 to 3.13
+```
+
+No admin rights, compiler or system espeak-ng are needed. The first use downloads two model files (about 120 MB) from GitHub releases into a per-user cache folder (`%LOCALAPPDATA%\manimgen\kokoro` on Windows, `~/Library/Caches/manimgen/kokoro` on macOS, `$XDG_CACHE_HOME/manimgen/kokoro` or `~/.cache/manimgen/kokoro` on Linux); the model is never stored in the repository. Set `MANIMGEN_KOKORO_DIR` or `tts.kokoro.model_dir` to use another folder, for example one you filled by hand on a machine without GitHub access. `python scripts/env_doctor.py` warns (never blocks) when the package or the model files are missing.
+
+```yaml
+tts:
+  engine: edge-tts        # edge-tts | kokoro (kokoro = always offline)
+  fallback_engine: kokoro # kokoro | none: used when edge-tts cannot be reached
+  kokoro:
+    voice: am_michael
+    speed: 1.05
+```
+
+With the package installed, the default settings already fall back to Kokoro when edge-tts fails; without it nothing changes. Kokoro gives no word timestamps, so cue onsets are exact (each cue is spoken as its own clip and the clips are joined) and word times inside a cue are estimated from phoneme counts. The engine and its voice are part of the cache key, so switching engines rebuilds the narration and the clips made from it. On the one CPU it was tried on (a cloud container) speech took about as long as the audio it made; other machines are unmeasured.
+
 **System dependencies:** FFmpeg, and optionally a LaTeX distribution for `Tex()` formulas.
 
 ```bash
@@ -392,7 +411,7 @@ python scripts\env_doctor.py
 **Windows notes:**
 
 - ManimGL renders with OpenGL 3.3 or newer. Whether the library PC's integrated Intel graphics can create that context has not been checked: run `python scripts\render_smoke.py` and read its `OpenGL` line. If it fails, the no-admin Mesa fallback in [manimgen/docs/LIBRARY_PC_FIRST_RUN.md](manimgen/docs/LIBRARY_PC_FIRST_RUN.md) is the tested route on GitHub's Windows machines. Render times on this class of machine are unmeasured; set `rendering.quality: l` or `m` in `config.yaml` for faster drafts.
-- Narration needs internet access to Microsoft's speech service, which answered HTTP 403 to GitHub's machines (issue #109); whether it works from your network is unknown until `python scripts\tts_smoke.py` passes there. Without it, use `tts.enabled: false` (silent draft) or `--allow-silent`.
+- Narration needs internet access to Microsoft's speech service, which answered HTTP 403 to GitHub's machines (issue #109); whether it works from your network is unknown until `python scripts\tts_smoke.py` passes there. Without it, install the offline voice (`pip install -r requirements-voice.txt`, see "Offline narration voice" below), or use `tts.enabled: false` (silent draft) or `--allow-silent`.
 - Shared PCs that reset the user profile on logout will lose these installs; keep the clone and tools on a USB drive or expect to repeat the setup.
 
 ---
@@ -491,7 +510,8 @@ shell, or in a git-ignored `.env` file in `manimgen/`):
 | `MANIMGEN_RENDER_ENV_EXTRA` | Comma-separated extra variable names to pass to the render child | none |
 | `MANIMGEN_EVIDENCE_LOG`, `MANIMGEN_EVIDENCE_DIR` | `0` disables the evidence log; folder it is written to | on, `output/logs` (relative to where you run) |
 | `MANIMGEN_EDITOR_TOKEN` | Token for non-browser clients of the clip editor | random per start |
-| `HTTPS_PROXY` | Proxy for edge-tts (or set `tts.proxy` in `config.yaml`) | unset |
+| `MANIMGEN_KOKORO_DIR` | Folder for the offline voice's model files (beats `tts.kokoro.model_dir`) | per-user cache folder |
+| `HTTPS_PROXY` | Proxy for edge-tts and the offline voice's model download (or set `tts.proxy` in `config.yaml`) | unset |
 
 ### Run summary and exit codes
 
@@ -535,7 +555,9 @@ what is missing (when planning itself hit the limit there is no plan yet, so
 rerun the same command instead).
 
 Narration runs for every section before any scene is generated. edge-tts is
-tried three times per section; if it still fails (no network, a proxy that
+tried three times per section. If the offline voice is installed (see below) and
+edge-tts fails with a network or service error, one line is logged and the offline
+voice speaks that section and the rest of the run. Otherwise, if it still fails (no network, a proxy that
 blocks it, the service down), the run stops right there with exit code 1, so
 only the planning calls were used. Fix the connection (behind a proxy, set
 `HTTPS_PROXY` or `tts.proxy` in `config.yaml`) and run `manimgen --resume`, or

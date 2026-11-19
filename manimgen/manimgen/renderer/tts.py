@@ -21,6 +21,8 @@
 # cue word[i] starts speaking is exactly when the next animation should begin.
 
 import asyncio
+import contextlib
+import contextvars
 import json
 import logging
 import os
@@ -114,7 +116,7 @@ async def _generate_async(
     return word_timestamps
 
 
-def generate_narration(
+def _generate_edge(
     text: str,
     output_path: str,
     voice: str | None = None,
@@ -156,6 +158,125 @@ def generate_narration(
     raise RuntimeError(
         f"edge-tts failed after {_TTS_ATTEMPTS} attempts: {last_error}"
     ) from last_error
+
+
+# ---------------------------------------------------------------------------
+# Engine selection and the offline fallback
+# ---------------------------------------------------------------------------
+
+# Set once edge-tts has failed and the offline voice took over. From then on
+# the run goes straight to the offline voice, so one video does not alternate
+# between two voices, and a blocked network is not retried for every section.
+_edge_unreachable = False
+
+
+def reset_fallback() -> None:
+    """Forget that edge-tts failed (a new run, or tests)."""
+    global _edge_unreachable
+    _edge_unreachable = False
+
+
+def _offline_voice():
+    """The offline engine module, imported lazily (it needs numpy and requests)."""
+    from manimgen.renderer import tts_kokoro
+
+    return tts_kokoro
+
+
+def _is_service_failure(exc: BaseException) -> bool:
+    """True for a failure of the speech service or the network path to it."""
+    import aiohttp
+    from edge_tts import exceptions as edge_exc
+
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(
+            exc,
+            (
+                OSError,
+                asyncio.TimeoutError,
+                aiohttp.ClientError,
+                edge_exc.EdgeTTSException,
+            ),
+        ):
+            return True
+        if isinstance(exc, RuntimeError) and (
+            "no audio" in str(exc) or "no word timestamps" in str(exc)
+        ):
+            return True
+        exc = exc.__cause__
+    return False
+
+
+_cue_hint: contextvars.ContextVar = contextvars.ContextVar("tts_cue_hint", default=None)
+
+
+@contextlib.contextmanager
+def cue_hint(cue_word_indices: list[int] | None):
+    """Tell ``generate_narration`` where the cues are without changing its call.
+
+    The offline voice needs the cue word indices to place cue onsets exactly;
+    edge-tts does not. Callers (and test doubles) keep the two-argument call.
+    """
+    token = _cue_hint.set(cue_word_indices)
+    try:
+        yield
+    finally:
+        _cue_hint.reset(token)
+
+
+def engine_tag() -> str | None:
+    """Identity of the offline voice when it is the one speaking, else None.
+
+    Part of the section cache key: the edge-tts voice is already keyed by
+    ``cli._content_hash``, and this covers Kokoro, whether chosen with
+    ``tts.engine`` or switched to after edge-tts failed.
+    """
+    if _TTS_CFG.get("engine") == "kokoro" or _edge_unreachable:
+        k = _TTS_CFG.get("kokoro") or {}
+        return f"kokoro:{k.get('voice')}:{k.get('speed')}"
+    return None
+
+
+def generate_narration(
+    text: str,
+    output_path: str,
+    voice: str | None = None,
+    cue_word_indices: list[int] | None = None,
+) -> tuple[str, list[WordTimestamp]]:
+    """Generate narration with the configured engine.
+
+    ``tts.engine`` picks edge-tts (default) or the offline Kokoro voice. When
+    edge-tts fails with a network or service error and ``tts.fallback_engine``
+    is kokoro and kokoro-onnx is installed, one line is logged and Kokoro
+    speaks instead. ``cue_word_indices`` lets Kokoro place cue onsets exactly;
+    edge-tts ignores it (see ``cue_hint``). ``voice`` names an edge-tts voice.
+    """
+    global _edge_unreachable
+    if cue_word_indices is None:
+        cue_word_indices = _cue_hint.get()
+    offline = _TTS_CFG.get("engine") == "kokoro" or _edge_unreachable
+    if not offline:
+        try:
+            return _generate_edge(text, output_path, voice)
+        except RuntimeError as e:
+            can_fall_back = (
+                _TTS_CFG.get("fallback_engine", "kokoro") == "kokoro"
+                and _is_service_failure(e)
+                and _offline_voice().is_installed()
+            )
+            if not can_fall_back:
+                raise
+            logger.warning(
+                "[tts] edge-tts is not reachable (%s); using the offline "
+                "voice (Kokoro) for the rest of this run.",
+                e.__cause__ or e,
+            )
+            _edge_unreachable = True
+    return _offline_voice().generate_narration(
+        text, output_path, cue_word_indices=cue_word_indices
+    )
 
 
 def save_timestamps(timestamps: list[WordTimestamp], json_path: str) -> None:
