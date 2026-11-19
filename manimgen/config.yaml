@@ -93,17 +93,20 @@ rendering:
 #   export MANIMGEN_FREEZE_BLOCK_THRESHOLD=2.0
 
 tts:
-  # engine: edge-tts (Microsoft's online voices, the default) or kokoro (an
-  # offline voice that runs on the CPU, no network needed after a one-time
-  # model download). Kokoro needs: pip install -r requirements-voice.txt
-  engine: edge-tts
+  # engine: kokoro (the default: an offline voice that runs on the CPU, no
+  # network needed after a one-time model download; the owner chose Michael,
+  # voice am_michael, on 2026-11-19) or edge-tts (Microsoft's online voices).
+  # Kokoro needs: pip install -r requirements-voice.txt. Without it, or when
+  # the model files cannot be downloaded, one warning is logged and edge-tts
+  # (voice below) narrates instead.
+  engine: kokoro
   voice: en-US-AndrewMultilingualNeural
   enabled: true
   speed: "+5%"
   # Optional proxy URL for edge-tts and the Kokoro model download (HTTPS_PROXY
   # is used when this is unset).
   # proxy: "http://proxy.example.com:8080"
-  # When edge-tts cannot be reached (no network, HTTP 403), use this engine
+  # When edge-tts is the engine and cannot be reached (no network, HTTP 403), use this engine
   # instead of failing: kokoro | none. Only takes effect when kokoro-onnx is
   # installed; without it narration behaves exactly as before.
   fallback_engine: kokoro

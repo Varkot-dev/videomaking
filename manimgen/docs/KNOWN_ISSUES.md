@@ -124,9 +124,12 @@ edge-tts narration. Microsoft's speech service still answers HTTP 403 to edge-tt
 from GitHub's Linux and Windows runners (issue #109, measured on 2026-10-12 with
 `scripts/tts_smoke.py`) and cannot be reached from the cloud container used for
 agent sessions. Whether it works from the library PC's network has never been
-tried: run `python scripts	ts_smoke.py` there. An offline fallback now exists:
-with `pip install -r requirements-voice.txt` (Kokoro), a failed edge-tts call
-switches that run to a local voice and the video gets narration. Without it, the
+tried: run `python scripts/tts_smoke.py` there. The default voice is now the
+offline Kokoro am_michael (chosen by the owner on 2026-11-19): with
+`pip install -r requirements-voice.txt` narration needs no speech service, and a
+failed edge-tts call (when `tts.engine` is edge-tts) also switches that run to it.
+Without the package or the model files, one warning is logged and edge-tts
+narrates. If edge-tts is blocked as well, the
 run stops after planning (exit code 1) unless you use `--allow-silent` or
 `tts.enabled: false`. What is not known: how Kokoro's voice quality compares with
 edge-tts, and how close its word times are on real speech (cue onsets are exact

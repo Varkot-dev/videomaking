@@ -169,11 +169,17 @@ def _generate_edge(
 # between two voices, and a blocked network is not retried for every section.
 _edge_unreachable = False
 
+# Set once tts.engine is kokoro but the offline voice could not be set up
+# (package missing, model files not obtainable). From then on the run uses
+# edge-tts and never tries Kokoro again, so the two engines cannot loop.
+_kokoro_unavailable = False
+
 
 def reset_fallback() -> None:
-    """Forget that edge-tts failed (a new run, or tests)."""
-    global _edge_unreachable
+    """Forget both fallbacks (a new run, or tests)."""
+    global _edge_unreachable, _kokoro_unavailable
     _edge_unreachable = False
+    _kokoro_unavailable = False
 
 
 def _offline_voice():
@@ -231,8 +237,12 @@ def engine_tag() -> str | None:
 
     Part of the section cache key: the edge-tts voice is already keyed by
     ``cli._content_hash``, and this covers Kokoro, whether chosen with
-    ``tts.engine`` or switched to after edge-tts failed.
+    ``tts.engine`` or switched to after edge-tts failed. It names the engine
+    that actually speaks: after Kokoro proved unavailable it is None, so edge-tts
+    clips are never mixed up with Kokoro clips.
     """
+    if _kokoro_unavailable:
+        return None
     if _TTS_CFG.get("engine") == "kokoro" or _edge_unreachable:
         k = _TTS_CFG.get("kokoro") or {}
         return f"kokoro:{k.get('voice')}:{k.get('speed')}"
@@ -247,36 +257,89 @@ def generate_narration(
 ) -> tuple[str, list[WordTimestamp]]:
     """Generate narration with the configured engine.
 
-    ``tts.engine`` picks edge-tts (default) or the offline Kokoro voice. When
-    edge-tts fails with a network or service error and ``tts.fallback_engine``
-    is kokoro and kokoro-onnx is installed, one line is logged and Kokoro
-    speaks instead. ``cue_word_indices`` lets Kokoro place cue onsets exactly;
-    edge-tts ignores it (see ``cue_hint``). ``voice`` names an edge-tts voice.
+    ``tts.engine`` picks edge-tts or the offline Kokoro voice. Two fallbacks,
+    each used at most once per run and never chained into a loop:
+
+    * engine kokoro, but kokoro-onnx is not installed or its model files cannot
+      be obtained: one warning with the install command, then edge-tts speaks
+      for the rest of the run.
+    * engine edge-tts, but edge-tts fails with a network or service error and
+      ``tts.fallback_engine`` is kokoro and kokoro-onnx is installed: one line
+      is logged and Kokoro speaks for the rest of the run.
+
+    If the engine a fallback switched to fails as well, the error names both.
+    ``cue_word_indices`` lets Kokoro place cue onsets exactly; edge-tts ignores
+    it (see ``cue_hint``). ``voice`` names an edge-tts voice.
     """
-    global _edge_unreachable
+    global _edge_unreachable, _kokoro_unavailable
     if cue_word_indices is None:
         cue_word_indices = _cue_hint.get()
-    offline = _TTS_CFG.get("engine") == "kokoro" or _edge_unreachable
-    if not offline:
+    kokoro_error: Exception | None = None
+
+    if _TTS_CFG.get("engine") == "kokoro" and not _kokoro_unavailable:
+        kokoro = _offline_voice()
         try:
-            return _generate_edge(text, output_path, voice)
-        except RuntimeError as e:
-            can_fall_back = (
-                _TTS_CFG.get("fallback_engine", "kokoro") == "kokoro"
-                and _is_service_failure(e)
-                and _offline_voice().is_installed()
+            return kokoro.generate_narration(
+                text, output_path, cue_word_indices=cue_word_indices
             )
-            if not can_fall_back:
-                raise
+        except kokoro.KokoroNotReady as e:
+            kokoro_error = e
+            _kokoro_unavailable = True
             logger.warning(
-                "[tts] edge-tts is not reachable (%s); using the offline "
-                "voice (Kokoro) for the rest of this run.",
-                e.__cause__ or e,
+                "[tts] tts.engine is kokoro but the offline voice is not ready "
+                "(%s). To install it: pip install -r requirements-voice.txt "
+                "(the model files download on first use, which needs the "
+                "network once). Narrating with edge-tts for the rest of this "
+                "run.",
+                e,
             )
-            _edge_unreachable = True
-    return _offline_voice().generate_narration(
-        text, output_path, cue_word_indices=cue_word_indices
-    )
+    elif _edge_unreachable and not _kokoro_unavailable:
+        try:
+            return _offline_voice().generate_narration(
+                text, output_path, cue_word_indices=cue_word_indices
+            )
+        except _offline_voice().KokoroNotReady as e:
+            # Edge-tts already failed this run; do not go back to it.
+            _edge_unreachable = False
+            _kokoro_unavailable = True
+            raise RuntimeError(
+                f"edge-tts could not be reached and the offline voice is not "
+                f"ready either: {e}"
+            ) from e
+
+    try:
+        return _generate_edge(text, output_path, voice)
+    except RuntimeError as e:
+        if kokoro_error is not None:
+            raise RuntimeError(
+                f"{e}. The offline voice (Kokoro) was tried first and is not "
+                f"ready: {kokoro_error}"
+            ) from e
+        can_fall_back = (
+            not _kokoro_unavailable
+            and _TTS_CFG.get("fallback_engine", "kokoro") == "kokoro"
+            and _is_service_failure(e)
+            and _offline_voice().is_installed()
+        )
+        if not can_fall_back:
+            raise
+        logger.warning(
+            "[tts] edge-tts is not reachable (%s); using the offline "
+            "voice (Kokoro) for the rest of this run.",
+            e.__cause__ or e,
+        )
+        _edge_unreachable = True
+    try:
+        return _offline_voice().generate_narration(
+            text, output_path, cue_word_indices=cue_word_indices
+        )
+    except _offline_voice().KokoroNotReady as k:
+        _edge_unreachable = False
+        _kokoro_unavailable = True
+        raise RuntimeError(
+            f"edge-tts could not be reached and the offline voice is not "
+            f"ready either: {k}"
+        ) from k
 
 
 def save_timestamps(timestamps: list[WordTimestamp], json_path: str) -> None:

@@ -264,8 +264,9 @@ def check_offline_voice() -> None:
     if importlib.util.find_spec("kokoro_onnx") is None:
         _warn(
             "offline voice",
-            "kokoro-onnx is not installed; narration needs the network "
-            "(edge-tts) and has no fallback when it is blocked",
+            "Kokoro (voice am_michael) is the configured default narration "
+            "voice but kokoro-onnx is not installed; narration will use "
+            "edge-tts instead, which needs the network",
             fix,
         )
         return
@@ -283,9 +284,10 @@ def check_offline_voice() -> None:
     else:
         _warn(
             "offline voice",
-            f"kokoro-onnx is installed but the model files (about 120 MB) are "
-            f"not in {directory}; they download on first use and need the "
-            f"network once",
+            f"Kokoro is the configured default narration voice and kokoro-onnx "
+            f"is installed, but the model files (about 120 MB) are not in "
+            f"{directory}; they download on first use and need the network "
+            f"once, otherwise narration uses edge-tts",
             "run a narration once with network access, or set "
             "MANIMGEN_KOKORO_DIR to a folder that already has them",
         )

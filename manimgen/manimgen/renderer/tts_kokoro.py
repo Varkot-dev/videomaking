@@ -80,7 +80,13 @@ _MIN_CLAUSE_WORDS = 3  # a comma phrase shorter than this is merged into its nei
 
 
 class KokoroUnavailable(RuntimeError):
-    """The offline voice cannot be used (package missing, models not available)."""
+    """The offline voice cannot be used."""
+
+
+class KokoroNotReady(KokoroUnavailable):
+    """Set-up is missing: the package is not installed or the model files
+    cannot be obtained. ``tts.generate_narration`` answers this one by
+    narrating with edge-tts instead; other failures are real errors."""
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +170,7 @@ def _download_one(url: str, dest: Path, size: int, proxy: str | None) -> None:
                         f.write(chunk)
                         written += len(chunk)
         if written != size:
-            raise KokoroUnavailable(
+            raise KokoroNotReady(
                 f"downloaded {dest.name} is {written} bytes, expected {size}"
             )
         os.replace(part, dest)  # atomic: a partial file never has the real name
@@ -197,7 +203,7 @@ def ensure_models(directory: Path | None = None) -> tuple[Path, Path]:
         except KokoroUnavailable:
             raise
         except (requests.RequestException, OSError) as e:
-            raise KokoroUnavailable(
+            raise KokoroNotReady(
                 f"could not download the offline voice files to {directory}: {e}. "
                 f"Check the network (behind a proxy, set HTTPS_PROXY or tts.proxy), "
                 f"or download {', '.join(n for n, _ in missing)} yourself from "
@@ -448,7 +454,7 @@ def load_synth(settings: dict | None = None) -> KokoroSynth:
     """Load (once per model, voice and speed) the offline voice."""
     settings = kokoro_settings() if settings is None else settings
     if not is_installed():
-        raise KokoroUnavailable(
+        raise KokoroNotReady(
             "the offline voice needs kokoro-onnx: pip install -r requirements-voice.txt"
         )
     model_path, voices_path = ensure_models(model_dir(settings))

@@ -189,7 +189,7 @@ The module-by-module map, and why each piece is built the way it is, is in
 | Animation engine | [ManimGL](https://github.com/3b1b/manim) 1.7.2 (3b1b version, not ManimCommunity) |
 | LLM, default | Claude via [Claude Code](https://claude.com/claude-code) in headless mode (`claude -p`), billed to your Claude plan's usage limits; no API key |
 | LLM, also supported | Anthropic API (`claude-sonnet-5-5`), Google Gemini 2.5 Flash, and Ollama for fully local runs |
-| TTS | Microsoft edge-tts (Neural voices, WordBoundary timestamps) |
+| TTS | Kokoro offline voice (default, `am_michael`), or Microsoft edge-tts (Neural voices, WordBoundary timestamps) |
 | Video processing | FFmpeg (ffmpeg + ffprobe) |
 | LaTeX (optional) | BasicTeX / TeX Live on macOS and Linux, MiKTeX on Windows; only needed for `Tex()` formulas |
 | PDF parsing | pypdf, PyMuPDF |
@@ -276,24 +276,24 @@ pip install -e .                      # installs the manimgen and manimgen-edit 
 
 `requirements.txt` already pins `manimgl==1.7.2` and `setuptools<81` (manimgl 1.7.2 imports `pkg_resources`, which setuptools 81 removed). Use `pip install -r requirements.txt` instead of the dev file if you only want to run the pipeline.
 
-**Offline narration voice (optional).** edge-tts needs Microsoft's online service, which is blocked on some networks and on cloud machines. Kokoro is an open voice model (Apache-2.0) that runs on the CPU, so a complete video can be made with no speech service:
+**Narration voice.** The default voice is Kokoro `am_michael` (Michael), an open voice model (Apache-2.0) that runs on the CPU, so a complete video can be made with no speech service. It needs one optional install. Without it, one warning is logged and narration uses edge-tts (`en-US-AndrewMultilingualNeural`), which needs Microsoft's online service, blocked on some networks and on cloud machines:
 
 ```bash
 pip install -r requirements-voice.txt   # kokoro-onnx; wheels for Windows, macOS, Linux, Python 3.11 to 3.13
 ```
 
-No admin rights, compiler or system espeak-ng are needed. The first use downloads two model files (about 120 MB) from GitHub releases into a per-user cache folder (`%LOCALAPPDATA%\manimgen\kokoro` on Windows, `~/Library/Caches/manimgen/kokoro` on macOS, `$XDG_CACHE_HOME/manimgen/kokoro` or `~/.cache/manimgen/kokoro` on Linux); the model is never stored in the repository. Set `MANIMGEN_KOKORO_DIR` or `tts.kokoro.model_dir` to use another folder, for example one you filled by hand on a machine without GitHub access. `python scripts/env_doctor.py` warns (never blocks) when the package or the model files are missing.
+No admin rights, compiler or system espeak-ng are needed. The first use downloads two model files (about 120 MB) from GitHub releases into a per-user cache folder (`%LOCALAPPDATA%\manimgen\kokoro` on Windows, `~/Library/Caches/manimgen/kokoro` on macOS, `$XDG_CACHE_HOME/manimgen/kokoro` or `~/.cache/manimgen/kokoro` on Linux); the model is never stored in the repository. Set `MANIMGEN_KOKORO_DIR` or `tts.kokoro.model_dir` to use another folder, for example one you filled by hand on a machine without GitHub access. If the package is missing or the model files cannot be downloaded (for example offline on the first run), one warning with the install command is logged and edge-tts narrates the rest of that run. `python scripts/env_doctor.py` warns (never blocks) when the package or the model files are missing.
 
 ```yaml
 tts:
-  engine: edge-tts        # edge-tts | kokoro (kokoro = always offline)
-  fallback_engine: kokoro # kokoro | none: used when edge-tts cannot be reached
+  engine: kokoro          # kokoro (default, offline) | edge-tts
+  fallback_engine: kokoro # kokoro | none: used when engine is edge-tts and it cannot be reached
   kokoro:
     voice: am_michael
     speed: 1.05
 ```
 
-With the package installed, the default settings already fall back to Kokoro when edge-tts fails; without it nothing changes. Kokoro gives no word timestamps, so cue onsets are exact (each cue is spoken as its own clip and the clips are joined) and word times inside a cue are estimated from phoneme counts. The engine and its voice are part of the cache key, so switching engines rebuilds the narration and the clips made from it. On the one CPU it was tried on (a cloud container) speech took about as long as the audio it made; other machines are unmeasured.
+Fallbacks go one way per run and never loop: engine kokoro without the package or models falls back to edge-tts; engine edge-tts that cannot be reached falls back to Kokoro when the package is installed. If both fail, the error names both. Kokoro gives no word timestamps, so cue onsets are exact (each cue is spoken as its own clip and the clips are joined) and word times inside a cue are estimated from phoneme counts. The engine that actually spoke and its voice are part of the cache key (a run that fell back to edge-tts never reuses Kokoro clips, and the reverse), so switching engines rebuilds the narration and the clips made from it. On the one CPU it was tried on (a cloud container) speech took about as long as the audio it made; other machines are unmeasured.
 
 **System dependencies:** FFmpeg, and optionally a LaTeX distribution for `Tex()` formulas.
 
@@ -411,7 +411,7 @@ python scripts\env_doctor.py
 **Windows notes:**
 
 - ManimGL renders with OpenGL 3.3 or newer. Whether the library PC's integrated Intel graphics can create that context has not been checked: run `python scripts\render_smoke.py` and read its `OpenGL` line. If it fails, the no-admin Mesa fallback in [manimgen/docs/LIBRARY_PC_FIRST_RUN.md](manimgen/docs/LIBRARY_PC_FIRST_RUN.md) is the tested route on GitHub's Windows machines. Render times on this class of machine are unmeasured; set `rendering.quality: l` or `m` in `config.yaml` for faster drafts.
-- Narration needs internet access to Microsoft's speech service, which answered HTTP 403 to GitHub's machines (issue #109); whether it works from your network is unknown until `python scripts\tts_smoke.py` passes there. Without it, install the offline voice (`pip install -r requirements-voice.txt`, see "Offline narration voice" below), or use `tts.enabled: false` (silent draft) or `--allow-silent`.
+- The default Kokoro voice needs `pip install -r requirements-voice.txt` and a one-time model download from GitHub. Without it narration uses edge-tts, which needs internet access to Microsoft's speech service, which answered HTTP 403 to GitHub's machines (issue #109); whether it works from your network is unknown until `python scripts\tts_smoke.py` passes there. To avoid it, install the offline voice (`pip install -r requirements-voice.txt`, see "Narration voice" below), or use `tts.enabled: false` (silent draft) or `--allow-silent`.
 - Shared PCs that reset the user profile on logout will lose these installs; keep the clone and tools on a USB drive or expect to repeat the setup.
 
 ---
@@ -557,7 +557,7 @@ sections stay cached, so once the limit resets `manimgen --resume` builds only
 what is missing (when planning itself hit the limit there is no plan yet, so
 rerun the same command instead).
 
-Narration runs for every section before any scene is generated. edge-tts is
+Narration runs for every section before any scene is generated. The default voice is Kokoro (offline); when it is not installed, edge-tts is
 tried three times per section. If the offline voice is installed (see below) and
 edge-tts fails with a network or service error, one line is logged and the offline
 voice speaks that section and the rest of the run. Otherwise, if it still fails (no network, a proxy that
