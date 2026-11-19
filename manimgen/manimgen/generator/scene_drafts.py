@@ -35,7 +35,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
-from manimgen import paths
+from manimgen import paths, timing
 from manimgen.types import GateResult
 from manimgen.utils import (
     draft_class_name,
@@ -111,12 +111,13 @@ def _render_one(draft: Draft, cue_durations: list[float] | None) -> None:
     gate = draft.gate
     assert gate is not None
     try:
-        result = run_manimgl(
-            gate.scene_path,
-            gate.class_name,
-            timeout=draft_scene_timeout(gate.scene_path),
-            draft=True,
-        )
+        with timing.context(f"draft render {draft.variant}"):
+            result = run_manimgl(
+                gate.scene_path,
+                gate.class_name,
+                timeout=draft_scene_timeout(gate.scene_path),
+                draft=True,
+            )
     except Exception as exc:  # noqa: BLE001 - a broken render is a failed draft
         draft.failure = f"render raised {type(exc).__name__}"
         logger.warning("[drafts] draft %s render raised: %s", draft.variant, exc)

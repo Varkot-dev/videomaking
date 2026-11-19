@@ -3,7 +3,7 @@ import math
 import os
 import re
 
-from manimgen import paths
+from manimgen import paths, timing
 from manimgen.utils import safe_section_id
 from manimgen.validator.render_command import run_manimgl
 from manimgen.validator.scene_ast_gate import inspect_scene_code
@@ -104,9 +104,10 @@ def fallback_scene(section: dict) -> str | None:
     with open(scene_path, "w", encoding="utf-8") as f:
         f.write(code)
 
-    result = run_manimgl(
-        scene_path, class_name, timeout=paths.render_timeout("fallback")
-    )
+    with timing.context("fallback render"):
+        result = run_manimgl(
+            scene_path, class_name, timeout=paths.render_timeout("fallback")
+        )
     if result.ok:
         return result.video_path
 

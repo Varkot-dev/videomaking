@@ -45,7 +45,7 @@ from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
-from manimgen import config
+from manimgen import config, timing
 
 load_dotenv()
 
@@ -226,6 +226,7 @@ def chat(
         error = f"{type(exc).__name__}: {exc}"[:500]
         raise
     finally:
+        timing.record_llm_call(role, started, time.monotonic(), error is None)
         _record_call(
             role=role,
             provider=provider,

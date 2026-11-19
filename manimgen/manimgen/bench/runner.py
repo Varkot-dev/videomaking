@@ -86,10 +86,26 @@ def plan_topic(topic: dict, runs_dir: Path = RUNS_DIR, force: bool = False) -> P
     return plan
 
 
+def run_command(draft: bool) -> list[str]:
+    """The pipeline command of one run; the test profile adds ``--draft``."""
+    cmd = [*_prefix(), sys.executable, "-m", "manimgen.cli", "--resume"]
+    if draft:
+        cmd.append("--draft")
+    return cmd
+
+
 def run_topic(
-    topic: dict, variant: str, env_overrides: dict[str, str], runs_dir: Path = RUNS_DIR
+    topic: dict,
+    variant: str,
+    env_overrides: dict[str, str],
+    runs_dir: Path = RUNS_DIR,
+    draft: bool = True,
 ) -> Path:
-    """Render the cached plan for one topic under one variant."""
+    """Render the cached plan for one topic under one variant.
+
+    ``draft=True`` is the test profile (small size, ``rendering.draft_fps``);
+    ``draft=False`` renders at full quality.
+    """
     plan = plan_topic(topic, runs_dir)
     d = runs_dir / variant / topic["slug"]
     cfg = write_config(d)
@@ -98,7 +114,7 @@ def run_topic(
     start = time.time()
     with open(d / "run.log", "w", encoding="utf-8") as log:
         proc = subprocess.run(
-            [*_prefix(), sys.executable, "-m", "manimgen.cli", "--resume"],
+            run_command(draft),
             cwd=d,
             env=env,
             stdout=log,
@@ -116,12 +132,14 @@ def run_all(
     env_overrides: dict[str, str],
     jobs: int = 1,
     runs_dir: Path = RUNS_DIR,
+    draft: bool = True,
 ) -> list[Path]:
     # Plan serially first so variants and parallel jobs share one plan per slug.
     for t in topics:
         plan_topic(t, runs_dir)
     with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
         futures = [
-            pool.submit(run_topic, t, variant, env_overrides, runs_dir) for t in topics
+            pool.submit(run_topic, t, variant, env_overrides, runs_dir, draft)
+            for t in topics
         ]
         return [f.result() for f in futures]

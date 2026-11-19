@@ -4,7 +4,7 @@ import os
 import re
 import threading
 
-from manimgen import paths
+from manimgen import paths, timing
 from manimgen.llm import chat
 from manimgen.probes import overlap_report
 from manimgen.probes.overlap_report import overlap_issues
@@ -796,7 +796,8 @@ def _run_and_capture(scene_path: str, class_name: str) -> dict:
     # Shared entry point (tree-kill timeout, configurable budget, fresh-video
     # check). Exit 0 without a fresh video comes back as a failure, so callers
     # never see success with video_path None.
-    result = run_manimgl(scene_path, class_name)
+    with timing.context("retry render"):
+        result = run_manimgl(scene_path, class_name)
     if result.ok:
         return {
             "success": True,

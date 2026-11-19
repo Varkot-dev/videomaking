@@ -273,8 +273,8 @@ class TestCli:
 class TestDraftAndFast:
     def test_draft_renders_small_in_both_formats(self):
         paths.set_draft(True)
-        assert paths.render_quality_flag() == "-m"
-        assert paths.render_resolution() == "1280x720"
+        assert paths.render_size_flags() == ["-r", "960x540"]
+        assert paths.render_resolution() == "960x540"
         paths.set_video_format("short")
         cmd = render_command.build_manimgl_command("s.py", "S")
         assert cmd[cmd.index("-r") + 1] == "540x960"

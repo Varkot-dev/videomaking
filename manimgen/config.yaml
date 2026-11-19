@@ -70,7 +70,8 @@ output:
 rendering:
   quality: hd           # l = 480p | m = 720p | hd = 1080p | uhd = 4K (l is a fast draft)
   resolution: "1920x1080"
-  fps: 60
+  fps: 60               # frame rate of the finished video
+  draft_fps: 30         # frame rate of a --draft render (test runs, the benchmark)
   parallel_sections: 3    # sections generated and rendered at once; 1 = one at a time
   max_retries: 3        # LLM retry calls per scene (increase for production)
   # Render time budgets in seconds; the whole manimgl process tree is killed on
