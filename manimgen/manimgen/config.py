@@ -104,6 +104,9 @@ DEFAULTS: dict = {
             "font_size_px": 64,
             "font": "Arial",
         },
+        # How many independent scenes the Director writes per short; the
+        # better of them continues through the pipeline. 1 turns it off.
+        "drafts": 2,
     },
     "tts": {
         "engine": "edge-tts",
@@ -256,6 +259,12 @@ def _validate(path: Path, raw: dict) -> dict:
             raise ConfigError(f"{path}: shorts.captions.{key} must not be negative.")
     caps["font"] = str(caps["font"]).strip() or "Arial"
     shorts["captions"] = caps
+    shorts["drafts"] = _as(path, "shorts.drafts", shorts["drafts"], int, "an integer")
+    if shorts["drafts"] < 1:
+        raise ConfigError(
+            f"{path}: shorts.drafts must be 1 or more (1 turns drafts off), "
+            f"got {shorts['drafts']!r}."
+        )
 
     rend = cfg["rendering"]
     for key in ("fps", "max_retries", "parallel_sections"):

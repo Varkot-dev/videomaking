@@ -442,6 +442,7 @@ def _generate_and_gate(
     section: dict,
     cue_durations: list[float] | None,
     overview: dict | None,
+    variant: str | None = None,
 ) -> GateResult:
     """Codegen one scene for the section and run the zero-cost timing gate.
 
@@ -452,10 +453,26 @@ def _generate_and_gate(
     apply an LLM fix with the timing warnings in context). A draft that a
     pre-render check rejects (precheck, unknown names, scene safety gate) sets
     ``precheck_blocked`` and takes the same route; it is never rendered here.
+
+    For a short with ``shorts.drafts`` above 1, the Director writes several
+    scenes at once and the best one is returned (see generator/scene_drafts.py);
+    each draft runs this same function with its own ``variant``.
     """
+    if variant is None and paths.is_short() and paths.short_drafts() > 1:
+        from manimgen.generator.scene_drafts import pick_best_draft
+
+        return pick_best_draft(
+            section,
+            cue_durations,
+            lambda v: _generate_and_gate(section, cue_durations, overview, variant=v),
+            paths.short_drafts(),
+        )
     try:
         code, class_name, scene_path = generate_scenes(
-            section, cue_durations=cue_durations, overview=overview
+            section,
+            cue_durations=cue_durations,
+            overview=overview,
+            **({"variant": variant} if variant else {}),
         )
     except ScenePrecheckError as exc:
         # The draft is on disk. Do not abort the section: skip the render and

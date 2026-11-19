@@ -120,3 +120,8 @@ shorts:
     margin_right_px: 192   # safe area: right margin (action buttons)
     font_size_px: 64
     font: Arial
+  # Scenes the Director writes per short, rendered as small drafts and scored
+  # with the free checks; the best one continues. 2 uses about twice the plan
+  # allowance for scene writing, 1 turns it off. MANIMGEN_SHORT_DRAFTS
+  # overrides it for one run.
+  drafts: 2
