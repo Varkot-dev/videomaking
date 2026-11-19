@@ -264,7 +264,7 @@ All `manimgl` subprocess calls use `-c "#1C1C1C"`. The flag is `-c`, NOT `--back
 - Subprocess timeouts are **per-call and sized to the work**, not one global
   value. Current tiers: ffprobe/audio probes 5–15s, short ffmpeg and
   frame-extract calls 30s, audio slicing 120s, full ffmpeg encodes 300s,
-  `manimgl` scene renders 240s (360s for 3D, `rendering.render_timeout_*` in config.yaml, whole process tree killed on expiry). Values live in named
+  `manimgl` scene renders get `max(rendering.render_timeout_*, 60s + 10s per second of video)` (config.yaml; the formula is skipped when `MANIMGEN_RENDER_TIMEOUT_*` is set; `_scene_timeout` in `validator/render_command.py`), whole process tree killed on expiry. Values live in named
   `_*_TIMEOUT_SECONDS` constants near the top of each renderer module — read
   the constant rather than trusting this list. When adding a new subprocess
   call, always pass an explicit `timeout=`: an ffmpeg or ffprobe call without
@@ -295,7 +295,7 @@ Order: codeguard auto-fix → error-aware fix (token-free) → LLM fix (budget-c
 
 After every fix, the file is **always reloaded from disk** — previously a bug caused the LLM fix to be silently discarded.
 
-`SceneErrorType` enum classifies errors for targeted guidance: `PRECHECK_VGROUP`, `SYNTAX`, `IMPORT`, `ATTRIBUTE`, `TYPE`, `RUNTIME`, `SAFETY_GATE`.
+`SceneErrorType` enum classifies errors for targeted guidance: `PRECHECK_VGROUP`, `SYNTAX`, `IMPORT`, `ATTRIBUTE`, `TYPE`, `RUNTIME`, `TIMING`, `SAFETY_GATE`.
 
 ### 6. Visual validation (two-tier)
 - **Tier 1 (frame_checker.py):** zero-cost PIL-based — detects black frames, frozen frames, edge clipping.
@@ -428,73 +428,25 @@ VGroup(label1, label2).arrange(DOWN, buff=0.4).next_to(anchor, DOWN)
 
 ---
 
-## Fixed bugs log
+## Fixed bugs log (why the code is this way)
 
-### set_camera_orientation crash — FIXED 2026-04-10 (branch antigravity)
-The Director generates `self.set_camera_orientation(phi=60*DEGREES, theta=-45*DEGREES)` (ManimCommunity API) on 2D scenes, causing `AttributeError` on every render attempt. Also generated `self.frame.reorient(theta_deg=..., phi_deg=...)` with wrong kwarg names. Also generated `NumberLine(..., label=...)` which crashes with TypeError.
-
-**Fix (codeguard.py):**
-- `_fix_set_camera_orientation()` — auto-rewrites to `self.frame.reorient(theta, phi)`, or `pass` if unparseable
-- `_fix_reorient_wrong_kwargs()` — renames `theta_deg=` → `theta_degrees=`, `phi_deg=` → `phi_degrees=`
-- `_strip_label_kwarg_from_numberline()` — strips `label=` from `NumberLine()`
-- Banned patterns added for all three
-
-**Director prompt:** added `set_camera_orientation` to the "Never use" table. Fixed `reorient()` docs to show correct param names.
-
-### Stale render cache path mismatch — FIXED (branch antigravity)
-`_render_is_fresh()` was called with a hardcoded path that didn't match actual ManimGL output. Fixed: now uses `_find_rendered_video(class_name)` to locate the actual video before checking freshness.
-
-### Retry loop silent discard — FIXED (branch antigravity)
-After LLM fix was applied, code was only reloaded from disk if codeguard had something to patch. LLM fix was silently discarded otherwise. Now always reloads after every fix attempt.
-
-### A/V sync bugs — FIXED (earlier branches)
-1. Cue 0 silence — segmenter measures from 0.0
-2. Last-syllable clipping — uses `word.end` not `word.start` of next
-3. MP3 stream copy drift — re-encodes to AAC
-4. tpad wrong duration — uses gap not total audio
-5. Sample rate drift — enforces `-ar 48000`
-
-### Cue index off-by-one — FIXED
-LLM now instructed that `cues[]` needs N+1 entries (N [CUE] markers + opening segment at index 0).
-
-### VGroup swap pattern — FIXED
-`_fix_become_inside_play()`, `set_fill_color` → `set_fill`, VGroup assignment banned.
-
-### Video quality (blurry output) — FIXED (branch antigravity)
-Assembler changed from `-preset veryfast` to `-preset slow -crf 17`.
+- **ManimCommunity camera calls on 2D scenes.** The Director wrote `self.set_camera_orientation(...)`, `self.frame.reorient(theta_deg=..., phi_deg=...)` and `NumberLine(..., label=...)`, each crashing every render. `codeguard.py` now rewrites or strips all three (`_fix_set_camera_orientation`, `_fix_reorient_wrong_kwargs`, `_strip_label_kwarg_from_numberline`), they are banned patterns, and the director prompt lists them under "Never use".
+- **Stale render cache.** `_render_is_fresh()` used a hardcoded path that did not match ManimGL's output; it now locates the video with `_find_rendered_video(class_name)` first.
+- **Retry loop silent discard.** An LLM fix was only reloaded from disk when codeguard also patched something. The file is now always reloaded after every fix attempt.
+- **A/V sync.** Cue 0 silence (segmenter measures from 0.0); last-syllable clipping (uses `word.end`, not the next word's start); MP3 stream-copy drift (re-encode to AAC); `tpad` duration (uses the gap, not total audio); sample-rate drift (`-ar 48000`).
+- **Cue index off-by-one.** The LLM is told `cues[]` needs N+1 entries (N `[CUE]` markers plus the opening segment at index 0).
+- **VGroup swap pattern.** `_fix_become_inside_play()`, `set_fill_color` rewritten to `set_fill`, VGroup assignment banned.
+- **Blurry output.** The assembler uses `-preset slow -crf 17`, not `veryfast`.
+- **Timing gate.** `timing_verifier` runs as one gate (`retry.apply_timing_gate`) before the first render in `cli.py`, on the initial code in `retry_scene`, and after every fix. Unresolvable timing issues skip the first render and go to the retry path with the warnings in the fix prompt. The director prompt now opens its cue-timing section with the loop-accumulator rule.
+- **Frame checker wiring.** `check_frames()` runs after every successful render in `validator/retry.py`; hard failures block muxing and force a retry; layout issues are advisory on the first pass (`MANIMGEN_FIRST_PASS_LAYOUT=1`) and feed the fix prompt in `retry_scene`.
+- **Config parsing.** `llm.py` reads `config.yaml` once at import into `_LLM_CONFIG`, not on every call. `.hypothesis/` and `.DS_Store` are in `.gitignore`.
 
 ---
 
-## Known issues / next steps (as of 2026-04-10)
+## Known issues / next steps
 
-### 1. HIGH — A/V timing mismatch (freeze-frame tails)
-Most visible quality issue. Cues often have 1–8 seconds of frozen still at the end because the Director miscalculates total animation time when animations are inside loops.
-
-**Root cause:** Director subtracts one iteration's `run_time` instead of `n * run_time`.
-
-**Fix plan:**
-- Director prompt: make the loop timing rule impossible to miss (already has example, but LLM ignores it under pressure — move to top of Cue timing section) — STILL OPEN
-- ✅ DONE — `timing_verifier` is now a single authoritative gate (`retry.apply_timing_gate`) called as a zero-cost pre-render check in `cli.py`. Unresolvable timing issues skip the first render and route straight to the retry path, with timing warnings carried into the LLM fix prompt.
-
-**Files:** `generator/prompts/director_system.md` (prompt work still open), `validator/timing_verifier.py`, `validator/retry.py`, `cli.py`
-
-### 2. ✅ RESOLVED — timing_verifier wiring
-`timing_verifier` is wired in via `retry.apply_timing_gate` (verify → auto-fix → re-verify). It runs: (a) once on initial code before the first render in `cli.py`; (b) on initial code in `retry_scene`; (c) after every error fix and visual fix. The previous duplicated ad-hoc copy in `cli.py` was removed in favor of the shared gate. Unresolvable warnings block the first render and force the retry path.
-
-### 3. ✅ RESOLVED — frame_checker.py wiring
-Confirmed wired in `validator/retry.py`: `check_frames()` runs after every successful render. Hard failures (black/frozen frames confirmed by timing oracle) block muxing and force retry. Soft failures (layout issues, only when `MANIMGEN_FIRST_PASS_LAYOUT=1`) are advisory on the first pass; `retry_scene` feeds layout issues into its LLM fix prompt.
-
-### 4. RESOLVED: `.hypothesis/` and `.DS_Store`
-Both are in `.gitignore` and neither is tracked.
-
-### 5. RESOLVED: `_load_llm_config()` called on every LLM call
-`llm.py` now parses `config.yaml` once at import into `_LLM_CONFIG`.
-
-### 6. LOW — Cue-word tokenization mismatch risk
-`cue_parser` uses `str.split()` word counts; edge-tts may tokenize differently.
-
-### 7. LOW — PDF rendering unconditional
-Renders every page to PNG even for text-heavy PDFs. Should use 3-way logic.
+Open problems, measured limits and unverified claims are kept in one place:
+`docs/KNOWN_ISSUES.md` (see "Not done, not verified"). Do not list them here.
 
 ---
 

@@ -130,7 +130,7 @@ Statically analyses each generated scene before rendering to compute animation t
 ### Error-aware retry (`validator/retry.py`)
 
 When codeguard can't fix the code:
-1. Classifies error type from stderr (`precheck_vgroup`, `syntax`, `import`, `attribute`, `type`, `runtime`, `timing`)
+1. Classifies error type from stderr (`precheck_vgroup`, `syntax`, `import`, `attribute`, `type`, `runtime`, `timing`, `safety_gate`)
 2. Generates targeted fix guidance for that error class
 3. Sends `original_code + error + guidance` to the LLM for a targeted fix
 4. Runs codeguard + timing verifier on result, then re-renders
@@ -582,7 +582,9 @@ runs inside the `manimgl` process, where the position of every object is known.
 At the end of each `play()` and `wait()` it compares the bounding boxes of the
 visible text objects (`Text`, `MarkupText`, `Code`, `Tex`, `TexText`,
 `DecimalNumber`, `Integer`) and reports any two that overlap by at least 20%
-of the smaller one. It costs no LLM call and changes nothing in the scene file;
+of the smaller one. It also reports text cut off by the frame edge and, in
+vertical shorts, text under the app's buttons or caption, and it nudges new
+text back inside the safe area in shorts. It costs no LLM call and changes nothing in the scene file;
 `run_manimgl` loads it through a `sitecustomize.py` on the child's
 `PYTHONPATH`, which also works with the Windows `manimgl.exe` launcher.
 

@@ -118,13 +118,15 @@ activate the venv (or call `.venv\Scripts\python.exe` directly).
 These are open. None of them has a guard in `scripts/env_doctor.py`; the status
 of each is what was measured, not what is hoped.
 
-**Narration.** Microsoft's speech service answered HTTP 403 to edge-tts from
-GitHub's Linux and Windows machines (issue #109, measured on 2026-10-12 with
-`scripts/tts_smoke.py`). Real narration is therefore not shown to work anywhere.
-Whether it works from the library PC's network has never been tried: run
-`python scripts\tts_smoke.py` there. If it fails, the run stops after planning
-(exit code 1) unless you use `--allow-silent` or `tts.enabled: false`. There is
-no offline narration fallback.
+**Narration.** Real narration has worked once on a machine we control: a real
+vertical Short run on the maintainer's Mac on 2026-11-16 produced 27.6 s of
+edge-tts narration. Microsoft's speech service still answers HTTP 403 to edge-tts
+from GitHub's Linux and Windows runners (issue #109, measured on 2026-10-12 with
+`scripts/tts_smoke.py`) and from the cloud container used for agent sessions, so
+CI and cloud runs cannot narrate. Whether it works from the library PC's network
+has never been tried: run `python scripts\tts_smoke.py` there. If it fails, the
+run stops after planning (exit code 1) unless you use `--allow-silent` or
+`tts.enabled: false`. There is no offline narration fallback.
 
 **Graphics on the library PC.** Rendering on its Intel UHD 770 is unverified.
 Software OpenGL (Mesa llvmpipe) is verified only on GitHub's runners, using one
@@ -143,17 +145,39 @@ end on a locked-down PC.
 **Visual defects that are not detected.**
 - Text over shapes, and shapes over shapes. The overlap probe compares text with
   text only, at settled states, and its threshold was calibrated on one real run.
-- Text clipped at the frame edge. `frame_checker` flags bright pixels within 12 px
-  of the edge as an advisory issue; it does not know whether they are text and
-  it never blocks a render. Not measured against real clipped text.
+- Text clipped at the frame edge in landscape runs. `frame_checker` flags bright
+  pixels within 12 px of the edge as an advisory issue; it does not know whether
+  they are text and it never blocks a render. (The probe does report off-screen
+  text and, in shorts, text under the app UI, but that is not measured against
+  real clipped text either.)
 - Mid-animation garbling (`TransformMatchingTex`) is scored in the report, not
   acted on.
+
+**Shorts quality gaps (measured 2026-11-17 in 15 real Short renders).**
+- Labels drawn over shapes. The probe checks text against text only, so a label
+  on top of a diagram shape is not caught.
+- Text too small after the diagram is scaled to fit the frame.
+- Faded leftover text still visible at the end of a scene.
+- A 0.4 s freeze at each cue change. A fix is being made separately; this entry
+  stays until a render shows it gone.
+- Scene-writing time varies from 41 s to 192 s per section on low effort, so run
+  time cannot be predicted.
 
 **Vision layout check.** It is off on the first render (`MANIMGEN_FIRST_PASS_LAYOUT`)
 and runs only in the retry loop. It has only been tested with fake replies, never
 against a real model's judgment of a real frame, so its precision is unknown.
 When the call fails and nothing else is wrong, `retry_scene` ships the render
 without a clean-pass claim, but the section is still reported `ok`.
+
+**PDF input.** `input/pdf_parser.py` renders every page it processes to a PNG (up
+to 50 pages) even for text-heavy PDFs; there is no logic to skip pages that need
+no image. Low priority.
+
+**Cue tokenization.** `cue_parser` counts words with `str.split()` while edge-tts
+may tokenize differently (for example hyphenated words). When the two counts
+differ the cue indices are re-derived against the edge-tts stream and a warning
+is logged; the realignment is heuristic and has not been measured on a real
+mismatch.
 
 **Other limits.** Static timing sees constants and simple loops only. Kwarg
 enforcement is off by default. Only trusted topics and PDFs should be used: the
