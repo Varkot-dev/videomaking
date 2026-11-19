@@ -280,6 +280,17 @@ def run_manimgl(
     if timeout is None:
         timeout = paths.preflight_timeout() if dry_run else _scene_timeout(scene_path)
 
+    # Long scenes are rendered as parallel segments and joined (see
+    # segmented_render). None means "render normally": off, too short, no free
+    # cores, or any step failed. Still behind the safety gate above.
+    from manimgen.validator import segmented_render
+
+    # A dry run draws no frames, so there is nothing to split.
+    if not dry_run:
+        segmented = segmented_render.render(scene_path, class_name, timeout, draft)
+        if segmented is not None:
+            return segmented
+
     # Freshness floor: a video older than this cannot be this render's output,
     # so a stale file from an earlier attempt is never mistaken for it.
     started_at = _render_floor()
@@ -297,11 +308,12 @@ def run_manimgl(
             env, report_path, paths.short_safe_margins() if paths.is_short() else None
         )
     try:
-        returncode, stdout, stderr, timed_out = procutil.run_tree(
-            build_manimgl_command(scene_path, class_name, draft, dry_dir),
-            timeout=timeout,
-            env=env,
-        )
+        with segmented_render.BUDGET.hold(1, 1, minimum=1):
+            returncode, stdout, stderr, timed_out = procutil.run_tree(
+                build_manimgl_command(scene_path, class_name, draft, dry_dir),
+                timeout=timeout,
+                env=env,
+            )
         report = (
             overlap_report.read_report(report_path)
             if probe_dir

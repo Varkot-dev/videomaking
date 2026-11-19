@@ -207,6 +207,7 @@ _OLD_RENDERING = {
     "draft_fps": 30,
     "max_retries": 3,
     "parallel_sections": 3,
+    "parallel_segments": "auto",
     "render_timeout_2d": 240.0,
     "render_timeout_3d": 360.0,
     "render_timeout_fallback": 180.0,

@@ -72,13 +72,13 @@ class StepTimer:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._entries: list[dict] = []
-        self._origin = time.monotonic()
+        self._origin = time.perf_counter()
         self._started_at = time.time()
 
     def reset(self) -> None:
         with self._lock:
             self._entries = []
-            self._origin = time.monotonic()
+            self._origin = time.perf_counter()
             self._started_at = time.time()
 
     def record(
@@ -89,7 +89,7 @@ class StepTimer:
         label: str = "",
         **meta,
     ) -> None:
-        """Add one finished call. ``start`` and ``end`` are time.monotonic()."""
+        """Add one finished call. ``start`` and ``end`` are time.perf_counter() (high resolution on Windows too)."""
         entry = {
             "step": step,
             "label": label,
@@ -103,11 +103,11 @@ class StepTimer:
     @contextmanager
     def section(self, step: str, label: str = "", **meta):
         """Time the ``with`` body as one call of ``step``."""
-        start = time.monotonic()
+        start = time.perf_counter()
         try:
             yield
         finally:
-            self.record(step, start, time.monotonic(), label, **meta)
+            self.record(step, start, time.perf_counter(), label, **meta)
 
     def entries(self) -> list[dict]:
         with self._lock:
@@ -115,7 +115,7 @@ class StepTimer:
 
     def total(self) -> float:
         """Seconds since the last reset."""
-        return time.monotonic() - self._origin
+        return time.perf_counter() - self._origin
 
     def summary(self, total: float | None = None) -> list[dict]:
         """One row per step that ran: calls, wall seconds, busy seconds, share."""
@@ -281,7 +281,7 @@ def timed_render(func: Callable) -> Callable:
 
     @functools.wraps(func)
     def wrapper(scene_path, class_name, *args, **kwargs):
-        start = time.monotonic()
+        start = time.perf_counter()
         result = None
         try:
             result = func(scene_path, class_name, *args, **kwargs)
@@ -296,7 +296,7 @@ def timed_render(func: Callable) -> Callable:
                 TIMER.record(
                     "render",
                     start,
-                    time.monotonic(),
+                    time.perf_counter(),
                     current_label(),
                     scene=class_name,
                     resolution=paths.render_resolution(draft),

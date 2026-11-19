@@ -147,6 +147,40 @@ Python without a virtual environment. Copying the Mesa files for a virtual
 environment, and any render time on that PC, are unmeasured (the crossfade cost
 is issue #75).
 
+**Segmented rendering (parallel pieces of one scene).** Measured on a 4 core
+cloud machine that other jobs were using (load average about 13), a 34 s
+1280x720 scene took 175 s as one render and 72 s as three segments (2.4 times
+faster); the plan costs about 2 to 3 s. The speedup on an idle machine, on a
+GPU, and at 1080x1920 was not measured. Limits found:
+
+- `-n start,end` counts every `play()` and `wait()`. Each piece runs the whole
+  `construct` from the top, so scene setup, LaTeX and the skipped animations are
+  paid again in every piece: short scenes gain nothing (under 8 s the module does
+  not split) and heavy setup shrinks the gain.
+- manimgl 1.7.2 skips an animation differently from rendering it: a skipped
+  `play()` calls `update_mobjects(run_time)` a second time, so a plain
+  `add_updater(lambda m, dt: m.shift(dt * RIGHT))` ended up twice as far after
+  the join, and skipped time advances by exactly `run_time` instead of whole
+  frames. The probe patches both inside the child (`overlap_probe._patch_skipping`),
+  after which an updater scene matched the full render (the dot ends at the same
+  place and every ProRes frame hash is identical). The patch makes skipped
+  updaters see one step of the full duration instead of many one-frame steps:
+  exact for updaters that add `dt` times a constant, only approximate for
+  non-linear ones (decay, collisions, anything that reads a mobject's state each
+  frame). Scenes whose state depends on rendered frames or on per-frame random
+  numbers can differ at the joins; set `MANIMGEN_PARALLEL_SEGMENTS=1` for them.
+- The video is not bit-identical to a single render: each piece is its own
+  H.264 stream, so decoded frames differ by encoder noise (minimum PSNR 52 dB
+  against a single render, no visible difference). Frame count and duration are
+  exactly equal (checked after every join; a mismatch falls back).
+- A scene whose time is one long `wait()` cannot be split evenly and is
+  rendered in one piece. The first cold LaTeX compile is done by several pieces
+  at once.
+- The planning run executes the scene code once more with animations skipped; a
+  scene that behaves differently when `skip_animations` is true is not supported.
+- A segment that times out is reported as a timeout without a single-render retry.
+- ThreeDScene and Windows were not run with segments.
+
 **Windows.** No real Windows process-tree kill has been shown to work: the POSIX
 branch (`killpg`) is tested with real grandchild processes
 (`tests/test_llm.py`, `tests/test_render_entry_point.py`), but the `taskkill`

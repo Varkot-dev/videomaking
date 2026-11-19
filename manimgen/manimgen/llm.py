@@ -210,7 +210,7 @@ def chat(
     kw = {"role": role} if role else {}
     _tls.meta = {}
     before = dict(_plan_windows)
-    started = time.monotonic()
+    started = time.perf_counter()
     error: str | None = None
     try:
         if provider == "gemini":
@@ -226,12 +226,12 @@ def chat(
         error = f"{type(exc).__name__}: {exc}"[:500]
         raise
     finally:
-        timing.record_llm_call(role, started, time.monotonic(), error is None)
+        timing.record_llm_call(role, started, time.perf_counter(), error is None)
         _record_call(
             role=role,
             provider=provider,
             model=_model_for(provider, role),
-            duration_s=time.monotonic() - started,
+            duration_s=time.perf_counter() - started,
             before=before,
             error=error,
         )
