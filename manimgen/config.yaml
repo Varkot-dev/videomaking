@@ -109,3 +109,14 @@ shorts:
   # Optional file describing how you talk and explain things, so scripts sound
   # like you. Copy voice_profile.example.md to this name and edit it.
   voice_profile: voice_profile.md
+  # Burned-in word captions for a --short (needs narration). Off by default;
+  # `manimgen --short --captions` turns them on for one run.
+  captions:
+    enabled: false
+    # Caption baseline height above the bottom edge, in px of the 1080x1920
+    # frame. The Shorts UI covers the bottom 480 px, so this sits just above it.
+    margin_bottom_px: 488
+    margin_left_px: 48     # safe area: left margin
+    margin_right_px: 192   # safe area: right margin (action buttons)
+    font_size_px: 64
+    font: Arial
