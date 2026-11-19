@@ -72,6 +72,7 @@ rendering:
   resolution: "1920x1080"
   fps: 60
   parallel_sections: 3    # sections generated and rendered at once; 1 = one at a time
+  parallel_segments: auto # processes one scene renders in at once: auto = spare cores, 1 = one process
   max_retries: 3        # LLM retry calls per scene (increase for production)
   # Render time budgets in seconds; the whole manimgl process tree is killed on
   # expiry. Unmeasured on the target PC: run `python scripts/render_smoke.py`

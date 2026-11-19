@@ -503,6 +503,7 @@ shell, or in a git-ignored `.env` file in `manimgen/`):
 | `MANIMGEN_MAX_TOTAL_LLM_CALLS` | Per-run ceiling on repair LLM calls across all sections | `200` |
 | `MANIMGEN_MAX_PLACEMENT_FIXES` | Per-section visual fixes for text-placement defects only (text over text, off screen, outside the Shorts safe area); after that the best render ships instead of rendering again | `1` |
 | `MANIMGEN_RENDER_TIMEOUT_2D`, `MANIMGEN_RENDER_TIMEOUT_3D`, `MANIMGEN_RENDER_TIMEOUT_FALLBACK` | Seconds a render may run before its process tree is killed. Without the variable, a long scene gets more than the configured value (60 s plus 10 s per second of video) so a slow machine does not kill a working render | `rendering.render_timeout_*` |
+| `MANIMGEN_PARALLEL_SEGMENTS` | How many manimgl processes render one scene at once before the pieces are joined: `auto` (spare cores, all but one, shared between the sections rendered in parallel), or a number; `1` renders in one process. Overrides `rendering.parallel_segments`. Scenes under 8 s are never split | `auto` |
 | `MANIMGEN_FREEZE_BLOCK_THRESHOLD` | Seconds of dead screen at the end of a cue that block a render | `2.5` |
 | `MANIMGEN_KWARG_ENFORCE` | `1` strips constructor keyword arguments proven invalid | off (log only) |
 | `MANIMGEN_UNKNOWN_SYMBOLS` | `report` logs unknown ManimGL names instead of blocking the render | blocking |

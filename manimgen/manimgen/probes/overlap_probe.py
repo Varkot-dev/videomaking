@@ -37,6 +37,12 @@ from dataclasses import dataclass, field
 
 REPORT_ENV = "MANIMGEN_OVERLAP_REPORT"
 REPORT_VERSION = 1
+# Set by the host for a segment or planning render when the overlap probe is
+# switched off: the child still installs this module (it also keeps skipped
+# animations faithful, see ``_patch_skipping``) and records ``play_times``, but
+# it neither observes, nudges nor reports findings.
+PASSIVE_ENV = "MANIMGEN_PROBE_PASSIVE"
+MAX_PLAY_TIMES = 20000
 
 # Intersection area as a fraction of the SMALLER box. Calibrated on the first
 # real end-to-end run (#97) and the hand-verified examples: see
@@ -779,6 +785,9 @@ _state: dict = {
     "path": None,
     "pid": None,  # the process that installed the probe; only it writes
     "nudges": 0,  # text moved inside the safe area (see NUDGE_ENV)
+    "passive": False,  # record play times only (see PASSIVE_ENV)
+    "plays": [],  # scene.time after each play()/wait(), in order
+    "num_plays": 0,
 }
 
 
@@ -798,6 +807,11 @@ def write_report() -> None:
         recorder = _state["recorder"] or OverlapRecorder()
         data = recorder.report(_state["scene"], _state["error"])
         data["nudges"] = _state.get("nudges", 0)
+        # scene.time after every play()/wait() (a skipped one included), so a
+        # host that renders the scene in segments can plan the split and number
+        # the animations without rendering a frame.
+        data["num_plays"] = _state.get("num_plays", 0)
+        data["play_times"] = list(_state.get("plays") or [])
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)
@@ -806,7 +820,16 @@ def write_report() -> None:
         pass  # never break the render over a report
 
 
+def _skipping(scene) -> bool:
+    """True while manimgl is skipping animations (before ``-n`` start)."""
+    return bool(getattr(scene, "skip_animations", False))
+
+
 def _observe(scene) -> None:
+    # A segment re-runs the animations before its start with skipping on; the
+    # segment that renders them reports them, so this one must not.
+    if _state.get("passive") or _skipping(scene):
+        return
     try:
         if _state["recorder"] is None:
             _state["recorder"] = OverlapRecorder()
@@ -863,7 +886,7 @@ def _text_only(mob) -> bool:
 
 def _nudge_new_text(scene, mobjects) -> None:
     """Move new, slightly-out text inside the shorts safe area (see NUDGE_ENV)."""
-    if os.environ.get(NUDGE_ENV, "1") == "0":
+    if _state.get("passive") or os.environ.get(NUDGE_ENV, "1") == "0":
         return
     margins = parse_margins(os.environ.get(SAFE_MARGINS_ENV))
     if margins is None:
@@ -883,7 +906,8 @@ def _nudge_new_text(scene, mobjects) -> None:
             move = nudge_offset(box, inset_rect(rect, margins))
             if move is not None:
                 mob.shift([move[0], move[1], 0.0])
-                _state["nudges"] = _state.get("nudges", 0) + 1
+                if not _skipping(scene):  # a skipped one is counted where rendered
+                    _state["nudges"] = _state.get("nudges", 0) + 1
     except Exception as exc:  # a probe bug must never break a render
         _record_error("nudge", exc)
 
@@ -902,6 +926,8 @@ def _glyph_items(anim) -> list[tuple[int, tuple, float]]:
 
 
 def _observe_morphs(scene, animations) -> None:
+    if _state.get("passive") or _skipping(scene):
+        return
     try:
         for anim in animations:
             if "TransformMatchingParts" not in _class_names(anim):
@@ -921,6 +947,60 @@ def _observe_morphs(scene, animations) -> None:
         _record_error("morph", exc)
 
 
+def _frames_in(run_time: float, fps: float) -> int:
+    """Frames manimgl draws for ``run_time`` (what ``get_time_progression`` makes)."""
+    import numpy as np
+
+    return len(np.arange(0, run_time, 1 / fps))
+
+
+def _patch_skipping(scene_cls) -> None:
+    """Make a skipped animation advance the scene exactly like a rendered one.
+
+    Two differences in manimgl 1.7.2 matter when a scene is rendered from
+    animation ``-n start`` (the animations before it are run with skipping on):
+
+    * A skipped animation advances ``scene.time`` and the updaters by exactly
+      ``run_time`` in one step, while a rendered one advances by whole frames
+      (``ceil(run_time * fps) / fps``). The skipped time is rounded up to the
+      same whole frames, so ``scene.time`` at the start of a segment equals the
+      time of the full render and the frames line up.
+    * ``finish_animations`` calls ``update_mobjects(run_time)`` a second time
+      when skipping, so every updater sees twice the elapsed time for each
+      skipped ``play()`` (a dot moved by ``dt`` ended up twice as far). A
+      rendered animation only calls ``update_mobjects(0)``; skipping now does
+      the same.
+
+    Both changes apply only while skipping, so a full render is untouched.
+    """
+    original_progression = scene_cls.get_time_progression
+    original_finish = scene_cls.finish_animations
+
+    def get_time_progression(
+        self, run_time, n_iterations=None, desc="", override_skip_animations=False
+    ):
+        if getattr(self, "skip_animations", False) and not override_skip_animations:
+            try:
+                fps = float(self.camera.fps)
+                return [_frames_in(run_time, fps) / fps]
+            except Exception as exc:
+                _record_error("skip_time", exc)
+        return original_progression(
+            self, run_time, n_iterations, desc, override_skip_animations
+        )
+
+    def finish_animations(self, animations):
+        if not getattr(self, "skip_animations", False):
+            return original_finish(self, animations)
+        for animation in animations:
+            animation.finish()
+            animation.clean_up_from_scene(self)
+        self.update_mobjects(0)
+
+    scene_cls.get_time_progression = get_time_progression
+    scene_cls.finish_animations = finish_animations
+
+
 def patch_scene_module(module) -> None:
     """Wrap Scene.post_play and Scene.tear_down in ``manimlib.scene.scene``."""
     scene_cls = getattr(module, "Scene", None)
@@ -937,6 +1017,13 @@ def patch_scene_module(module) -> None:
 
     def post_play(self, *args, **kwargs):
         result = original_post_play(self, *args, **kwargs)
+        try:
+            _state["num_plays"] = int(getattr(self, "num_plays", 0))
+            plays = _state.setdefault("plays", [])
+            if len(plays) < MAX_PLAY_TIMES:
+                plays.append(round(float(getattr(self, "time", 0.0)), 4))
+        except Exception as exc:
+            _record_error("play_times", exc)
         _observe(self)
         return result
 
@@ -952,6 +1039,13 @@ def patch_scene_module(module) -> None:
         finally:
             write_report()
 
+    try:
+        if hasattr(scene_cls, "get_time_progression") and hasattr(
+            scene_cls, "finish_animations"
+        ):
+            _patch_skipping(scene_cls)
+    except Exception as exc:
+        _record_error("patch_skipping", exc)
     scene_cls.post_play = post_play
     scene_cls.tear_down = tear_down
     scene_cls.begin_animations = begin_animations
@@ -1009,6 +1103,8 @@ def install() -> None:
         return
     _state["path"] = path
     _state["pid"] = os.getpid()
+    _state["passive"] = os.environ.get(PASSIVE_ENV, "") == "1"
+    os.environ.pop(PASSIVE_ENV, None)
     # Helper processes (multiprocessing's resource tracker, which spawn-based
     # platforms start) inherit the environment and would load this probe too;
     # they must not own or overwrite the report.

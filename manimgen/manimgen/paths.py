@@ -227,6 +227,28 @@ def render_max_retries() -> int:
     return _RENDERING["max_retries"]
 
 
+def render_parallel_segments() -> int | None:
+    """Segments one scene is rendered in at once: None for "auto", else 1 or more.
+
+    ``MANIMGEN_PARALLEL_SEGMENTS`` overrides ``rendering.parallel_segments``;
+    1 renders in one process, as before. See ``validator/segmented_render.py``.
+    """
+    for raw in (
+        os.environ.get("MANIMGEN_PARALLEL_SEGMENTS", ""),
+        str(_RENDERING.get("parallel_segments", "auto")),
+    ):
+        raw = raw.strip().lower()
+        if raw in ("", "auto"):
+            if raw == "auto":
+                return None
+            continue
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            continue
+    return None
+
+
 def render_parallel_sections() -> int:
     """How many sections to generate and render at once (at least 1).
 
