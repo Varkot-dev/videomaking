@@ -94,7 +94,8 @@ manimgen/
 │   │   ├── overlap_report.py    # host side: child env (PYTHONPATH, report path), report parsing
 │   │   └── bootstrap/sitecustomize.py  # start-up hook; chains any shadowed sitecustomize
 │   ├── renderer/
-│   │   ├── tts.py               # edge-tts with WordBoundary → per-word timestamps
+│   │   ├── tts.py               # edge-tts with WordBoundary → per-word timestamps; engine dispatch and offline fallback
+│   │   ├── tts_kokoro.py        # optional offline voice (kokoro-onnx), model download, estimated word timings
 │   │   ├── audio_slicer.py      # full audio → N cue-aligned .m4a slices (AAC, sample-accurate)
 │   │   ├── cutter.py            # cut rendered section .mp4 into per-cue clips (parallel FFmpeg)
 │   │   ├── muxer.py             # audio+video mux (pad-only, no speed warp)
@@ -320,10 +321,15 @@ After every fix, the file is **always reloaded from disk** — previously a bug 
 - **Tier 2 (layout_checker.py):** LLM vision, multi-frame sampling at 25%/50%/75% of duration, returns structured `ISSUE | CAUSE | FIX` feedback (only `ISSUE:` lines count; any other non-OK reply is UNVERIFIED). It runs in `retry_scene`, NOT on the first pass: `validate_render` skips it unless `MANIMGEN_FIRST_PASS_LAYOUT=1`, because its verdict was never enforced there.
 
 ### 7. TTS voice
-- Engine: `edge-tts` (free, local)
+- Engine: `edge-tts` (free, needs Microsoft's online service), chosen by `tts.engine`
 - Voice: `en-US-AndrewMultilingualNeural`
 - Speed: `+5%`
 - Word timestamps via `WordBoundary` mode for CUE alignment
+- **Offline engine** (`renderer/tts_kokoro.py`, optional `requirements-voice.txt`): Kokoro through `kokoro-onnx`. `tts.generate_narration` dispatches on `tts.engine` (`edge-tts` | `kokoro`). With `tts.fallback_engine: kokoro` (default) and the package importable, an edge-tts network or service failure after its three attempts logs one line and switches the rest of the run to Kokoro (`tts._edge_unreachable`, so one video does not mix voices). Without the package, behaviour is unchanged.
+- **Timings are built, not measured:** each cue is synthesized separately and the clips are joined with a gap, so cue onsets are exact; inside a cue, phrases (split at punctuation) are exact too, and each word gets a share of its phrase proportional to its phoneme count (estimate). Timestamps are one per `str.split()` token, so `align_cue_indices` is a no-op. Output is an `.mp3` (48 kHz mono) at the same path edge-tts writes; the slicer and muxer are untouched. The cue word indices reach the engine through `tts.cue_hint(...)` (set in `cli._run_tts_for_section`), so `generate_narration(text, path)` keeps its two-argument call.
+- **Model files** (`kokoro-v1.0.int8.onnx`, `voices-v1.0.bin`, about 120 MB) download on first use into a per-user cache folder (size-checked, atomic rename); `MANIMGEN_KOKORO_DIR` or `tts.kokoro.model_dir` override it. Never put them in the repo. `tts.kokoro.voice` (default `am_michael`) and `tts.kokoro.speed` (default 1.05).
+- **Cache key:** `cli._content_hash` adds the Kokoro voice and speed when `tts.engine` is kokoro; `cli._section_key` adds `tts.engine_tag()` whenever Kokoro is the voice in effect, including after a fallback. edge-tts keys are unchanged.
+- **Tests:** `tests/conftest.py` forces `tts_kokoro.is_installed()` to False in every test so an installed package never changes unrelated tests; `tests/test_tts_kokoro.py` has one real-synthesis test that runs only when the package and model files are present (point `MANIMGEN_KOKORO_DIR` at them).
 
 ### 8. Muxer
 - Cue lengths (`cli._cue_durations` = `segmenter.slice_durations`) are the audio slice lengths, onset to next onset. They sum to the narration length. Never use `seg.duration` (ends at the last word's `.end`) for video: it is shorter by the pause between cues and every cue then ends in a frozen frame (the 0.4 s Shorts freeze).

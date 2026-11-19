@@ -93,16 +93,28 @@ rendering:
 #   export MANIMGEN_FREEZE_BLOCK_THRESHOLD=2.0
 
 tts:
-  # edge-tts is the ONLY implemented engine. renderer/tts.py does not read this
-  # key at all — it calls edge-tts directly. ElevenLabs / OpenAI backends are a
-  # possible future addition (UNIMPLEMENTED); until one lands, changing this
-  # value has no effect on which engine runs.
+  # engine: edge-tts (Microsoft's online voices, the default) or kokoro (an
+  # offline voice that runs on the CPU, no network needed after a one-time
+  # model download). Kokoro needs: pip install -r requirements-voice.txt
   engine: edge-tts
   voice: en-US-AndrewMultilingualNeural
   enabled: true
   speed: "+5%"
-  # Optional proxy URL for edge-tts (HTTPS_PROXY is used when this is unset).
+  # Optional proxy URL for edge-tts and the Kokoro model download (HTTPS_PROXY
+  # is used when this is unset).
   # proxy: "http://proxy.example.com:8080"
+  # When edge-tts cannot be reached (no network, HTTP 403), use this engine
+  # instead of failing: kokoro | none. Only takes effect when kokoro-onnx is
+  # installed; without it narration behaves exactly as before.
+  fallback_engine: kokoro
+  kokoro:
+    voice: am_michael
+    speed: 1.05           # 0.5 to 2.0
+    # Folder for the model files (about 120 MB, downloaded on first use). The
+    # MANIMGEN_KOKORO_DIR environment variable beats this. Unset: a per-user
+    # cache folder (%LOCALAPPDATA%\manimgen\kokoro on Windows,
+    # ~/Library/Caches/manimgen/kokoro on macOS, ~/.cache/manimgen/kokoro on Linux).
+    # model_dir: "~/kokoro-models"
 
 # Vertical shorts (`manimgen --short "topic"`).
 shorts:

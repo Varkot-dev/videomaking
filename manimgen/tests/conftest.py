@@ -23,6 +23,23 @@ def _isolate_evidence_log(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_offline_voice(tmp_path, monkeypatch):
+    """Keep the offline voice out of unrelated tests.
+
+    Whether kokoro-onnx is installed on the machine must not change any other
+    test (an edge-tts failure would otherwise fall back to it), and a model
+    download must never land in the real cache folder.
+    """
+    from manimgen.renderer import tts, tts_kokoro
+
+    monkeypatch.setattr(tts_kokoro, "is_installed", lambda: False)
+    monkeypatch.setenv("MANIMGEN_KOKORO_DIR", str(tmp_path / "kokoro-models"))
+    tts.reset_fallback()
+    yield
+    tts.reset_fallback()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_logs_dir(tmp_path, monkeypatch):
     """Send render and retry logs to this test's tmp_path.
 

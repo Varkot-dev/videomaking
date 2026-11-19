@@ -114,8 +114,18 @@ DEFAULTS: dict = {
         "enabled": True,
         "speed": "+5%",
         "proxy": None,
+        # Engine used when edge-tts cannot be reached: "kokoro" or "none".
+        "fallback_engine": "kokoro",
+        # Offline voice (kokoro-onnx, see requirements-voice.txt).
+        "kokoro": {
+            "voice": "am_michael",
+            "speed": 1.05,
+            "model_dir": None,
+        },
     },
 }
+TTS_ENGINES = ("edge-tts", "kokoro")
+TTS_FALLBACK_ENGINES = ("kokoro", "none")
 DEFAULT_PROVIDER = "claude_cli"
 
 
@@ -289,7 +299,53 @@ def _validate(path: Path, raw: dict) -> dict:
         raise ConfigError(
             f"{path}: tts.enabled must be true or false, got {cfg['tts']['enabled']!r}."
         )
+    _validate_tts(path, cfg["tts"])
     return cfg
+
+
+def _validate_tts(path: Path, tts: dict) -> None:
+    """Check the engine names and the nested offline-voice block."""
+    engine = str(tts.get("engine") or "edge-tts").strip().lower()
+    if engine not in TTS_ENGINES:
+        raise ConfigError(
+            f"{path}: tts.engine {tts.get('engine')!r} is not valid; "
+            f"use one of {list(TTS_ENGINES)}."
+        )
+    tts["engine"] = engine
+    fallback = str(tts.get("fallback_engine") or "none").strip().lower()
+    if fallback not in TTS_FALLBACK_ENGINES:
+        raise ConfigError(
+            f"{path}: tts.fallback_engine {tts.get('fallback_engine')!r} is not "
+            f"valid; use one of {list(TTS_FALLBACK_ENGINES)}."
+        )
+    tts["fallback_engine"] = fallback
+
+    raw = tts.get("kokoro")
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{path}: 'tts.kokoro' must be a block of settings.")
+    kokoro = dict(DEFAULTS["tts"]["kokoro"])
+    kokoro.update(raw)
+    voice = str(kokoro["voice"] or "").strip()
+    if not voice:
+        raise ConfigError(f"{path}: tts.kokoro.voice must be a voice name.")
+    kokoro["voice"] = voice
+    kokoro["speed"] = _as(path, "tts.kokoro.speed", kokoro["speed"], float, "a number")
+    if not 0.5 <= kokoro["speed"] <= 2.0:
+        raise ConfigError(
+            f"{path}: tts.kokoro.speed must be between 0.5 and 2.0, "
+            f"got {kokoro['speed']!r}."
+        )
+    model_dir = kokoro.get("model_dir")
+    if model_dir is not None:
+        if not isinstance(model_dir, str) or not model_dir.strip():
+            raise ConfigError(
+                f"{path}: tts.kokoro.model_dir must be a folder path, "
+                f"got {model_dir!r}."
+            )
+        kokoro["model_dir"] = str(Path(model_dir).expanduser())
+    tts["kokoro"] = kokoro
 
 
 def load() -> dict:

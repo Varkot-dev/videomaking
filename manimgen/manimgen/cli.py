@@ -59,6 +59,7 @@ def _run_tts_for_section(section: dict, idx: int) -> tuple[str, list, float] | N
     """
     from manimgen.renderer.tts import (
         check_audio_not_silent,
+        cue_hint,
         generate_narration,
         get_audio_duration,
         save_timestamps,
@@ -74,7 +75,9 @@ def _run_tts_for_section(section: dict, idx: int) -> tuple[str, list, float] | N
     audio_path = os.path.join(audio_dir, f"{section_id}.mp3")
 
     logger.info("[manimgen] TTS: %s", section["title"])
-    _, timestamps = generate_narration(narration, audio_path)
+    cue_indices = section.get("cue_word_indices")
+    with cue_hint(cue_indices):
+        _, timestamps = generate_narration(narration, audio_path)
     ts_path = audio_path.replace(".mp3", "_timestamps.json")
     save_timestamps(timestamps, ts_path)
     audio_duration = get_audio_duration(audio_path)
@@ -86,7 +89,8 @@ def _run_tts_for_section(section: dict, idx: int) -> tuple[str, list, float] | N
             section["title"],
             energy["silent_ratio"] * 100,
         )
-        _, timestamps = generate_narration(narration, audio_path)
+        with cue_hint(cue_indices):
+            _, timestamps = generate_narration(narration, audio_path)
         save_timestamps(timestamps, ts_path)
         audio_duration = get_audio_duration(audio_path)
 
@@ -230,6 +234,14 @@ def _topic_hash(topic_or_pdf: str) -> str:
     return hashlib.sha256(topic_or_pdf.encode()).hexdigest()[:8]
 
 
+def _offline_voice_key(tts_cfg: dict) -> list:
+    """Key parts for the offline voice; empty for edge-tts, so its keys are unchanged."""
+    if tts_cfg.get("engine") != "kokoro":
+        return []
+    kokoro = tts_cfg.get("kokoro") or {}
+    return ["kokoro", kokoro.get("voice"), kokoro.get("speed")]
+
+
 def _content_hash(topic_hash: str, cfg: dict) -> str:
     """Run hash: the input plus everything that changes the files produced.
 
@@ -248,6 +260,7 @@ def _content_hash(topic_hash: str, cfg: dict) -> str:
                 paths.render_quality_flag(),
                 paths.render_resolution(),
                 paths.render_fps(),
+                *_offline_voice_key(tts_cfg),
             ]
         )
     )
@@ -305,7 +318,14 @@ def _section_key(
     --resume still hits the cache while any real change misses it.
     """
     durations = [round(d * 20) for d in cue_durations or []]
-    payload = json.dumps([topic_hash, section, durations], sort_keys=True, default=str)
+    parts = [topic_hash, section, durations]
+    # The voice that actually spoke: Kokoro when chosen or when edge-tts failed.
+    from manimgen.renderer.tts import engine_tag
+
+    tag = engine_tag()
+    if tag:
+        parts.append(tag)
+    payload = json.dumps(parts, sort_keys=True, default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 

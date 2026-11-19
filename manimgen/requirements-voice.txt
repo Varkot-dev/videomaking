@@ -1,0 +1,9 @@
+# Optional offline narration voice (Kokoro, Apache-2.0). Install with:
+#   pip install -r requirements-voice.txt
+# Used as the fallback when edge-tts cannot be reached, or as the main voice
+# with `tts.engine: kokoro` in config.yaml. The 120 MB model files are
+# downloaded on first use into a per-user cache folder, not by pip.
+# kokoro-onnx 0.6.1 supports Python 3.10 to 3.13. Its dependencies
+# (onnxruntime, numpy, espeakng-loader) ship binary wheels for Windows, macOS
+# and Linux, so no compiler and no system espeak-ng install is needed.
+kokoro-onnx==0.6.1
