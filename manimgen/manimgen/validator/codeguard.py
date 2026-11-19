@@ -607,6 +607,59 @@ def _split_multi_mobject_fades(code: str, name: str) -> tuple[str, int]:
     return _rewrite_calls(code, rewrite)
 
 
+_KIT_IMPORT = "from manimgen.scenekit import *"
+
+
+def _fix_short_scene_base(code: str) -> tuple[str, str | None]:
+    """Vertical shorts only: a scene class that inherits plain ``Scene`` becomes
+    a ``ShortScene`` (the layout kit, ``manimgen/scenekit``) and the import is
+    added. AST-based: only a top-level class whose base is the bare name
+    ``Scene`` is touched, never text inside strings or comments. A scene that
+    already uses ``ShortScene`` or has no such class is returned unchanged.
+    """
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return code, None
+    bases = [
+        base
+        for node in tree.body
+        if isinstance(node, ast.ClassDef)
+        for base in node.bases
+        if isinstance(base, ast.Name) and base.id == "Scene"
+    ]
+    if not bases:
+        return code, None
+    lines = _split_source_lines(code)
+    fixed = code
+    # Rewrite from the end so earlier offsets stay valid.
+    for base in sorted(bases, key=lambda b: (b.lineno, b.col_offset), reverse=True):
+        start = _line_col_to_offset(lines, base.lineno, base.col_offset)
+        end = _line_col_to_offset(lines, base.end_lineno, base.end_col_offset)
+        fixed = fixed[:start] + "ShortScene" + fixed[end:]
+    has_import = any(
+        isinstance(node, ast.ImportFrom)
+        and node.module in ("manimgen.scenekit", "manimgen.scenekit.shorts")
+        for node in tree.body
+    )
+    if not has_import:
+        anchor = next(
+            (
+                node
+                for node in tree.body
+                if isinstance(node, ast.ImportFrom) and node.module == "manimlib"
+            ),
+            None,
+        )
+        if anchor is not None:
+            offset = _line_col_to_offset(lines, anchor.end_lineno + 1, 0)
+            lead = "" if offset == 0 or fixed[offset - 1] == "\n" else "\n"
+            fixed = fixed[:offset] + lead + _KIT_IMPORT + "\n" + fixed[offset:]
+        else:
+            fixed = _KIT_IMPORT + "\n" + fixed
+    return fixed, "Scene -> ShortScene (vertical short)"
+
+
 def apply_known_fixes(code: str) -> tuple[str, list[str]]:
     fixed = code
     applied: list[str] = []
@@ -2019,6 +2072,13 @@ def _precheck_and_autofix_verbose(code: str) -> tuple[str, list[str]]:
     fixed, structural_fixes = _fix_broken_call_args(code)
     fixed, applied_fixes = apply_known_fixes(fixed)
     applied_fixes = structural_fixes + applied_fixes
+
+    from manimgen import paths
+
+    if paths.is_short():
+        fixed, kit_fix = _fix_short_scene_base(fixed)
+        if kit_fix:
+            applied_fixes = applied_fixes + [kit_fix]
 
     # Phase 3 enforcement (default OFF — gated on MANIMGEN_KWARG_ENFORCE). When
     # enabled, surgically REMOVE provably-invalid constructor kwargs via the

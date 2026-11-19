@@ -74,7 +74,7 @@ class TestVerticalDirectorPrompt:
         paths.set_video_format("short")
         prompt = scene_generator._load_director_prompt()
         assert prompt.rstrip().endswith("```")  # vertical rules come last
-        assert "VERTICAL SHORT MODE" in prompt and "4.5 units wide" in prompt
+        assert "VERTICAL SHORT MODE" in prompt and "ShortScene" in prompt
 
     def test_landscape_examples_and_frames_are_not_sent_for_a_short(self, monkeypatch):
         sent = {}
@@ -109,14 +109,16 @@ class TestVerticalDirectorPrompt:
         assert inspect_scene_code(code).ok
         fixed = precheck_and_autofix(code)
         assert fixed == code, "codeguard would rewrite the reference scene"
-        result = verify_timing(code, [3.0, 3.0, 3.5])  # cue lengths in the comments
+        result = verify_timing(code, [3.0, 3.0, 4.0])  # cue lengths in the comments
         assert result["ok"] and len(result["cues"]) == 3
 
-    def test_reference_scene_stays_inside_the_safe_box(self):
+    def test_reference_scene_places_no_text_by_hand(self):
+        """The kit owns placement: the reference scene never positions text."""
         with open(_VERTICAL, encoding="utf-8") as f:
-            text = f.read()
-        ys = [float(y) for y in re.findall(r"move_to\(\[CX, (-?[\d.]+), 0\]\)", text)]
-        assert ys and all(-2.0 <= y <= 2.8 for y in ys)
+            code = re.search(r"```python\n(.*?)```", f.read(), re.DOTALL).group(1)
+        assert "(ShortScene)" in code
+        for forbidden in ("Text(", "Tex(", "to_edge", "font_size", "move_to([CX"):
+            assert forbidden not in code
 
 
 @pytest.mark.unit
