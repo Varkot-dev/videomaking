@@ -245,25 +245,25 @@ class TestAudioFile:
 
 class TestCacheDir:
     def test_windows(self):
-        env = {"LOCALAPPDATA": r"C:\Users\me\AppData\Local"}
-        got = K.default_cache_dir("win32", env, "/home/me")
+        env = {"LOCALAPPDATA": r"C:\data\Local"}
+        got = K.default_cache_dir("win32", env, "/h")
         assert got == Path(env["LOCALAPPDATA"]) / "manimgen" / "kokoro"
 
     def test_windows_without_localappdata(self):
-        got = K.default_cache_dir("win32", {}, "/home/me")
-        assert got == Path("/home/me/AppData/Local/manimgen/kokoro")
+        got = K.default_cache_dir("win32", {}, "/h")
+        assert got == Path("/h/AppData/Local/manimgen/kokoro")
 
     def test_macos(self):
-        got = K.default_cache_dir("darwin", {}, "/Users/me")
-        assert got == Path("/Users/me/Library/Caches/manimgen/kokoro")
+        got = K.default_cache_dir("darwin", {}, "/m")
+        assert got == Path("/m/Library/Caches/manimgen/kokoro")
 
     def test_linux_xdg(self):
-        got = K.default_cache_dir("linux", {"XDG_CACHE_HOME": "/x"}, "/home/me")
+        got = K.default_cache_dir("linux", {"XDG_CACHE_HOME": "/x"}, "/h")
         assert got == Path("/x/manimgen/kokoro")
 
     def test_linux_default(self):
-        got = K.default_cache_dir("linux", {}, "/home/me")
-        assert got == Path("/home/me/.cache/manimgen/kokoro")
+        got = K.default_cache_dir("linux", {}, "/h")
+        assert got == Path("/h/.cache/manimgen/kokoro")
 
     def test_env_beats_config_beats_default(self, monkeypatch, tmp_path):
         monkeypatch.delenv(K.ENV_MODEL_DIR, raising=False)
