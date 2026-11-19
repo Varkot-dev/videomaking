@@ -23,6 +23,15 @@ def _isolate_evidence_log(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _preflight_off_by_default(monkeypatch):
+    """Tests written for the render-first flow keep it; preflight tests opt in.
+
+    A test that wants the dry run sets MANIMGEN_PREFLIGHT=1 itself.
+    """
+    monkeypatch.setenv("MANIMGEN_PREFLIGHT", "0")
+
+
+@pytest.fixture(autouse=True)
 def _isolate_offline_voice(tmp_path, monkeypatch):
     """Keep the offline voice out of unrelated tests.
 

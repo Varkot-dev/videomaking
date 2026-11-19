@@ -31,22 +31,37 @@ logger = logging.getLogger(__name__)
 # The canonical dark background. CLAUDE.md: the flag is -c, NOT --background_color.
 _BACKGROUND_COLOR = "#1C1C1C"
 
+# Tells the probe inside the child that this is a dry run (see
+# probes/overlap_probe.py, which must use the same name).
+DRY_RUN_ENV = "MANIMGEN_DRY_RUN"
+
 
 def build_manimgl_command(
-    scene_path: str, class_name: str, draft: bool | None = None
+    scene_path: str,
+    class_name: str,
+    draft: bool | None = None,
+    dry_run_dir: str | None = None,
 ) -> list[str]:
     """Return the argv for rendering ``class_name`` in ``scene_path`` to a file.
 
     ``draft=True`` renders at the draft size for this command only (see
     ``paths.render_size_flags``); None follows the process-wide draft switch.
 
+    ``dry_run_dir`` makes it a dry run: ``-s`` (skip animations) with ``-w``
+    runs the whole ``construct`` without drawing a frame per animation, and
+    manimgl then writes only the last frame as a PNG, into that folder
+    (``--video_dir``). Size, frame and background flags are the same as a real
+    render, so the frame the scene is laid out in is identical.
+
     Deliberately omits ``--fps`` (broken in manimgl 1.7.2 — see module docstring).
     """
+    dry = ["-s", "--video_dir", dry_run_dir] if dry_run_dir else []
     return [
         "manimgl",
         scene_path,
         class_name,
         "-w",
+        *dry,
         *paths.render_size_flags(draft),
         "-c",
         _BACKGROUND_COLOR,
@@ -109,6 +124,9 @@ class RenderResult(NamedTuple):
     timed_out: bool
     overlaps: tuple = ()
     probe_error: str | None = None
+    # Set by a dry run: the scene ran to the end without drawing frames, so
+    # ``ok`` means "no crash" and ``video_path`` is None by design.
+    dry_run: bool = False
 
 
 # Render seconds allowed per second of video, on top of the configured budget.
@@ -186,6 +204,7 @@ def run_manimgl(
     class_name: str,
     timeout: float | None = None,
     draft: bool | None = None,
+    dry_run: bool = False,
 ) -> RenderResult:
     """Render ``class_name`` and return a structured result.
 
@@ -194,6 +213,13 @@ def run_manimgl(
     whole process tree is killed. Exit 0 with no fresh video is a failure.
     ``draft=True`` renders at the draft size for this call alone (it never
     touches the process-wide draft switch, which parallel sections share).
+
+    ``dry_run=True`` executes the scene without drawing frames (see
+    ``build_manimgl_command``): same safety gate, same environment, same probe,
+    but no video is produced or looked for. ``ok`` then means manimgl exited 0;
+    ``stdout`` carries the scene's prints (the layout kit's ``[scenekit]``
+    findings) and ``overlaps`` the probe's findings. The default timeout is the
+    preflight budget (``paths.preflight_timeout``).
 
     Hard safety block (#87): the exact file manimgl would execute is first run
     through ``scene_ast_gate``. A rejected (or unreadable) file is never handed
@@ -221,14 +247,18 @@ def run_manimgl(
     )
 
     if timeout is None:
-        timeout = _scene_timeout(scene_path)
+        timeout = paths.preflight_timeout() if dry_run else _scene_timeout(scene_path)
 
     # Freshness floor: a video older than this cannot be this render's output,
     # so a stale file from an earlier attempt is never mistaken for it.
     started_at = _render_floor()
     env = with_package_path(with_utf8_io(get_render_env()))
+    env.pop(DRY_RUN_ENV, None)
+    if dry_run:
+        env[DRY_RUN_ENV] = "1"
     probe_dir = None
     report_path = None
+    dry_dir = tempfile.mkdtemp(prefix="manimgen_dry_") if dry_run else None
     if overlap_report.probe_enabled():
         probe_dir = tempfile.mkdtemp(prefix="manimgen_probe_")
         report_path = str(Path(probe_dir) / "overlaps.json")
@@ -237,7 +267,7 @@ def run_manimgl(
         )
     try:
         returncode, stdout, stderr, timed_out = procutil.run_tree(
-            build_manimgl_command(scene_path, class_name, draft),
+            build_manimgl_command(scene_path, class_name, draft, dry_dir),
             timeout=timeout,
             env=env,
         )
@@ -247,7 +277,7 @@ def run_manimgl(
             else overlap_report.OverlapReport()
         )
         video = None
-        if not timed_out and returncode == 0:
+        if not timed_out and returncode == 0 and not dry_run:
             video = _find_rendered_video(class_name, newer_than=started_at)
             if video is not None:
                 # Without a report (probe off or silent) a stale sidecar from an
@@ -256,6 +286,8 @@ def run_manimgl(
     finally:
         if probe_dir:
             shutil.rmtree(probe_dir, ignore_errors=True)
+        if dry_dir:
+            shutil.rmtree(dry_dir, ignore_errors=True)
     if report.probe_error:
         logger.warning(
             "[render] overlap probe error for %s: %s", class_name, report.probe_error
@@ -269,6 +301,18 @@ def run_manimgl(
     if returncode != 0:
         return RenderResult(False, None, stdout, stderr, returncode, False)
 
+    if dry_run:
+        return RenderResult(
+            True,
+            None,
+            stdout,
+            stderr,
+            0,
+            False,
+            overlaps=report.overlaps,
+            probe_error=report.probe_error,
+            dry_run=True,
+        )
     if video is None:
         searched = ", ".join(_video_search_dirs())
         note = (

@@ -4,11 +4,13 @@ The scene-writing model sometimes produces a weak scene, and repairing it costs
 minutes of re-rendering. For a short, the Director is asked for ``count``
 independent scenes at the same time. Each draft goes through the same per-draft
 steps a single scene gets (codeguard, safety gate, timing gate) in its own
-file, the survivors are rendered small (540x960) in parallel, and the checks
-that cost nothing score them. The best draft is copied to the section's normal
-scene path and the pipeline continues from there exactly as it does for a
-single scene: the full-size render, the retry loop and the fallback all apply.
-The draft videos are only used for scoring and are deleted afterwards.
+file, the survivors are dry-run (preflight: the scene is executed without
+drawing frames, seconds instead of minutes; with preflight off they are rendered
+small, 540x960, in parallel), and the checks that cost nothing score them.
+The best draft is copied to the section's normal scene path and the pipeline
+continues from there exactly as it does for a single scene: the full-size
+render, the retry loop and the fallback all apply. Draft videos (preflight off)
+are only used for scoring and are deleted afterwards.
 
 Scoring (lower is better, compared as a tuple):
 
@@ -16,8 +18,10 @@ Scoring (lower is better, compared as a tuple):
    rendering (precheck, safety gate, unresolved timing issues), its render
    failed or timed out, or the model call itself failed.
 2. The number of hard issues: findings of the render probe (text over text,
-   text outside the safe area), blocking freeze-frame tails from the timing
-   verifier, and hard frame checks (black or frozen frames).
+   text outside the safe area), findings of the layout kit (preflight only),
+   blocking freeze-frame tails from the timing verifier, and hard frame checks
+   (black or frozen frames; small render only, since the dry run draws no
+   frames).
 3. The number of timing warnings from the timing verifier.
 4. Shorter code.
 
@@ -102,6 +106,57 @@ def _generate_one(variant: str, gate_one: Callable[[str], GateResult]) -> Draft:
     elif draft.gate.timing_blocked:
         draft.failure = "timing issues the auto-fix could not resolve"
     return draft
+
+
+def _judge_one(draft: Draft, cue_durations: list[float] | None) -> None:
+    """Score a draft with a dry run (preflight), or a small render without it.
+
+    The dry run (seconds) sees everything the score uses that is about layout:
+    the probe's findings, the layout kit's findings and a crash, and the timing
+    verifier is static. Only the black/frozen-frame check needs real frames; it
+    runs later on the full render of the draft that wins. If the dry run cannot
+    judge the scene (it timed out) the draft is rendered small as before.
+    """
+    if not paths.preflight_enabled():
+        _render_one(draft, cue_durations)
+        return
+    from manimgen.validator.preflight import preflight
+
+    gate = draft.gate
+    assert gate is not None
+    try:
+        pf = preflight(gate.scene_path, gate.class_name)
+    except Exception as exc:  # noqa: BLE001 - a broken dry run is a failed draft
+        draft.failure = f"preflight raised {type(exc).__name__}"
+        logger.warning("[drafts] draft %s preflight raised: %s", draft.variant, exc)
+        return
+    if not pf.ran and not pf.crashed:
+        _render_one(draft, cue_durations)  # unknown: look at real frames
+        return
+    if pf.crashed:
+        draft.failure = "render failed"
+        tail = (pf.stderr or "").strip().splitlines()[-1:]
+        if tail:
+            draft.details.append(tail[0][:200])
+        return
+    try:
+        _score_preflight(draft, pf, cue_durations)
+    except Exception as exc:  # noqa: BLE001 - scoring must not sink the section
+        draft.failure = f"scoring raised {type(exc).__name__}"
+        logger.warning("[drafts] draft %s scoring raised: %s", draft.variant, exc)
+
+
+def _score_preflight(draft: Draft, pf, cue_durations: list[float] | None) -> None:
+    from manimgen.validator.timing_verifier import blocking_freezes, verify_timing
+
+    gate = draft.gate
+    assert gate is not None
+    timing = verify_timing(gate.code, cue_durations) if cue_durations else {}
+    freezes = blocking_freezes(timing) if cue_durations else []
+    draft.timing_warnings = len(timing.get("warnings", []))
+    draft.hard_issues = len(pf.overlaps) + len(pf.kit_findings) + len(freezes)
+    draft.details.extend(pf.placement_issues[:3])
+    draft.details.extend(freezes[:2])
 
 
 def _render_one(draft: Draft, cue_durations: list[float] | None) -> None:
@@ -276,7 +331,7 @@ def pick_best_draft(
     renderable = [d for d in drafts if not d.failed]
     if renderable:
         with ThreadPoolExecutor(max_workers=len(renderable)) as pool:
-            list(pool.map(lambda d: _render_one(d, cue_durations), renderable))
+            list(pool.map(lambda d: _judge_one(d, cue_durations), renderable))
 
     try:
         survivors = [d for d in drafts if not d.failed]

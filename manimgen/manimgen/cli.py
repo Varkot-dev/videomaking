@@ -533,6 +533,37 @@ def _generate_and_gate(
     )
 
 
+def _preflight_gate(gate: GateResult, log):
+    """Dry-run the gated scene before its first full render (None: not done).
+
+    Skipped with ``rendering.preflight: false`` / ``MANIMGEN_PREFLIGHT=0``, and
+    when the scene fails its token-free precheck (the render path reports that
+    as it always did). The result is ``actionable`` when it crashed or found
+    placement defects; a timeout or an unexpected failure of the dry run is
+    not, so the real render goes ahead.
+    """
+    if not paths.preflight_enabled():
+        return None
+    from manimgen.validator.codeguard import precheck_and_autofix_file
+    from manimgen.validator.preflight import preflight
+
+    if not precheck_and_autofix_file(gate.scene_path)["ok"]:
+        return None
+    result = preflight(gate.scene_path, gate.class_name)
+    log.info("[manimgen] Preflight for %s: %s", gate.class_name, result.summary())
+    if result.actionable:
+        log.warning(
+            "[manimgen] Preflight found problems before rendering, going to fix "
+            "them first: %s",
+            "; ".join(
+                ["crash"]
+                if result.crashed
+                else [i[:120] for i in result.placement_issues]
+            ),
+        )
+    return result
+
+
 def _render_with_retry(
     section: dict,
     gate: GateResult,
@@ -549,10 +580,17 @@ def _render_with_retry(
     which of these shipped (#71); its path is None only if the fallback also
     failed.
     """
+    pf = None
     if gate.timing_blocked or gate.precheck_blocked:
         success, video_path = False, None
     else:
-        success, video_path = run_scene(gate.scene_path, gate.class_name)
+        pf = _preflight_gate(gate, log)
+        if pf is not None and pf.actionable:
+            # A crash or layout findings found in seconds: no full render yet.
+            # retry_scene fixes them, verifying each fix with a dry run too.
+            success, video_path = False, None
+        else:
+            success, video_path = run_scene(gate.scene_path, gate.class_name)
 
     if success and video_path:
         from manimgen.validator.render_validator import validate_render
@@ -586,6 +624,8 @@ def _render_with_retry(
     # A first render that ran but was rejected is handed over, so the retry
     # loop checks it instead of rendering the same code again.
     retry_kwargs = {"first_render": video_path} if video_path else {}
+    if pf is not None and pf.actionable:
+        retry_kwargs["initial_preflight"] = pf
     success, video_path = retry_scene(
         section,
         gate.code,
