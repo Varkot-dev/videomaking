@@ -431,7 +431,8 @@ class TestConfig:
         monkeypatch.delenv(config.ENV_VAR, raising=False)
         config.reload()
         t = config.load()["tts"]
-        assert t["engine"] == "edge-tts"
+        assert t["engine"] == "kokoro"
+        assert t["kokoro"]["voice"] == "am_michael"
 
 
 # ---------------------------------------------------------------------------
@@ -521,6 +522,128 @@ class TestFallback:
         assert tts._is_service_failure(err)
 
 
+class TestReverseFallback:
+    """tts.engine is kokoro but the offline voice cannot be set up."""
+
+    @pytest.fixture
+    def setup(self, monkeypatch):
+        seen = {"edge": 0, "kokoro": 0}
+
+        def edge(text, output_path, voice=None):
+            seen["edge"] += 1
+            return output_path, [tts.WordTimestamp("w", 0.0, 1.0)]
+
+        monkeypatch.setattr(tts, "_generate_edge", edge)
+        monkeypatch.setitem(tts._TTS_CFG, "engine", "kokoro")
+        monkeypatch.setitem(tts._TTS_CFG, "fallback_engine", "kokoro")
+        monkeypatch.setitem(
+            tts._TTS_CFG, "kokoro", {"voice": "am_michael", "speed": 1.05}
+        )
+        return seen
+
+    def _count_kokoro(self, monkeypatch, seen, error):
+        def kokoro(text, output_path, cue_word_indices=None, synth=None):
+            seen["kokoro"] += 1
+            raise error
+
+        monkeypatch.setattr(K, "generate_narration", kokoro)
+
+    def test_not_installed_uses_edge_with_one_warning(self, setup, tmp_path, caplog):
+        # conftest: is_installed() is False, the real engine raises NotReady.
+        with caplog.at_level("WARNING", logger="manimgen.renderer.tts"):
+            tts.generate_narration("one two", str(tmp_path / "a.mp3"))
+            tts.generate_narration("three", str(tmp_path / "b.mp3"))
+        assert setup["edge"] == 2
+        warnings = [r.getMessage() for r in caplog.records]
+        assert len(warnings) == 1
+        assert "pip install -r requirements-voice.txt" in warnings[0]
+        assert "edge-tts" in warnings[0]
+
+    def test_model_download_failure_uses_edge(
+        self, setup, monkeypatch, tmp_path, caplog
+    ):
+        monkeypatch.setattr(K, "is_installed", lambda: True)
+
+        def offline(*a, **k):
+            raise requests_error()
+
+        import requests
+
+        def requests_error():
+            return requests.ConnectionError("no route to github.com")
+
+        monkeypatch.setattr(K.requests, "get", offline)
+        with caplog.at_level("WARNING", logger="manimgen.renderer.tts"):
+            tts.generate_narration("one", str(tmp_path / "a.mp3"))
+        assert setup["edge"] == 1
+        warnings = [r.getMessage() for r in caplog.records]
+        assert len(warnings) == 1 and "requirements-voice.txt" in warnings[0]
+        assert "could not download" in warnings[0]
+
+    def test_kokoro_is_not_retried_after_falling_back(
+        self, setup, monkeypatch, tmp_path
+    ):
+        self._count_kokoro(monkeypatch, setup, K.KokoroNotReady("missing"))
+        for name in "abc":
+            tts.generate_narration("one", str(tmp_path / f"{name}.mp3"))
+        assert setup["kokoro"] == 1 and setup["edge"] == 3
+
+    def test_both_failing_raises_both_errors_and_does_not_loop(
+        self, setup, monkeypatch, tmp_path
+    ):
+        self._count_kokoro(monkeypatch, setup, K.KokoroNotReady("model missing"))
+
+        def edge(text, output_path, voice=None):
+            setup["edge"] += 1
+            raise RuntimeError("edge-tts failed after 3 attempts: x") from OSError("n")
+
+        monkeypatch.setattr(tts, "_generate_edge", edge)
+        with pytest.raises(RuntimeError) as exc:
+            tts.generate_narration("one", str(tmp_path / "a.mp3"))
+        assert "3 attempts" in str(exc.value) and "model missing" in str(exc.value)
+        assert setup["edge"] == 1 and setup["kokoro"] == 1  # no edge -> kokoro hop
+        with pytest.raises(RuntimeError):
+            tts.generate_narration("two", str(tmp_path / "b.mp3"))
+        assert setup["kokoro"] == 1
+
+    def test_forward_fallback_with_missing_models_raises_without_loop(
+        self, setup, monkeypatch, tmp_path
+    ):
+        monkeypatch.setitem(tts._TTS_CFG, "engine", "edge-tts")
+        monkeypatch.setattr(K, "is_installed", lambda: True)
+        self._count_kokoro(monkeypatch, setup, K.KokoroNotReady("no models"))
+
+        def edge(text, output_path, voice=None):
+            setup["edge"] += 1
+            raise RuntimeError("edge-tts failed after 3 attempts: x") from OSError("n")
+
+        monkeypatch.setattr(tts, "_generate_edge", edge)
+        with pytest.raises(RuntimeError, match="no models"):
+            tts.generate_narration("one", str(tmp_path / "a.mp3"))
+        assert setup["edge"] == 1 and setup["kokoro"] == 1
+        assert tts.engine_tag() is None
+
+    def test_other_kokoro_errors_are_not_swallowed(self, setup, monkeypatch, tmp_path):
+        self._count_kokoro(monkeypatch, setup, K.KokoroUnavailable("ffmpeg broke"))
+        with pytest.raises(K.KokoroUnavailable, match="ffmpeg broke"):
+            tts.generate_narration("one", str(tmp_path / "a.mp3"))
+        assert setup["edge"] == 0
+
+    def test_cache_key_follows_the_engine_actually_used(
+        self, setup, monkeypatch, tmp_path
+    ):
+        section = {"title": "t", "narration": "a b", "cue_word_indices": [0]}
+        kokoro_key = cli._section_key(section, "h", [1.0])
+        assert tts.engine_tag() == "kokoro:am_michael:1.05"
+        tts.generate_narration("one", str(tmp_path / "a.mp3"))  # falls back
+        assert tts.engine_tag() is None
+        edge_key = cli._section_key(section, "h", [1.0])
+        assert edge_key != kokoro_key
+        # A fresh run that can use Kokoro gets the Kokoro key again.
+        tts.reset_fallback()
+        assert cli._section_key(section, "h", [1.0]) == kokoro_key
+
+
 # ---------------------------------------------------------------------------
 # Cache key
 # ---------------------------------------------------------------------------
@@ -559,6 +682,7 @@ class TestCacheKey:
         assert base != cli._content_hash("h", cfg("am_michael", 1.2))
 
     def test_fallback_in_effect_changes_the_section_key(self, monkeypatch):
+        monkeypatch.setitem(tts._TTS_CFG, "engine", "edge-tts")
         before = cli._section_key(self.SECTION, "h", [1.0])
         monkeypatch.setattr(tts, "_edge_unreachable", True)
         monkeypatch.setitem(
@@ -567,6 +691,7 @@ class TestCacheKey:
         assert cli._section_key(self.SECTION, "h", [1.0]) != before
 
     def test_voice_change_changes_the_section_key(self, monkeypatch):
+        monkeypatch.setitem(tts._TTS_CFG, "engine", "edge-tts")
         monkeypatch.setattr(tts, "_edge_unreachable", True)
         monkeypatch.setitem(tts._TTS_CFG, "kokoro", {"voice": "a", "speed": 1.05})
         one = cli._section_key(self.SECTION, "h", [1.0])

@@ -223,7 +223,8 @@ _OLD_LLM = {
     "ollama_num_ctx": 32768,
 }
 _OLD_TTS = {
-    "engine": "edge-tts",
+    # The owner chose Michael (Kokoro am_michael) as the default voice on 2026-11-19.
+    "engine": "kokoro",
     "voice": "en-US-AndrewMultilingualNeural",
     "enabled": True,
     "speed": "+5%",
@@ -259,6 +260,8 @@ def test_shipped_config_effective_settings_unchanged():
     assert got["rendering"] == _OLD_RENDERING
     assert got["llm"] == _OLD_LLM
     assert {k: got["tts"][k] for k in _OLD_TTS} == _OLD_TTS
+    assert got["tts"]["kokoro"]["voice"] == "am_michael"
+    assert got["tts"]["kokoro"]["speed"] == 1.05
     assert not got["tts"]["proxy"]
     assert got["tts_on"] is True
     assert got["out"] == {k: str(PROJECT / v) for k, v in _OLD_OUTPUT_RELATIVE.items()}
