@@ -64,6 +64,24 @@ def with_utf8_io(env: dict[str, str]) -> dict[str, str]:
     return env
 
 
+def with_package_path(env: dict[str, str]) -> dict[str, str]:
+    """Return ``env`` with the folder holding the ``manimgen`` package on PYTHONPATH.
+
+    A vertical short does ``from manimgen.scenekit import *``, so the manimgl
+    child must be able to import the same ``manimgen`` this process runs, even
+    when manimgl lives in another Python environment than the editable install.
+    The folder goes LAST: anything the caller already put on PYTHONPATH wins.
+    (The scene safety gate lets a scene import only that one module.)
+    """
+    env = dict(env)
+    root = str(Path(__file__).resolve().parents[2])
+    parts = [p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p]
+    if root not in parts:
+        parts.append(root)
+    env["PYTHONPATH"] = os.pathsep.join(parts)
+    return env
+
+
 class RenderResult(NamedTuple):
     """Outcome of one manimgl render.
 
@@ -175,7 +193,7 @@ def run_manimgl(
     # Freshness floor: a video older than this cannot be this render's output,
     # so a stale file from an earlier attempt is never mistaken for it.
     started_at = _render_floor()
-    env = with_utf8_io(get_render_env())
+    env = with_package_path(with_utf8_io(get_render_env()))
     probe_dir = None
     report_path = None
     if overlap_report.probe_enabled():

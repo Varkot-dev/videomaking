@@ -37,8 +37,11 @@ class Overlap:
     a: str
     b: str
     fraction: float
-    # "overlap" (a drawn over b), "offscreen" (a cut off by the frame edge) or
-    # "unsafe" (a under the Shorts buttons or caption). b is "" for the last two.
+    # "overlap" (a drawn over b), "offscreen" (a cut off by the frame edge),
+    # "unsafe" (a under the Shorts buttons or caption), "small" (a rendered
+    # below font_size 22; fraction is its size relative to 22) or "on_shape" (a
+    # drawn over the outline or fill of the shape named b). b is "" except for
+    # "overlap" and "on_shape".
     kind: str = "overlap"
 
 
@@ -163,6 +166,21 @@ def format_issue(overlap: Overlap) -> str:
             "of it is under the app's buttons or caption). Keep all text inside "
             "x -2.0 to 1.4 and y -2.0 to 2.8: move it up or left, split it over "
             "two lines, or guard its width with set_width(3.3)."
+        )
+    if overlap.kind == "small":
+        return (
+            f"{ISSUE_PREFIX} text {overlap.a!r} is too small to read on a phone "
+            f"at t={overlap.time:.1f}s (rendered at {overlap.fraction:.0%} of "
+            "font_size 22). It was probably scaled down with its diagram. Build "
+            "text outside the scaled group at font_size 22 or larger "
+            "(self.label(...) in a ShortScene does this)."
+        )
+    if overlap.kind == "on_shape":
+        return (
+            f"{ISSUE_PREFIX} text {overlap.a!r} is drawn on top of the outline "
+            f"or fill of a {overlap.b} at t={overlap.time:.1f}s. Move it clear "
+            "of the shape (next_to with a buff of 0.12), or centre it inside a "
+            "shape whose fill opacity is 0.3 or less."
         )
     return (
         f"{ISSUE_PREFIX} text {overlap.a!r} is drawn on top of {overlap.b!r} "

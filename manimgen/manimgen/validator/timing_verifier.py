@@ -325,8 +325,38 @@ def _get_for_range_count(node: ast.For) -> int | None:
         return None
 
 
+# Time spent by ShortScene methods (manimgen/scenekit/shorts.py): each plays
+# for a fixed time the static analysis cannot see inside the method.
+# name -> (fixed seconds, default run_time of the part set by run_time=).
+_KIT_TIMED_CALLS = {
+    "swap_hook": (0.25, 0.5),  # old text out, then new text in
+    "swap_key": (0.25, 0.5),
+    "drop": (0.0, 0.25),  # fade out and forget
+}
+
+
+def _kit_call_time(call: ast.Call) -> Duration | None:
+    """Seconds a ShortScene timed method takes, or None if ``call`` is not one."""
+    func = call.func
+    if not (
+        isinstance(func, ast.Attribute)
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "self"
+        and func.attr in _KIT_TIMED_CALLS
+    ):
+        return None
+    fixed, default = _KIT_TIMED_CALLS[func.attr]
+    for kw in call.keywords:
+        if kw.arg == "run_time":
+            val = _eval_constant(kw.value)
+            return fixed + val if val is not None else UNKNOWN
+    return fixed + default
+
+
 def _is_timed_call(node: ast.AST) -> bool:
-    return isinstance(node, ast.Call) and (_is_self_play(node) or _is_self_wait(node))
+    return isinstance(node, ast.Call) and (
+        _is_self_play(node) or _is_self_wait(node) or _kit_call_time(node) is not None
+    )
 
 
 def _contains_timed_call(stmts: list[ast.stmt]) -> bool:
@@ -411,6 +441,21 @@ def _time_for_statements(
                     has_unknown = True
                 else:
                     total += wt
+                continue
+            kt = _kit_call_time(call)
+            if kt is not None:
+                if isinstance(kt, _Unknown):
+                    has_unknown = True
+                else:
+                    total += kt
+                continue
+        if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Call):
+            kt = _kit_call_time(stmt.value)
+            if kt is not None:
+                if isinstance(kt, _Unknown):
+                    has_unknown = True
+                else:
+                    total += kt
                 continue
         if isinstance(stmt, ast.For):
             n = _get_for_range_count(stmt)
