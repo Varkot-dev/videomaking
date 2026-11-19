@@ -32,8 +32,13 @@ logger = logging.getLogger(__name__)
 _BACKGROUND_COLOR = "#1C1C1C"
 
 
-def build_manimgl_command(scene_path: str, class_name: str) -> list[str]:
+def build_manimgl_command(
+    scene_path: str, class_name: str, draft: bool | None = None
+) -> list[str]:
     """Return the argv for rendering ``class_name`` in ``scene_path`` to a file.
+
+    ``draft=True`` renders at the draft size for this command only (see
+    ``paths.render_size_flags``); None follows the process-wide draft switch.
 
     Deliberately omits ``--fps`` (broken in manimgl 1.7.2 — see module docstring).
     """
@@ -42,7 +47,7 @@ def build_manimgl_command(scene_path: str, class_name: str) -> list[str]:
         scene_path,
         class_name,
         "-w",
-        *paths.render_size_flags(),
+        *paths.render_size_flags(draft),
         "-c",
         _BACKGROUND_COLOR,
     ]
@@ -135,14 +140,42 @@ def _scene_timeout(scene_path: str) -> float:
     )
 
 
+# A draft render is a quick look, so it gets a much shorter budget than the
+# final render: a draft that cannot finish in this time is scored as failed.
+# The 540x960 frame has a quarter of the pixels of 1080x1920.
+_DRAFT_SECONDS_PER_VIDEO_SECOND = 4.0
+_DRAFT_STARTUP_SECONDS = 45.0
+_DRAFT_MIN_SECONDS = 90.0
+
+
+def draft_scene_timeout(scene_path: str) -> float:
+    """Render budget for a draft of this scene, never above the full budget."""
+    try:
+        with open(scene_path, encoding="utf-8") as f:
+            code = f.read()
+    except OSError:
+        code = ""
+    length = _estimated_video_seconds(code) if code else 0.0
+    wanted = max(
+        _DRAFT_MIN_SECONDS,
+        _DRAFT_STARTUP_SECONDS + _DRAFT_SECONDS_PER_VIDEO_SECOND * length,
+    )
+    return min(wanted, _scene_timeout(scene_path))
+
+
 def run_manimgl(
-    scene_path: str, class_name: str, timeout: float | None = None
+    scene_path: str,
+    class_name: str,
+    timeout: float | None = None,
+    draft: bool | None = None,
 ) -> RenderResult:
     """Render ``class_name`` and return a structured result.
 
     The single entry point for every manimgl render (first pass, retry and
     fallback). ``timeout`` defaults to the configured 2D/3D budget; on expiry the
     whole process tree is killed. Exit 0 with no fresh video is a failure.
+    ``draft=True`` renders at the draft size for this call alone (it never
+    touches the process-wide draft switch, which parallel sections share).
 
     Hard safety block (#87): the exact file manimgl would execute is first run
     through ``scene_ast_gate``. A rejected (or unreadable) file is never handed
@@ -186,7 +219,7 @@ def run_manimgl(
         )
     try:
         returncode, stdout, stderr, timed_out = procutil.run_tree(
-            build_manimgl_command(scene_path, class_name),
+            build_manimgl_command(scene_path, class_name, draft),
             timeout=timeout,
             env=env,
         )

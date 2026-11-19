@@ -84,10 +84,19 @@ def is_draft() -> bool:
     return _draft
 
 
-def render_quality_flag() -> str:
-    """Return the manimgl CLI flag for the configured quality, e.g. '--hd'."""
+def _use_draft(draft: bool | None) -> bool:
+    """An explicit per-call request wins over the process-wide draft switch."""
+    return _draft if draft is None else bool(draft)
+
+
+def render_quality_flag(draft: bool | None = None) -> str:
+    """Return the manimgl CLI flag for the configured quality, e.g. '--hd'.
+
+    ``draft`` asks for the small size for this call only; None follows the
+    process-wide draft switch.
+    """
     q = str(_RENDERING["quality"]).strip().lower()
-    if _draft:
+    if _use_draft(draft):
         q = _DRAFT_LANDSCAPE[0]
     try:
         return _QUALITY_FLAGS[q]
@@ -143,23 +152,30 @@ def is_short() -> bool:
     return _video_format == "short"
 
 
-def render_resolution() -> str:
+def render_resolution(draft: bool | None = None) -> str:
     """Return resolution string, e.g. '1920x1080' (1080x1920 for a short)."""
+    small = _use_draft(draft)
     if is_short():
-        return _DRAFT_SHORT_RESOLUTION if _draft else SHORT_RESOLUTION
-    return _DRAFT_LANDSCAPE[1] if _draft else _RENDERING["resolution"]
+        return _DRAFT_SHORT_RESOLUTION if small else SHORT_RESOLUTION
+    return _DRAFT_LANDSCAPE[1] if small else _RENDERING["resolution"]
 
 
-def render_size_flags() -> list[str]:
+def render_size_flags(draft: bool | None = None) -> list[str]:
     """manimgl flags that set the frame size.
 
     A short passes an explicit ``-r 1080x1920``: manimgl derives the frame
     (4.5 x 8 units) from the resolution, and its quality flags (-l/-m/--hd)
     are landscape presets that would override it, so they are never combined.
+
+    ``draft=True`` gives the draft size for this call only, without touching
+    the process-wide switch, so sections rendering in parallel threads are
+    not affected.
     """
     if is_short():
-        return ["-r", render_resolution()]
-    return [render_quality_flag()]
+        return ["-r", render_resolution(draft)]
+    # No argument when none was given: callers and tests may replace
+    # render_quality_flag with a zero-argument function.
+    return [render_quality_flag() if draft is None else render_quality_flag(draft)]
 
 
 # Strips of a 1080x1920 frame the Shorts app draws over, as fractions of the
@@ -168,12 +184,34 @@ def render_size_flags() -> list[str]:
 # reserves 672 px at the bottom (it adds ad buttons); measurements of organic
 # Shorts put the covered strip at 300 to 390 px. 480 px sits between them and
 # leaves the diagram room to be read on a phone. Confirm with a test upload.
+MAX_SHORT_DRAFTS = 3
+
 _SHORT_SAFE_MARGINS = (48 / 1080, 480 / 1920, 192 / 1080, 288 / 1920)
 
 
 def short_safe_margins() -> tuple[float, float, float, float]:
     """(left, bottom, right, top) margins of the safe area in a short."""
     return _SHORT_SAFE_MARGINS
+
+
+def short_drafts() -> int:
+    """How many scenes the Director writes for a short (1 means no drafts).
+
+    ``MANIMGEN_SHORT_DRAFTS`` overrides ``shorts.drafts`` in config.yaml for
+    one run. An unparsable or non-positive value falls back to the config.
+    The count is capped at 3: each extra draft costs another scene-writing
+    call and another small render.
+    """
+    raw = os.environ.get("MANIMGEN_SHORT_DRAFTS", "").strip()
+    if raw:
+        try:
+            value = int(raw)
+            if value >= 1:
+                return min(value, MAX_SHORT_DRAFTS)
+        except ValueError:
+            pass
+    configured = int(_SHORTS.get("drafts") or config.DEFAULTS["shorts"]["drafts"])
+    return max(1, min(configured, MAX_SHORT_DRAFTS))
 
 
 def short_voice_profile_path() -> str:

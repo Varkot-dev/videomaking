@@ -21,6 +21,7 @@ from manimgen.planner.lesson_planner import (
     plan_lesson_from_pdf,
     plan_short,
 )
+from manimgen.planner.segmenter import slice_durations
 from manimgen.renderer.assembler import assemble_video
 from manimgen.renderer.muxer import clear_mismatch_log, get_mismatch_log
 from manimgen.types import (
@@ -95,6 +96,22 @@ def _run_tts_for_section(section: dict, idx: int) -> tuple[str, list, float] | N
         audio_duration,
     )
     return audio_path, timestamps, audio_duration
+
+
+def _add_captions(output: str, lesson_plan: dict, section_audio: dict) -> None:
+    """Burn captions into the assembled Short from the narration's word timestamps.
+
+    Runs on every run's freshly assembled video, so it never needs a cache key.
+    """
+    from manimgen.renderer.captions import add_captions
+
+    parts = []
+    for idx, section in enumerate(lesson_plan["sections"], start=1):
+        audio = section_audio.get(safe_section_id(section, idx), {})
+        words = audio.get("timestamps") or []
+        if words:
+            parts.append((words, section.get("narration", ""), audio["audio_duration"]))
+    add_captions(output, parts)
 
 
 def _error_text(exc: BaseException) -> str:
@@ -425,6 +442,7 @@ def _generate_and_gate(
     section: dict,
     cue_durations: list[float] | None,
     overview: dict | None,
+    variant: str | None = None,
 ) -> GateResult:
     """Codegen one scene for the section and run the zero-cost timing gate.
 
@@ -435,10 +453,26 @@ def _generate_and_gate(
     apply an LLM fix with the timing warnings in context). A draft that a
     pre-render check rejects (precheck, unknown names, scene safety gate) sets
     ``precheck_blocked`` and takes the same route; it is never rendered here.
+
+    For a short with ``shorts.drafts`` above 1, the Director writes several
+    scenes at once and the best one is returned (see generator/scene_drafts.py);
+    each draft runs this same function with its own ``variant``.
     """
+    if variant is None and paths.is_short() and paths.short_drafts() > 1:
+        from manimgen.generator.scene_drafts import pick_best_draft
+
+        return pick_best_draft(
+            section,
+            cue_durations,
+            lambda v: _generate_and_gate(section, cue_durations, overview, variant=v),
+            paths.short_drafts(),
+        )
     try:
         code, class_name, scene_path = generate_scenes(
-            section, cue_durations=cue_durations, overview=overview
+            section,
+            cue_durations=cue_durations,
+            overview=overview,
+            **({"variant": variant} if variant else {}),
         )
     except ScenePrecheckError as exc:
         # The draft is on disk. Do not abort the section: skip the render and
@@ -584,6 +618,16 @@ def _scene_file_blocking_freezes(
     except (OSError, UnicodeDecodeError):
         return []
     return _code_blocking_freezes(code, cue_durations)
+
+
+def _cue_durations(segments: list) -> list[float]:
+    """Per-cue lengths the scene, the cutter and the muxer all work to.
+
+    These are the audio slice lengths (see ``segmenter.slice_durations``), not
+    the word.end based ``seg.duration``: the video of a cue must be as long as
+    its audio slice or every cue ends in a frozen frame.
+    """
+    return slice_durations(segments)
 
 
 def _cut_and_mux(
@@ -783,7 +827,7 @@ def _run_section(
             )
 
     # Content key for every cached artifact of this section (#66).
-    cue_durations = [seg.duration for seg in segments] if segments else None
+    cue_durations = _cue_durations(segments) if segments else None
     key = _section_key(section, current_topic_hash, cue_durations)
 
     if segments and _all_cues_muxed(section, idx, len(segments), key):
@@ -1233,7 +1277,18 @@ def main():
             "for a --short. Re-run without --draft for the final."
         ),
     )
+    parser.add_argument(
+        "--captions",
+        action="store_true",
+        help=(
+            "For --short: burn word captions into the final video (needs "
+            "narration). Same as shorts.captions.enabled: true in config.yaml."
+        ),
+    )
     args = parser.parse_args()
+    if args.captions and not args.short:
+        logger.warning("[manimgen] --captions only works with --short; ignoring it.")
+        args.captions = False
     if args.short and args.pdf:
         parser.error("--short takes a topic, not --pdf")
     if args.short and not (args.topic or args.resume):
@@ -1368,7 +1423,7 @@ def main():
                     "audio_duration": audio_duration,
                     "segments": segments,
                     "audio_slices": audio_slices,
-                    "cue_durations": [seg.duration for seg in segments],
+                    "cue_durations": _cue_durations(segments),
                 }
 
     tts_failed = {
@@ -1458,6 +1513,11 @@ def main():
     output = assemble_video(rendered_videos, title)
     if not output or not os.path.exists(output):
         no_video(f"No video was produced: expected the final output at {output}.")
+
+    if paths.is_short() and (
+        args.captions or cfg.get("shorts", {}).get("captions", {}).get("enabled")
+    ):
+        _add_captions(output, lesson_plan, all_section_audio)
 
     # --- A/V mismatch summary ---
     mismatches = get_mismatch_log()

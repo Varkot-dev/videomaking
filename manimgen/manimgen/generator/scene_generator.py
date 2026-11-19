@@ -17,7 +17,10 @@ from pathlib import Path
 from manimgen import paths, techniques
 from manimgen.llm import chat
 from manimgen.utils import (
+    draft_class_name,
+    draft_scene_filename,
     load_reference_frames,
+    rename_scene_class,
     safe_section_id,
     section_class_name,
     strip_fencing,
@@ -228,6 +231,7 @@ def generate_scenes(
     cue_durations: list[float] | None = None,
     duration_seconds: float | None = None,
     overview: dict | None = None,
+    variant: str | None = None,
 ) -> tuple[str, str, str]:
     """Generate one ManimGL scene file for a full section.
 
@@ -236,6 +240,12 @@ def generate_scenes(
         cue_durations:    List of exact durations per cue (from TTS segmenter).
                           If None, falls back to estimating from narration.
         duration_seconds: Total section duration (used when cue_durations is None).
+        variant:          Set for one of several drafts of the same section
+                          (e.g. "A"). The draft gets its own file and class
+                          name (``utils.draft_scene_filename`` and
+                          ``draft_class_name``), so drafts can be written and
+                          rendered at the same time without touching each
+                          other or the section's own scene file.
 
     Returns:
         (code, class_name, scene_path)
@@ -288,13 +298,24 @@ def generate_scenes(
     if _requests_3d(cue_visuals):
         code = re.sub(r"\bclass\s+(\w+)\(Scene\):", r"class \1(ThreeDScene):", code)
 
+    if variant:
+        # The model was told to use the section's class name; the draft has to
+        # carry its own so two drafts never render to the same video file.
+        class_name = draft_class_name(section, variant)
+        code = rename_scene_class(code, section_class_name(section), class_name)
+
     code = precheck_and_autofix(code)
 
     scenes_dir = paths.scenes_dir()
     os.makedirs(scenes_dir, exist_ok=True)
     # Defense in depth: sanitize the id again at this filesystem sink — the
     # written file is executed by manimgl, so a traversal id here is RCE.
-    scene_path = os.path.join(scenes_dir, f"{safe_section_id(section)}.py")
+    filename = (
+        draft_scene_filename(section, variant)
+        if variant
+        else f"{safe_section_id(section)}.py"
+    )
+    scene_path = os.path.join(scenes_dir, filename)
     with open(scene_path, "w", encoding="utf-8") as f:
         f.write(code)
 

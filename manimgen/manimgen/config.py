@@ -93,6 +93,20 @@ DEFAULTS: dict = {
         # Optional notes on how the owner talks and explains; read by the
         # shorts planner so scripts sound like them. Relative to config.yaml.
         "voice_profile": "voice_profile.md",
+        # Burned-in word captions (`--captions`, see renderer/captions.py).
+        "captions": {
+            "enabled": False,
+            # Distance from the bottom edge to the caption's baseline, in px of
+            # the 1080x1920 frame. 480 is the top of the Shorts UI.
+            "margin_bottom_px": 488,
+            "margin_left_px": 48,
+            "margin_right_px": 192,
+            "font_size_px": 64,
+            "font": "Arial",
+        },
+        # How many independent scenes the Director writes per short; the
+        # better of them continues through the pipeline. 1 turns it off.
+        "drafts": 2,
     },
     "tts": {
         "engine": "edge-tts",
@@ -225,6 +239,32 @@ def _validate(path: Path, raw: dict) -> dict:
     shorts = cfg["shorts"]
     profile = shorts.get("voice_profile") or "voice_profile.md"
     shorts["voice_profile"] = str(root / str(profile))
+    caps = shorts.get("captions")
+    if not isinstance(caps, dict):
+        raise ConfigError(f"{path}: shorts.captions must be a block of settings.")
+    caps = {**DEFAULTS["shorts"]["captions"], **caps}
+    if not isinstance(caps["enabled"], bool):
+        raise ConfigError(
+            f"{path}: shorts.captions.enabled must be true or false, "
+            f"got {caps['enabled']!r}."
+        )
+    for key in (
+        "margin_bottom_px",
+        "margin_left_px",
+        "margin_right_px",
+        "font_size_px",
+    ):
+        caps[key] = _as(path, f"shorts.captions.{key}", caps[key], int, "an integer")
+        if caps[key] < 0:
+            raise ConfigError(f"{path}: shorts.captions.{key} must not be negative.")
+    caps["font"] = str(caps["font"]).strip() or "Arial"
+    shorts["captions"] = caps
+    shorts["drafts"] = _as(path, "shorts.drafts", shorts["drafts"], int, "an integer")
+    if shorts["drafts"] < 1:
+        raise ConfigError(
+            f"{path}: shorts.drafts must be 1 or more (1 turns drafts off), "
+            f"got {shorts['drafts']!r}."
+        )
 
     rend = cfg["rendering"]
     for key in ("fps", "max_retries", "parallel_sections"):

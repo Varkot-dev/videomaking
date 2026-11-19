@@ -128,7 +128,7 @@ topic / PDF
 
 For each section:
   1. TTS (edge-tts WordBoundary)  → full .mp3 + per-word timestamps
-  2. segmenter.compute_segments() → exact duration per cue from word onset times
+  2. segmenter.compute_segments() → cue onsets; slice_durations() → per-cue length (onset to next onset)
   3. audio_slicer.slice_audio()   → section_01_cue00.m4a, _cue01.m4a, ...
 
   4. generate_scenes(section, cue_durations=[...])
@@ -217,9 +217,26 @@ python3 -m pytest -q
 - **Font sizes:** codeguard snaps to the canonical scale, so shorts use 28 (hook), 22 (labels), 36 (key line).
 - **Placement:** the prompt pins the hook's top edge at y 2.75 and the key line's at 1.9 (`move_to(..., aligned_edge=UP)`), and labels under the diagram go into `main` before it is scaled. During the render, the probe also moves new text-only mobjects that sit up to 0.5 units outside the safe area back inside before their first frame (`MANIMGEN_SAFE_NUDGE=0` turns it off; the count is `nudges` in the probe report). Anything further out is still reported.
 - **Speed:** the director runs on `low` effort (`llm.efforts` in config.yaml). The retry loop checks a rejected first render instead of rendering the same code again, and allows one visual fix for text-placement defects (`MANIMGEN_MAX_PLACEMENT_FIXES`) before shipping the best render. Measured on 12 runs: most of a 15 to 30 minute run was re-renders for placement defects that never cleared.
+- **Captions (`--captions`, `shorts.captions.enabled`):** `renderer/captions.py`. Off by default; `cli.py` ignores the flag with a warning unless `--short`. `chunk_words()` turns the narration's word timestamps (the same ones `segmenter.py` uses; no speech recognition) into 1 to 4 word chunks, broken at punctuation (recovered from the narration text, since WordBoundary tokens carry none), at pauses of 0.35s or more and at 26 characters; each shows from its first word's start to its last word's end, and gaps under 0.3s are bridged. `section_offsets()` places each section on the final timeline using the assembler's crossfade plan (a Short has one section, so 0). `build_ass()` writes a 1080x1920 ASS file (bold, white, dark outline, bottom centre, margins L 48 / R 192 / V `shorts.captions.margin_bottom_px`, default 488, just above the 480 px Shorts UI band) and `burn_captions()` burns it with ffmpeg's `subtitles` filter in one encode, replacing the video in place via a temp file; with no libass (`ffmpeg -filters`) it falls back to one `drawtext` per chunk, and with neither it draws each chunk as a PIL PNG and burns them with `overlay` filters (any ffmpeg), same position and margins. ASS paths go through `escape_filter_path()` (`C\:/path` on Windows). It runs from `cli._add_captions` as the last step on the freshly assembled video, so it needs no cache key. No word timestamps (TTS off, silent section) skips with a log line, and a failed burn leaves the uncaptioned video. The caption band is a fixed screen position: the separate layout effort should reserve that band (y about 1320 to 1440 px from the top) so the diagram never sits under the text.
+- **Two drafts (`shorts.drafts`, `MANIMGEN_SHORT_DRAFTS`):** default 2, `1` disables, capped at 3; shorts only. `cli._generate_and_gate` hands over to `generator/scene_drafts.pick_best_draft`, which runs the Director once per draft in parallel threads (each is its own `claude -p` call). Every draft goes through the same steps as a single scene (`generate_scenes(variant=...)`: codeguard, safety gate; then the timing gate) in its own file (section id plus `_draftA`) with its own class name (`utils.draft_class_name`, which must not contain the final class name because `_find_rendered_video` falls back to substring matches). Surviving drafts render in parallel at 540x960 through `run_manimgl(..., draft=True)`, a per-call size (`paths.render_size_flags(draft=True)`) that never touches the process-wide `paths.set_draft`, with a short budget (`render_command.draft_scene_timeout`, at most the normal budget). Score, lower is better: failed (rejected before rendering, render failure or timeout, writing error) is worst; then hard issues (every probe finding, blocking freezes, hard frame checks); then timing warnings; then shorter code; ties go to the first draft. The winner is copied to the section's normal scene file with the normal class name and the pipeline continues unchanged (full-size render, retry, fallback); draft videos are deleted and are never the final. If no draft can be judged, draft A goes on unchanged so retry and fallback still apply. A usage-limit stop in any draft stops the run. Drafts are written only when codegen runs, so `--resume` with an up-to-date render does not write them, and `_section_key` is unchanged. Scores: run log line `[drafts] section_01: A score=2/0/2140, B score=0/1/1980, picked B (score is hard issues/timing warnings/code chars)` (a failed draft reads `score=failed (reason)`) and one JSON line per section in `logs/drafts.jsonl`. Unmeasured: how often the second draft wins, and how much plan allowance it costs per short.
 - **Publishing:** the `manimgen-shorts-publish` skill (review gate, sameness check, title and description, upload sheet).
-- **Not built yet:** own-voice recording, burned-in captions, music. (Text off-screen or under the Shorts UI is now reported by the render probe.)
+- **Not built yet:** own-voice recording, music. (Text off-screen or under the Shorts UI is now reported by the render probe.)
 - **Research behind these choices:** `../docs/research/educational-shorts-playbook.md` (sources and evidence labels in `../docs/research/shorts-notes/`).
+
+## Benchmark (`bench/`, code in `manimgen/bench/`)
+
+A fixed set of 10 YouTube Short topics (`bench/topics.yaml`) and a scorecard, so a pipeline change is judged on the same inputs with numbers. Run from `manimgen/`:
+
+```bash
+python -m manimgen.bench run --variant baseline                  # plan once per topic (cached), render, score
+python -m manimgen.bench run --only pythag,odds --variant low --env MANIMGEN_MAX_PLACEMENT_FIXES=0
+python -m manimgen.bench score baseline low                      # per-topic table, totals, side-by-side comparison
+python -m manimgen.bench sheet baseline                          # frames.png: 4 frames per video, one row per topic
+```
+
+`run` plans each topic once in fast mode and reuses that plan for every variant, with TTS off. Results go to `bench/runs/<variant>/<slug>/` (git-ignored), with a markdown and a JSON scorecard per variant. The scorer reports wall time, director seconds and output tokens, other LLM seconds, outcome (`ok`, `accepted_with_defects`, `fallback`), first-try pass, number of renders, and probe findings by kind. `--dir <exp>` reads an older `<exp>/<slug>/<variant>/` tree. A run spends Claude plan usage, so launch it on purpose.
+
+---
 
 ## LLM provider toggle
 
@@ -264,7 +281,7 @@ All `manimgl` subprocess calls use `-c "#1C1C1C"`. The flag is `-c`, NOT `--back
 - Subprocess timeouts are **per-call and sized to the work**, not one global
   value. Current tiers: ffprobe/audio probes 5–15s, short ffmpeg and
   frame-extract calls 30s, audio slicing 120s, full ffmpeg encodes 300s,
-  `manimgl` scene renders 240s (360s for 3D, `rendering.render_timeout_*` in config.yaml, whole process tree killed on expiry). Values live in named
+  `manimgl` scene renders get `max(rendering.render_timeout_*, 60s + 10s per second of video)` (config.yaml; the formula is skipped when `MANIMGEN_RENDER_TIMEOUT_*` is set; `_scene_timeout` in `validator/render_command.py`), whole process tree killed on expiry. Values live in named
   `_*_TIMEOUT_SECONDS` constants near the top of each renderer module — read
   the constant rather than trusting this list. When adding a new subprocess
   call, always pass an explicit `timeout=`: an ffmpeg or ffprobe call without
@@ -295,7 +312,7 @@ Order: codeguard auto-fix → error-aware fix (token-free) → LLM fix (budget-c
 
 After every fix, the file is **always reloaded from disk** — previously a bug caused the LLM fix to be silently discarded.
 
-`SceneErrorType` enum classifies errors for targeted guidance: `PRECHECK_VGROUP`, `SYNTAX`, `IMPORT`, `ATTRIBUTE`, `TYPE`, `RUNTIME`, `SAFETY_GATE`.
+`SceneErrorType` enum classifies errors for targeted guidance: `PRECHECK_VGROUP`, `SYNTAX`, `IMPORT`, `ATTRIBUTE`, `TYPE`, `RUNTIME`, `TIMING`, `SAFETY_GATE`, `TIMEOUT`.
 
 ### 6. Visual validation (two-tier)
 - **Tier 1 (frame_checker.py):** zero-cost PIL-based — detects black frames, frozen frames, edge clipping.
@@ -309,8 +326,10 @@ After every fix, the file is **always reloaded from disk** — previously a bug 
 - Word timestamps via `WordBoundary` mode for CUE alignment
 
 ### 8. Muxer
-- Video longer than audio → trim video to audio duration
-- Audio longer than video → freeze last frame (`tpad`)
+- Cue lengths (`cli._cue_durations` = `segmenter.slice_durations`) are the audio slice lengths, onset to next onset. They sum to the narration length. Never use `seg.duration` (ends at the last word's `.end`) for video: it is shorter by the pause between cues and every cue then ends in a frozen frame (the 0.4 s Shorts freeze).
+- The cutter rounds cue edges to the fps grid from absolute time (`muxer.cue_frame_span`) and cuts by frame count, so sub-frame remainders carry into the next cue and clips sum to the section length within half a frame. Per-cue files are kept for the editor.
+- Audio longer than video by more than 2 frames → freeze last frame (`tpad`, gap only); by less (frame rounding, AAC padding) → audio is trimmed to the video
+- Video longer than audio → pad audio with silence
 - Logs WARNING at diff > 1.0s, LARGE MISMATCH at diff > 1.5s
 
 ---
@@ -428,73 +447,25 @@ VGroup(label1, label2).arrange(DOWN, buff=0.4).next_to(anchor, DOWN)
 
 ---
 
-## Fixed bugs log
+## Fixed bugs log (why the code is this way)
 
-### set_camera_orientation crash — FIXED 2026-04-10 (branch antigravity)
-The Director generates `self.set_camera_orientation(phi=60*DEGREES, theta=-45*DEGREES)` (ManimCommunity API) on 2D scenes, causing `AttributeError` on every render attempt. Also generated `self.frame.reorient(theta_deg=..., phi_deg=...)` with wrong kwarg names. Also generated `NumberLine(..., label=...)` which crashes with TypeError.
-
-**Fix (codeguard.py):**
-- `_fix_set_camera_orientation()` — auto-rewrites to `self.frame.reorient(theta, phi)`, or `pass` if unparseable
-- `_fix_reorient_wrong_kwargs()` — renames `theta_deg=` → `theta_degrees=`, `phi_deg=` → `phi_degrees=`
-- `_strip_label_kwarg_from_numberline()` — strips `label=` from `NumberLine()`
-- Banned patterns added for all three
-
-**Director prompt:** added `set_camera_orientation` to the "Never use" table. Fixed `reorient()` docs to show correct param names.
-
-### Stale render cache path mismatch — FIXED (branch antigravity)
-`_render_is_fresh()` was called with a hardcoded path that didn't match actual ManimGL output. Fixed: now uses `_find_rendered_video(class_name)` to locate the actual video before checking freshness.
-
-### Retry loop silent discard — FIXED (branch antigravity)
-After LLM fix was applied, code was only reloaded from disk if codeguard had something to patch. LLM fix was silently discarded otherwise. Now always reloads after every fix attempt.
-
-### A/V sync bugs — FIXED (earlier branches)
-1. Cue 0 silence — segmenter measures from 0.0
-2. Last-syllable clipping — uses `word.end` not `word.start` of next
-3. MP3 stream copy drift — re-encodes to AAC
-4. tpad wrong duration — uses gap not total audio
-5. Sample rate drift — enforces `-ar 48000`
-
-### Cue index off-by-one — FIXED
-LLM now instructed that `cues[]` needs N+1 entries (N [CUE] markers + opening segment at index 0).
-
-### VGroup swap pattern — FIXED
-`_fix_become_inside_play()`, `set_fill_color` → `set_fill`, VGroup assignment banned.
-
-### Video quality (blurry output) — FIXED (branch antigravity)
-Assembler changed from `-preset veryfast` to `-preset slow -crf 17`.
+- **ManimCommunity camera calls on 2D scenes.** The Director wrote `self.set_camera_orientation(...)`, `self.frame.reorient(theta_deg=..., phi_deg=...)` and `NumberLine(..., label=...)`, each crashing every render. `codeguard.py` now rewrites or strips all three (`_fix_set_camera_orientation`, `_fix_reorient_wrong_kwargs`, `_strip_label_kwarg_from_numberline`), they are banned patterns, and the director prompt lists them under "Never use".
+- **Stale render cache.** `_render_is_fresh()` used a hardcoded path that did not match ManimGL's output; it now locates the video with `_find_rendered_video(class_name)` first.
+- **Retry loop silent discard.** An LLM fix was only reloaded from disk when codeguard also patched something. The file is now always reloaded after every fix attempt.
+- **A/V sync.** Cue 0 silence (segmenter measures from 0.0); last-syllable clipping (uses `word.end`, not the next word's start); MP3 stream-copy drift (re-encode to AAC); `tpad` duration (uses the gap, not total audio); sample-rate drift (`-ar 48000`).
+- **Cue index off-by-one.** The LLM is told `cues[]` needs N+1 entries (N `[CUE]` markers plus the opening segment at index 0).
+- **VGroup swap pattern.** `_fix_become_inside_play()`, `set_fill_color` rewritten to `set_fill`, VGroup assignment banned.
+- **Blurry output.** The assembler uses `-preset slow -crf 17`, not `veryfast`.
+- **Timing gate.** `timing_verifier` runs as one gate (`retry.apply_timing_gate`) before the first render in `cli.py`, on the initial code in `retry_scene`, and after every fix. Unresolvable timing issues skip the first render and go to the retry path with the warnings in the fix prompt. The director prompt now opens its cue-timing section with the loop-accumulator rule.
+- **Frame checker wiring.** `check_frames()` runs after every successful render in `validator/retry.py`; hard failures block muxing and force a retry; layout issues are advisory on the first pass (`MANIMGEN_FIRST_PASS_LAYOUT=1`) and feed the fix prompt in `retry_scene`.
+- **Config parsing.** `llm.py` reads `config.yaml` once at import into `_LLM_CONFIG`, not on every call. `.hypothesis/` and `.DS_Store` are in `.gitignore`.
 
 ---
 
-## Known issues / next steps (as of 2026-04-10)
+## Known issues / next steps
 
-### 1. HIGH — A/V timing mismatch (freeze-frame tails)
-Most visible quality issue. Cues often have 1–8 seconds of frozen still at the end because the Director miscalculates total animation time when animations are inside loops.
-
-**Root cause:** Director subtracts one iteration's `run_time` instead of `n * run_time`.
-
-**Fix plan:**
-- Director prompt: make the loop timing rule impossible to miss (already has example, but LLM ignores it under pressure — move to top of Cue timing section) — STILL OPEN
-- ✅ DONE — `timing_verifier` is now a single authoritative gate (`retry.apply_timing_gate`) called as a zero-cost pre-render check in `cli.py`. Unresolvable timing issues skip the first render and route straight to the retry path, with timing warnings carried into the LLM fix prompt.
-
-**Files:** `generator/prompts/director_system.md` (prompt work still open), `validator/timing_verifier.py`, `validator/retry.py`, `cli.py`
-
-### 2. ✅ RESOLVED — timing_verifier wiring
-`timing_verifier` is wired in via `retry.apply_timing_gate` (verify → auto-fix → re-verify). It runs: (a) once on initial code before the first render in `cli.py`; (b) on initial code in `retry_scene`; (c) after every error fix and visual fix. The previous duplicated ad-hoc copy in `cli.py` was removed in favor of the shared gate. Unresolvable warnings block the first render and force the retry path.
-
-### 3. ✅ RESOLVED — frame_checker.py wiring
-Confirmed wired in `validator/retry.py`: `check_frames()` runs after every successful render. Hard failures (black/frozen frames confirmed by timing oracle) block muxing and force retry. Soft failures (layout issues, only when `MANIMGEN_FIRST_PASS_LAYOUT=1`) are advisory on the first pass; `retry_scene` feeds layout issues into its LLM fix prompt.
-
-### 4. RESOLVED: `.hypothesis/` and `.DS_Store`
-Both are in `.gitignore` and neither is tracked.
-
-### 5. RESOLVED: `_load_llm_config()` called on every LLM call
-`llm.py` now parses `config.yaml` once at import into `_LLM_CONFIG`.
-
-### 6. LOW — Cue-word tokenization mismatch risk
-`cue_parser` uses `str.split()` word counts; edge-tts may tokenize differently.
-
-### 7. LOW — PDF rendering unconditional
-Renders every page to PNG even for text-heavy PDFs. Should use 3-way logic.
+Open problems, measured limits and unverified claims are kept in one place:
+`docs/KNOWN_ISSUES.md` (see "Not done, not verified"). Do not list them here.
 
 ---
 

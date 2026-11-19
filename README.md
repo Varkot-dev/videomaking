@@ -130,7 +130,7 @@ Statically analyses each generated scene before rendering to compute animation t
 ### Error-aware retry (`validator/retry.py`)
 
 When codeguard can't fix the code:
-1. Classifies error type from stderr (`precheck_vgroup`, `syntax`, `import`, `attribute`, `type`, `runtime`, `timing`)
+1. Classifies error type from stderr (`precheck_vgroup`, `syntax`, `import`, `attribute`, `type`, `runtime`, `timing`, `safety_gate`)
 2. Generates targeted fix guidance for that error class
 3. Sends `original_code + error + guidance` to the LLM for a targeted fix
 4. Runs codeguard + timing verifier on result, then re-renders
@@ -453,14 +453,16 @@ manimgen "limits" --short --format misconception \
   --clicked "it is about what the function approaches, not what it equals"
 ```
 
+- `--captions` burns word captions into the final video, for watching with the sound off (`--short` only; with any other mode it is ignored with a warning). The words and their timing come from the narration's word timestamps, so it needs narration: with `tts.enabled: false` or silent sections it is skipped with a log line. To make it the default, set `shorts.captions.enabled: true` in `manimgen/config.yaml`. The text is bold white with a dark outline, 1 to 4 words at a time, centred just above the bottom 480 px that the Shorts interface covers; `shorts.captions.margin_bottom_px` (and `margin_left_px`, `margin_right_px`, `font_size_px`, `font`) move and size it. Captions are burned in a single extra encode of the finished video (ffmpeg's `subtitles` filter, `drawtext`, or PNG overlays when your ffmpeg has neither), re-applied on every run. The planned layout work will reserve a band for the captions so the animation never sits under them; until then the lowest part of the diagram can be close to the text.
 - `--format` is one of `puzzle` (pose it and leave it open; the default), `misconception` (break a wrong belief), `proof` (one visual argument) or `worked` (one worked example). Rotate them across uploads.
 - `--confused` and `--clicked` are your own words about what tripped you up and what made it click. They become the hook and the reveal.
 - Copy `manimgen/voice_profile.example.md`, drop `.example` from the copy's name, and describe how you talk; the planner reads it so the script sounds like you. Your copy is git-ignored.
 - The frame is 4.5 units wide and 8 tall. Readable content stays inside x -2.0 to 1.4 and y -2.0 to 2.8, the area the Shorts buttons and caption leave clear (third-party measurements; upload an unlisted test to confirm on your phone).
 - `manimgen --resume` keeps the short format of the cached plan.
+- Two drafts: the scene-writing model is asked for two independent scenes at once. Each is rendered small (540x960), scored with the free checks (text overlaps and safe-area findings, freeze-frame tails, black or frozen frames, then timing warnings, then shorter code), and the better one continues through the normal pipeline and is rendered at full size. This uses about twice the plan allowance for scene writing and adds a short draft render. Set `shorts.drafts` in `manimgen/config.yaml` (default `2`, `1` turns it off, at most `3`) or `MANIMGEN_SHORT_DRAFTS` for one run. The scores are in the run log as `[drafts]` lines and in `output/logs/drafts.jsonl`. Landscape videos are not affected.
 - Before posting, use the `manimgen-shorts-publish` skill: it runs the review checklist, checks the upload is not a near-copy of recent ones, and writes the title and description.
 
-What is not built yet: recording your own narration (the voice is still the configured TTS voice), an automatic safe-zone check on rendered frames, burned-in captions, and music.
+What is not built yet: recording your own narration (the voice is still the configured TTS voice), an automatic safe-zone check on rendered frames, and music.
 
 ### Environment variables
 
@@ -486,6 +488,7 @@ shell, or in a git-ignored `.env` file in `manimgen/`):
 | `MANIMGEN_KWARG_ENFORCE` | `1` strips constructor keyword arguments proven invalid | off (log only) |
 | `MANIMGEN_UNKNOWN_SYMBOLS` | `report` logs unknown ManimGL names instead of blocking the render | blocking |
 | `MANIMGEN_OVERLAP_PROBE` | `0` turns off the text overlap probe | on |
+| `MANIMGEN_SHORT_DRAFTS` | How many scenes the model writes for a short before the best is kept (`1` turns it off); overrides `shorts.drafts` | `2` |
 | `MANIMGEN_SAFE_NUDGE` | `0` stops a short's render from moving new text that sits up to 0.5 units outside the safe area back inside before it is drawn | on |
 | `MANIMGEN_FIRST_PASS_LAYOUT` | `1` runs the LLM vision layout check on the first render too | off |
 | `MANIMGEN_RENDER_ENV_EXTRA` | Comma-separated extra variable names to pass to the render child | none |
@@ -575,6 +578,19 @@ The suite covers:
 
 ---
 
+## Benchmark (`manimgen/bench/`)
+
+A fixed set of 10 YouTube Short topics (`manimgen/bench/topics.yaml`) and a scorecard, so a pipeline change is judged on the same inputs with numbers. Run from `manimgen/`:
+
+```bash
+python -m manimgen.bench run --variant baseline                  # plan once per topic (cached), render, score
+python -m manimgen.bench run --only pythag,odds --variant low --env MANIMGEN_MAX_PLACEMENT_FIXES=0
+python -m manimgen.bench score baseline low                      # per-topic table, totals, side-by-side comparison
+python -m manimgen.bench sheet baseline                          # frames.png: 4 frames per video, one row per topic
+```
+
+`run` plans each topic once in fast mode and reuses that plan for every variant, with TTS off. Results go to `manimgen/bench/runs/<variant>/<slug>/` (git-ignored), with a markdown and a JSON scorecard per variant. The scorer reports wall time, director seconds and output tokens, other LLM seconds, outcome (`ok`, `accepted_with_defects`, `fallback`), first-try pass, number of renders, and probe findings by kind. `--dir <exp>` reads an older `<exp>/<slug>/<variant>/` tree. A run spends Claude plan usage, so launch it on purpose.
+
 ## Text overlap detection
 
 Every render carries a small probe (`manimgen/probes/overlap_probe.py`) that
@@ -582,7 +598,9 @@ runs inside the `manimgl` process, where the position of every object is known.
 At the end of each `play()` and `wait()` it compares the bounding boxes of the
 visible text objects (`Text`, `MarkupText`, `Code`, `Tex`, `TexText`,
 `DecimalNumber`, `Integer`) and reports any two that overlap by at least 20%
-of the smaller one. It costs no LLM call and changes nothing in the scene file;
+of the smaller one. It also reports text cut off by the frame edge and, in
+vertical shorts, text under the app's buttons or caption, and it nudges new
+text back inside the safe area in shorts. It costs no LLM call and changes nothing in the scene file;
 `run_manimgl` loads it through a `sitecustomize.py` on the child's
 `PYTHONPATH`, which also works with the Windows `manimgl.exe` launcher.
 

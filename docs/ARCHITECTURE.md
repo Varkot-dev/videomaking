@@ -400,8 +400,10 @@ POSIX, `CREATE_NEW_PROCESS_GROUP` on Windows) and kill the tree on expiry:
 `procutil.run_tree` does this for renders (output decoded as UTF-8 with
 replacement) and `llm._run_cli` for `claude -p`. Render budgets are per call and
 configurable (`rendering.render_timeout_2d`, `_3d`, `_fallback`, with
-`MANIMGEN_RENDER_TIMEOUT_2D`, `_3D` and `_FALLBACK` overrides), and every ffmpeg
-and ffprobe call has an explicit timeout.
+`MANIMGEN_RENDER_TIMEOUT_2D`, `_3D` and `_FALLBACK` overrides). Without an
+override, a scene render gets `max(configured, 60 s + 10 s per second of video)`
+(`_scene_timeout` in `validator/render_command.py`), so a slow machine does not
+kill a working long render. Every ffmpeg and ffprobe call has an explicit timeout.
 
 Alternatives. Plain `subprocess.run(timeout)`; `psutil` (extra dependency);
 avoiding shims (not under our control).
@@ -515,7 +517,10 @@ and `tear_down` when manimgl imports its scene module, so the scene file and the
 safety gate are unchanged. After each `play()` and `wait()` it compares the
 bounding boxes of visible text-like objects and reports pairs that overlap by at
 least 20% of the smaller box (overlaps under 0.02 square units, ancestors and
-same-string pairs are ignored; at most 10 findings, 3 per string). Findings go to
+same-string pairs are ignored; at most 10 findings, 3 per string). It also
+reports text cut off by the frame edge (`offscreen`) and, in vertical shorts,
+text under the app's buttons or caption (`unsafe`), and in shorts it nudges new
+text back inside the safe area. Findings go to
 `<video>.overlaps.json`, become hard `OVERLAP:` issues in `validate_render` and
 `retry_scene` (same visual-fix budget and repeat-signature stop), and a section
 whose overlap survives the retries ships as `accepted_with_defects`.

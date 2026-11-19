@@ -63,9 +63,9 @@ class TestEncodeSettings:
         assert not any("tpad" in a for a in cmd)
         assert cmd[cmd.index("-c:v") + 1] == "copy"
 
-    def test_gap_over_one_frame_freezes(self, tmp_path):
+    def test_gap_over_two_frames_freezes(self, tmp_path):
         fps = paths.render_fps()
-        cmd = self._mux_cmd(tmp_path, 3.0, 3.0 + 2.0 / fps)
+        cmd = self._mux_cmd(tmp_path, 3.0, 3.0 + 3.0 / fps)
         assert any("tpad" in a for a in cmd)
 
     def test_placeholder_uses_config_resolution_and_fps(self, tmp_path, monkeypatch):
